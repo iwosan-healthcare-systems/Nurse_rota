@@ -908,6 +908,22 @@ export function generateSchedule(opts: {
   porterDay.forEach((n) => scheduled.add(n.id));
   porterRegular.forEach((n) => scheduled.add(n.id));
 
+  // 4b. Nursing Assistant - Day nurses with no ward assigned (facility-level).
+  //     NA-Day nurses WITH a ward are handled per-ward in step 5 below.
+  //     Uses DAY_ONLY_CYCLE (4M→4OFF, no nights) like porter-day.
+  const naFacilityDay = nurses.filter((n) => isNADayType(n.role) && !parseWards(n.ward)[0]);
+  scheduleGroup(
+    naFacilityDay,
+    DAY_ONLY_CYCLE,
+    days,
+    opts.startDate,
+    leave,
+    null,
+    out,
+    periodOffset + stableGroupOffset(naFacilityDay) * 4,
+  );
+  naFacilityDay.forEach((n) => scheduled.add(n.id));
+
   // 5. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
   // All roles use the universal 16-day NURSE_CYCLE (4M→4OFF→4N→4OFF).
 

@@ -19,6 +19,7 @@ import {
   Clock,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
@@ -152,8 +153,9 @@ function RotaPage() {
   const canSubmit = canSubmitApproval;
   const qc = useQueryClient();
 
-  // Only admin and CNO can switch facilities; everyone else is locked to their own.
-  const canFilterFacility = activeRole === "admin" || activeRole === "cno";
+  // Only admin, CNO, and HR can switch facilities; everyone else is locked to their own.
+  const canFilterFacility =
+    activeRole === "admin" || activeRole === "cno" || activeRole === "hr_admin";
   const lockedFacility = !canFilterFacility && nurseFacility ? nurseFacility : null;
 
   // View state
@@ -195,7 +197,7 @@ function RotaPage() {
   // Strategy: a 28-day window started at most 27 days ago still contains today.
   // Search backwards 27 days for the earliest assignment — that is the window start.
   // If none found in that range, fall forward to the next upcoming window.
-  const { data: scheduleWindowStart } = useQuery({
+  const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
     queryKey: ["schedule-window-start", activeRole],
     staleTime: 10 * 60 * 1000,
     queryFn: async () => {
@@ -216,7 +218,7 @@ function RotaPage() {
           { shift_date: string }[]
         >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}`)
         .catch(() => []);
-      if (current[0]?.shift_date) return current[0].shift_date;
+      if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
 
       // No active window — snap forward to the next upcoming one
       const tomorrow = new Date(today);
@@ -226,7 +228,7 @@ function RotaPage() {
           { shift_date: string }[]
         >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}`)
         .catch(() => []);
-      return future[0]?.shift_date ?? todayStr;
+      return (future[0]?.shift_date ?? todayStr).slice(0, 10);
     },
   });
 
@@ -235,9 +237,12 @@ function RotaPage() {
   // Navigation moves in full 28-day blocks.
   const anchor = useMemo(() => {
     if (scheduleWindowStart) {
-      const d = new Date(scheduleWindowStart + "T00:00:00");
+      // Slice to 10 chars ("YYYY-MM-DD") before parsing — the DB can return a full
+      // ISO timestamp (e.g. "2024-01-15T00:00:00+00:00") and appending "T00:00:00"
+      // to that produces an unparseable string → Invalid Date → NaN-NaN-NaN.
+      const d = new Date(scheduleWindowStart.slice(0, 10) + "T00:00:00");
       d.setHours(0, 0, 0, 0);
-      return d;
+      if (!isNaN(d.getTime())) return d;
     }
     const t = new Date();
     t.setHours(0, 0, 0, 0);
@@ -290,9 +295,11 @@ function RotaPage() {
   // a facility has many nurses — later days silently disappear from the grid.
   // Batching by 30 IDs keeps each response well under 1000 rows (30 × 28 = 840).
   const nurseIds = useMemo(() => nurses.map((n) => n.id), [nurses]);
-  const { data: assignments = [], isLoading } = useQuery({
+  const { data: assignments = [], isLoading: assignmentsLoading } = useQuery({
     queryKey: ["assignments", ymd(startDate), ymd(endDate), nurseIds.length, isNurseTier],
-    enabled: nurseIds.length > 0,
+    // Wait until the window start is known so we don't fetch for the wrong date range,
+    // flash an empty state, then refetch — causing the visible flicker on page load.
+    enabled: nurseIds.length > 0 && !windowLoading,
     staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const statusParam = isNurseTier ? "&status=published" : "";
@@ -301,6 +308,9 @@ function RotaPage() {
       );
     },
   });
+
+  // Combined: true while the window start OR the assignments are still loading.
+  const isLoading = windowLoading || assignmentsLoading;
 
   // True once at least one assignment exists for the current window.
   const hasSchedule = !isLoading && assignments.length > 0;
@@ -576,10 +586,11 @@ function RotaPage() {
     const facilityHeads = facilityNurses.filter((n) => isGlobalHead(n.role));
     const facilityMatrons = facilityNurses.filter((n) => isMatron(n.role));
     const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
+    const facilityPorters = facilityNurses.filter((n) => isPorterType(n.role));
 
     // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards).
-    // Matrons are excluded here and handled separately (like coverage nurses) since they
-    // are facility-wide (ward = null) and would otherwise be filtered out of ward runs.
+    // Matrons and porters are excluded here and handled separately since they are
+    // facility-wide (ward = null) and would otherwise be filtered out of ward runs.
     let wardNurses = facilityNurses.filter(
       (n) =>
         !isGlobalHead(n.role) &&
@@ -618,15 +629,16 @@ function RotaPage() {
       }
     }
 
-    // For ward runs: include matrons, head nurses, and interns only if they have no
-    // existing assignments for this period (first ward run of the 28-day cycle).
+    // For ward runs: include matrons, head nurses, interns, and porters only if they
+    // have no existing assignments for this period (first ward run of the 28-day cycle).
     // Subsequent ward runs keep their schedules untouched.
     let includeMatrons = !isWardRun;
     let includeHeads = !isWardRun;
     let includeInterns = !isWardRun;
+    let includePorters = !isWardRun;
 
     if (isWardRun) {
-      const [matronsRows, headsRows, internsRows] = await Promise.all([
+      const [matronsRows, headsRows, internsRows, portersRows] = await Promise.all([
         facilityMatrons.length > 0
           ? api
               .get<
@@ -648,10 +660,18 @@ function RotaPage() {
               >(`/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
+        facilityPorters.length > 0
+          ? api
+              .get<
+                { id: string }[]
+              >(`/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .catch(() => [])
+          : Promise.resolve([] as { id: string }[]),
       ]);
       includeMatrons = matronsRows.length === 0 && facilityMatrons.length > 0;
       includeHeads = headsRows.length === 0 && facilityHeads.length > 0;
       includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
+      includePorters = portersRows.length === 0 && facilityPorters.length > 0;
     }
 
     // Apply intern rotation when generating a full-facility or first ward run.
@@ -698,6 +718,7 @@ function RotaPage() {
       ...(includeMatrons ? facilityMatrons : []),
       ...(includeHeads ? facilityHeads : []),
       ...(includeInterns ? internsToSchedule : []),
+      ...(includePorters ? facilityPorters : []),
     ];
 
     const statusNote =
@@ -891,6 +912,10 @@ function RotaPage() {
   }
 
   async function handleClear() {
+    if (isNaN(startDate.getTime())) {
+      toast.error("Date range not yet loaded — please wait a moment and try again.");
+      return;
+    }
     if (
       !confirm(
         "Clear ALL draft shifts in this 28-day window for every ward and job role?\n\n" +
@@ -1033,9 +1058,11 @@ function RotaPage() {
       <PageHeader
         title="Rota"
         subtitle={
-          hasSchedule
-            ? `28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`
-            : "Generate a schedule to view the rota"
+          isLoading
+            ? "Loading schedule…"
+            : hasSchedule
+              ? `28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`
+              : "Generate a schedule to view the rota"
         }
       />
 
@@ -1246,7 +1273,11 @@ function RotaPage() {
 
       {/* Rota table */}
       {isLoading ? (
-        <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
+        <div className="bg-card border rounded-xl shadow-soft overflow-hidden p-4 space-y-2">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <Skeleton key={i} className="h-10 w-full" />
+          ))}
+        </div>
       ) : filteredNurses.length === 0 ? (
         <EmptyState
           icon={<CalendarDays className="h-6 w-6" />}
