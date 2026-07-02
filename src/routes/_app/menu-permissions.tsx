@@ -27,7 +27,7 @@ export const Route = createFileRoute("/_app/menu-permissions")({
   component: MenuPermissionsPage,
 });
 
-const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
+const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"];
 
 function MenuPermissionsPage() {
   const navigate = useNavigate();
