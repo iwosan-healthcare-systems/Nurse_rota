@@ -29,6 +29,7 @@ import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { Modal } from "./staff";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
+import { logAudit } from "@/lib/audit";
 
 export const Route = createFileRoute("/_app/users")({
   head: () => ({
@@ -101,9 +102,12 @@ function UsersPage() {
   });
 
   async function addRole(userId: string, role: AppRole) {
+    const target = users.find((u) => u.id === userId);
+    const label = target?.full_name ?? target?.email ?? userId;
     try {
       await api.post("/user-roles", { user_id: userId, role });
       toast.success(`Granted: ${ROLE_LABELS[role]}`);
+      void logAudit("Granted role", `${ROLE_LABELS[role]} → ${label}`);
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to grant role");
@@ -111,9 +115,12 @@ function UsersPage() {
   }
 
   async function removeRole(userId: string, role: AppRole) {
+    const target = users.find((u) => u.id === userId);
+    const label = target?.full_name ?? target?.email ?? userId;
     try {
       await api.del(`/user-roles?user_id=${userId}&role=${role}`);
       toast.success(`Revoked: ${ROLE_LABELS[role]}`);
+      void logAudit("Revoked role", `${ROLE_LABELS[role]} → ${label}`);
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to revoke role");
@@ -130,6 +137,7 @@ function UsersPage() {
     try {
       await api.patch(`/auth/admin/users/${user.id}/ban`);
       toast.success("Login deactivated");
+      void logAudit("Deactivated login", user.full_name ?? user.email ?? user.id);
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
     } catch (e: unknown) {
@@ -141,6 +149,7 @@ function UsersPage() {
     try {
       await api.patch(`/auth/admin/users/${user.id}/unban`);
       toast.success("Login reactivated");
+      void logAudit("Reactivated login", user.full_name ?? user.email ?? user.id);
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
     } catch (e: unknown) {
@@ -158,6 +167,7 @@ function UsersPage() {
     try {
       await api.del(`/auth/admin/users/${user.id}`);
       toast.success("User deleted");
+      void logAudit("Deleted user profile", user.full_name ?? user.email ?? user.id);
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to delete user");
@@ -377,6 +387,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
       });
       await api.post("/user-roles", { user_id: userId, role: form.role });
       toast.success(`User created — ${form.email} can log in immediately`);
+      void logAudit("Created user login", `${form.fullName || form.email} (${form.email}) — ${ROLE_LABELS[form.role as AppRole] ?? form.role}`);
       onCreated();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to create user");
@@ -515,6 +526,7 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
       setResult(res);
       if (res.created.length > 0) {
         toast.success(`${res.created.length} login${res.created.length !== 1 ? "s" : ""} created`);
+        void logAudit("Bulk-generated logins", `${res.created.length} created, ${res.skipped.length} skipped`);
       }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate logins");
@@ -693,6 +705,7 @@ function ResetPasswordModal({
     setBusy(true);
     try {
       await api.patch(`/auth/admin/users/${userId}/reset-password`, { password });
+      void logAudit("Reset user password", name);
       setDone(true);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to reset password");

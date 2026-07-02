@@ -37,7 +37,7 @@ router.post('/login', wrap(async (req, res) => {
   const nurse = nurseRows[0] ?? null;
 
   const token = jwt.sign(
-    { userId: user.id, roles, mustChangePassword: user.must_change_password },
+    { userId: user.id, full_name: user.full_name, roles, mustChangePassword: user.must_change_password },
     process.env.JWT_SECRET,
     { expiresIn: '10h' }
   );
