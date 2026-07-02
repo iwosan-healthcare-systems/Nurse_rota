@@ -318,7 +318,7 @@ function RotaPage() {
   // ── Derived data ─────────────────────────────────────────────────────────
   const cellMap = useMemo(() => {
     const m = new Map<string, Assignment>();
-    assignments.forEach((a) => m.set(`${a.nurse_id}|${a.shift_date}`, a));
+    assignments.forEach((a) => m.set(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a));
     return m;
   }, [assignments]);
 
@@ -862,13 +862,27 @@ function RotaPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // Refresh assignments and nurse ward assignments (intern rotation).
-      // Jump the schedule-window directly to the generated period instead of
-      // re-running the auto-detect query (which can land on stale data from
-      // another period and return an empty grid).
-      qc.invalidateQueries({ queryKey: ["nurses"] });
-      qc.invalidateQueries({ queryKey: ["assignments"] });
+      // 1. Snap the view window to the generated period immediately.
       qc.setQueryData(["schedule-window-start", activeRole], genForm.startDate);
+
+      // 2. Pre-load the assignments cache for the exact period that was generated.
+      //    This runs before setBusy(false), so by the time the UI unblocks the data
+      //    is already in cache and the grid renders with shifts — no loading flash,
+      //    no stale-date mismatch where hours show but cells are all "—".
+      const genEndObj = new Date(genForm.startDate + "T00:00:00");
+      genEndObj.setDate(genEndObj.getDate() + DAYS - 1);
+      const genEndStr = ymd(genEndObj);
+      const statusP = isNurseTier ? "&status=published" : "";
+      await qc.prefetchQuery({
+        queryKey: ["assignments", genForm.startDate, genEndStr, nurseIds.length, isNurseTier],
+        queryFn: () =>
+          api.get<Assignment[]>(
+            `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${genForm.startDate}&to=${genEndStr}${statusP}`,
+          ),
+      });
+
+      // 3. Refresh nurse list (intern ward reassignments).
+      qc.invalidateQueries({ queryKey: ["nurses"] });
       setStartOffset(0);
       setBusy(false);
     }
