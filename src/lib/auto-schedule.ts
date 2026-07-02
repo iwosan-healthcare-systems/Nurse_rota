@@ -324,11 +324,11 @@ function inLeave(leave: LeaveInput[], nurseId: string, dateStr: string) {
 }
 
 export function isNAType(role: string) {
-  return /nursing\s*assistant/i.test(role);
+  return /nurs(?:e|ing)\s*assistant/i.test(role);
 }
 
 export function isNADayType(role: string) {
-  return /nursing\s*assistant\s*-\s*day/i.test(role);
+  return /nurs(?:e|ing)\s*assistant\s*-\s*day/i.test(role);
 }
 
 export function isPorterType(role: string) {
@@ -376,16 +376,6 @@ function stableGroupOffset(group: NurseInput[]): number {
     }
   }
   return h % group.length;
-}
-
-function computeShift(i: number, d: number, N: number, cycle: readonly ShiftCode[]): ShiftCode {
-  const len = cycle.length;
-  const blockSize = 4;
-  const numBlocks = Math.floor(len / blockSize);
-  // Snap offset to a 4-day block boundary so every nurse starts at the top of a block.
-  const block = Math.round((i * numBlocks) / N) % numBlocks;
-  const offset = block * blockSize;
-  return cycle[(((d + offset) % len) + len) % len];
 }
 
 /**
