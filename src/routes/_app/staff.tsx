@@ -66,6 +66,40 @@ function isNoWardRole(role: string) {
   );
 }
 
+// Auto-correct role strings from Excel imports to exact system role names.
+function normalizeRole(raw: string): string {
+  if (!raw) return "Nurse";
+  const s = raw.trim();
+
+  // Exact case-insensitive match wins immediately
+  const exact = NURSE_ROLES.find((r) => r.toLowerCase() === s.toLowerCase());
+  if (exact) return exact;
+
+  // Porter / Porter - Day
+  if (/^porter\s*-\s*day$/i.test(s)) return "Porter - Day";
+  if (/^porter$/i.test(s)) return "Porter";
+
+  // Nursing Assistant / Nursing Assistant - Day
+  // Accepts: "Nurse Assistant", "Nursing Asst", "Nurs Asst - Day", etc.
+  if (/^nurs(e|ing)\s+ass(istant|t?)?\s*-\s*day$/i.test(s)) return "Nursing Assistant - Day";
+  if (/^nurs(e|ing)\s+ass(istant|t?)?$/i.test(s)) return "Nursing Assistant";
+
+  // Matron — catches "mtron", "mtrn", "maton", "matorn", etc.
+  if (/^ma?t[ro]{0,2}n?$/i.test(s)) return "Matron";
+
+  // Coverage Nurse
+  if (/^(coverage|cover)\s*nurse$/i.test(s)) return "Coverage Nurse";
+
+  // Nurse Intern
+  if (/^(nurse\s*intern|intern\s*nurse)$/i.test(s)) return "Nurse Intern";
+
+  // Plain Nurse
+  if (/^nurse$/i.test(s)) return "Nurse";
+
+  // Unknown — keep original so the user can see what came in
+  return s;
+}
+
 function parseWards(ward: string | null): string[] {
   if (!ward) return [];
   return ward.split("|").filter(Boolean);
@@ -1013,7 +1047,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           return {
             name: get("name", "full name", "nurse"),
             employee_id: get("employee id", "emp id", "employee number", "emp no", "staff id"),
-            role: get("role", "position") || "Nurse",
+            role: normalizeRole(get("role", "position")),
             ward: get("ward", "department", "unit"),
             email: get("email", "email address"),
           };
