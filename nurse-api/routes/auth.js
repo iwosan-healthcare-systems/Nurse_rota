@@ -154,10 +154,11 @@ router.post('/admin/bulk-create-users', requireAuth, requireRole('admin'), wrap(
     if (r === 'cno' || r === 'chief nursing officer') return 'cno';
     if (r === 'chief matron') return 'chief_matron';
     if (r === 'matron') return 'chief_matron';
+    if (r === 'coverage nurse') return 'head_nurse';
     if (r === 'head nurse') return 'head_nurse';
     if (/^hr/.test(r)) return 'hr_admin';
-    if (/^porter/.test(r)) return 'porter';            // "Porter" and "Porter - Day"
-    if (/^nurs(e|ing).?assistant/.test(r)) return 'nursing_assistant'; // "Nursing Assistant" and "Nursing Assistant - Day"
+    if (/^porter/.test(r)) return 'porter';
+    if (/^nurs(e|ing).?assistant/.test(r)) return 'nursing_assistant';
     return 'nurse';
   }
 
