@@ -108,14 +108,12 @@ function StaffPage() {
 
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
-    staleTime: 10 * 60 * 1000,
     queryFn: () => api.get<Nurse[]>("/nurses"),
   });
 
   const { data: profileRows = [] } = useQuery({
     queryKey: ["profile-names"],
     enabled: canCreateLogin,
-    staleTime: 10 * 60 * 1000,
     queryFn: () =>
       api.get<{ id: string; full_name: string | null; is_active: boolean }[]>("/profiles"),
   });
@@ -920,8 +918,10 @@ function EditNurseModal({
             title="Role"
             value={role}
             onChange={(e) => {
-              setRole(e.target.value);
-              setNurseWards([]);
+              const newRole = e.target.value;
+              setRole(newRole);
+              // Only clear wards when switching to a no-ward role
+              if (isNoWardRole(newRole)) setNurseWards([]);
             }}
             className={inputCls}
           >
@@ -936,8 +936,15 @@ function EditNurseModal({
             title="Facility"
             value={facility}
             onChange={(e) => {
-              setFacility(e.target.value);
-              setNurseWards([]); // clear wards when facility changes
+              const newFacility = e.target.value;
+              setFacility(newFacility);
+              // Keep only wards that exist in the new facility (don't blank everything)
+              if (newFacility) {
+                const validNames = new Set(
+                  wards.filter((w) => w.facility === newFacility || !w.facility).map((w) => w.name),
+                );
+                setNurseWards((prev) => prev.filter((w) => validNames.has(w)));
+              }
             }}
             className={inputCls}
           >

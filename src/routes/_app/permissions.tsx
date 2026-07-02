@@ -1,10 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
-import { Check, X, Plus, Trash2, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
+import { Check, X, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/_app/permissions")({
@@ -132,12 +131,9 @@ function loadCapabilities(): Capability[] {
   }
 }
 
-type UserRow = { id: string; email: string | null; full_name: string | null; roles: AppRole[] };
-
 function PermissionsPage() {
   const navigate = useNavigate();
   const { isAdmin, loading } = useAuth();
-  const qc = useQueryClient();
 
   const [capabilities, setCapabilities] = useState<Capability[]>(loadCapabilities);
   const [editing, setEditing] = useState(false);
@@ -160,44 +156,6 @@ function PermissionsPage() {
       })
       .catch(() => { /* non-critical */ });
   }, []);
-
-  const { data: users = [], isLoading } = useQuery({
-    queryKey: ["permissions-users"],
-    enabled: isAdmin,
-    queryFn: async () => {
-      const [profs, rls] = await Promise.all([
-        api.get<{ id: string; email: string | null; full_name: string | null }[]>("/profiles"),
-        api.get<{ user_id: string; role: string }[]>("/user-roles"),
-      ]);
-      const map = new Map<string, AppRole[]>();
-      rls.forEach((r) => {
-        const arr = map.get(r.user_id) ?? [];
-        arr.push(r.role as AppRole);
-        map.set(r.user_id, arr);
-      });
-      return profs.map((p) => ({ ...p, roles: map.get(p.id) ?? [] })) as UserRow[];
-    },
-  });
-
-  async function addRole(userId: string, role: AppRole) {
-    try {
-      await api.post("/user-roles", { user_id: userId, role });
-      toast.success(`Granted ${ROLE_LABELS[role]}`);
-      qc.invalidateQueries({ queryKey: ["permissions-users"] });
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Failed to grant role");
-    }
-  }
-
-  async function removeRole(userId: string, role: AppRole) {
-    try {
-      await api.del(`/user-roles?user_id=${userId}&role=${role}`);
-      toast.success(`Revoked ${ROLE_LABELS[role]}`);
-      qc.invalidateQueries({ queryKey: ["permissions-users"] });
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "Failed to revoke role");
-    }
-  }
 
   function startEdit() {
     setDraft(capabilities.map((c) => ({ ...c, roles: [...c.roles] })));
@@ -267,7 +225,7 @@ function PermissionsPage() {
 
   return (
     <div className="space-y-8">
-      <PageHeader title="Permissions" subtitle="Role capability matrix & user role assignments" />
+      <PageHeader title="Permissions" subtitle="Role capability matrix" />
 
       <section className="rounded-xl border bg-card overflow-hidden">
         <div className="px-5 py-4 border-b flex items-center justify-between gap-4">
@@ -368,101 +326,6 @@ function PermissionsPage() {
         )}
       </section>
 
-      <section className="rounded-xl border bg-card overflow-hidden">
-        <div className="px-5 py-4 border-b">
-          <h2 className="text-sm font-semibold">User role assignments</h2>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            Grant or revoke roles per user. Changes take effect on next login.
-          </p>
-        </div>
-        {isLoading ? (
-          <p className="px-5 py-10 text-center text-sm text-muted-foreground">Loading users…</p>
-        ) : (
-          <div className="divide-y">
-            {users.map((u) => (
-              <UserRoleRow key={u.id} user={u} onAdd={addRole} onRemove={removeRole} />
-            ))}
-            {users.length === 0 && (
-              <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-                No users found.
-              </p>
-            )}
-          </div>
-        )}
-      </section>
-    </div>
-  );
-}
-
-function UserRoleRow({
-  user,
-  onAdd,
-  onRemove,
-}: {
-  user: UserRow;
-  onAdd: (id: string, r: AppRole) => void;
-  onRemove: (id: string, r: AppRole) => void;
-}) {
-  const [adding, setAdding] = useState<AppRole | "">("");
-  const available = ROLES.filter((r) => !user.roles.includes(r));
-
-  return (
-    <div className="px-5 py-3 flex flex-col sm:flex-row sm:items-center gap-3">
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium truncate">{user.full_name ?? user.email ?? "Unnamed"}</p>
-        <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {user.roles.length === 0 && (
-          <span className="text-xs text-muted-foreground italic">No roles assigned</span>
-        )}
-        {user.roles.map((r) => (
-          <span
-            key={r}
-            className="inline-flex items-center gap-1 rounded-full bg-primary/10 text-primary text-xs px-2.5 py-1"
-          >
-            {ROLE_LABELS[r]}
-            <button
-              type="button"
-              onClick={() => onRemove(user.id, r)}
-              className="hover:text-destructive"
-              title={`Revoke ${ROLE_LABELS[r]}`}
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-      </div>
-      {available.length > 0 && (
-        <div className="flex items-center gap-2">
-          <select
-            aria-label="Select role to add"
-            value={adding}
-            onChange={(e) => setAdding(e.target.value as AppRole | "")}
-            className="text-xs h-8 rounded-md border bg-background px-2"
-          >
-            <option value="">Add role…</option>
-            {available.map((r) => (
-              <option key={r} value={r}>
-                {ROLE_LABELS[r]}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={!adding}
-            onClick={() => {
-              if (adding) {
-                onAdd(user.id, adding);
-                setAdding("");
-              }
-            }}
-            className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1 disabled:opacity-40"
-          >
-            <Plus className="h-3 w-3" /> Add
-          </button>
-        </div>
-      )}
     </div>
   );
 }

@@ -143,16 +143,26 @@ router.patch('/admin/users/:id/reset-password', requireAuth, requireRole('admin'
 }));
 
 router.post('/admin/bulk-create-users', requireAuth, requireRole('admin'), wrap(async (req, res) => {
-  const { default_password, role = 'nurse' } = req.body;
+  const { default_password } = req.body;
   if (!default_password || default_password.length < 8)
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  const validRoles = ['admin', 'cno', 'chief_matron', 'head_nurse', 'ward_manager', 'hr_admin', 'nurse'];
-  if (!validRoles.includes(role))
-    return res.status(400).json({ error: 'Invalid role' });
+  // Map each nurse's job role (from the staff table) to the appropriate system role.
+  function jobRoleToAppRole(jobRole) {
+    if (!jobRole) return 'nurse';
+    const r = jobRole.trim().toLowerCase();
+    if (r === 'cno' || r === 'chief nursing officer') return 'cno';
+    if (r === 'chief matron') return 'chief_matron';
+    if (r === 'matron') return 'chief_matron';
+    if (r === 'head nurse') return 'head_nurse';
+    if (/^hr/.test(r)) return 'hr_admin';
+    if (/^porter/.test(r)) return 'porter';            // "Porter" and "Porter - Day"
+    if (/^nurs(e|ing).?assistant/.test(r)) return 'nursing_assistant'; // "Nursing Assistant" and "Nursing Assistant - Day"
+    return 'nurse';
+  }
 
   const { rows: nurses } = await pool.query(
-    `SELECT name, email FROM nurses WHERE email IS NOT NULL AND trim(email) != '' ORDER BY name`
+    `SELECT name, email, role FROM nurses WHERE email IS NOT NULL AND trim(email) != '' ORDER BY name`
   );
 
   if (nurses.length === 0)
@@ -176,6 +186,7 @@ router.post('/admin/bulk-create-users', requireAuth, requireRole('admin'), wrap(
         skipped.push({ name: nurse.name, email, reason: 'Already has an account' });
         continue;
       }
+      const appRole = jobRoleToAppRole(nurse.role);
       const { rows } = await client.query(
         `INSERT INTO profiles (email, full_name, password_hash, must_change_password)
          VALUES ($1, $2, $3, true) RETURNING id`,
@@ -183,7 +194,7 @@ router.post('/admin/bulk-create-users', requireAuth, requireRole('admin'), wrap(
       );
       await client.query(
         `INSERT INTO user_roles (user_id, role) VALUES ($1, $2)`,
-        [rows[0].id, role]
+        [rows[0].id, appRole]
       );
       created.push({ name: nurse.name, email });
     }

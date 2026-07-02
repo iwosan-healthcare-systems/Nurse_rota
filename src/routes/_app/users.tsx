@@ -49,6 +49,8 @@ const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   head_nurse: "bg-amber-100 text-amber-700 border-amber-200",
   hr_admin: "bg-teal-100 text-teal-700 border-teal-200",
   nurse: "bg-muted text-muted-foreground border-border",
+  porter: "bg-orange-100 text-orange-700 border-orange-200",
+  nursing_assistant: "bg-sky-100 text-sky-700 border-sky-200",
 };
 
 type ProfileRow = {
@@ -277,27 +279,42 @@ function UsersPage() {
         />
       ) : (
         <div className="rounded-xl border bg-card overflow-hidden shadow-soft">
-          {filtered.length === 0 ? (
-            <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-              No users match the current filters
-            </p>
-          ) : (
-            <div className="divide-y">
-              {filtered.map((u) => (
-                <UserRowItem
-                  key={u.id}
-                  user={u}
-                  onAdd={addRole}
-                  onRemove={removeRole}
-                  onDelete={deleteUser}
-                  onDeactivate={deactivateUser}
-                  onReactivate={reactivateUser}
-                  onResetPassword={(u) => setResetPasswordTarget(u)}
-                />
-              ))}
-            </div>
-          )}
-
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                <tr>
+                  <th className="text-left px-4 py-3 font-semibold">Name</th>
+                  <th className="text-left px-4 py-3 font-semibold">Email</th>
+                  <th className="text-left px-4 py-3 font-semibold">Roles</th>
+                  <th className="text-left px-4 py-3 font-semibold">Add Role</th>
+                  <th className="text-left px-4 py-3 font-semibold">Status</th>
+                  <th className="text-right px-4 py-3 font-semibold">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">
+                      No users match the current filters
+                    </td>
+                  </tr>
+                ) : (
+                  filtered.map((u) => (
+                    <UserRowItem
+                      key={u.id}
+                      user={u}
+                      onAdd={addRole}
+                      onRemove={removeRole}
+                      onDelete={deleteUser}
+                      onDeactivate={deactivateUser}
+                      onReactivate={reactivateUser}
+                      onResetPassword={(u) => setResetPasswordTarget(u)}
+                    />
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
           <div className="px-5 py-3 border-t bg-muted/30 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Shield className="h-3.5 w-3.5" />
             {filtered.length} of {users.length} user{users.length !== 1 ? "s" : ""} shown · Role
@@ -478,7 +495,6 @@ type BulkResult = {
 
 function BulkCreateModal({ onClose }: { onClose: () => void }) {
   const [password, setPassword] = useState("RotaLogin@321");
-  const [role, setRole] = useState<AppRole>("nurse");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BulkResult | null>(null);
 
@@ -495,7 +511,6 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
     try {
       const res = await api.post<BulkResult>("/auth/admin/bulk-create-users", {
         default_password: password,
-        role,
       });
       setResult(res);
       if (res.created.length > 0) {
@@ -529,9 +544,10 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
         {!result ? (
           <>
             <p className="text-sm text-muted-foreground">
-              Creates login accounts for all nurses in the Staff list who have an email address and
-              don&apos;t already have an account. Each nurse will be prompted to change their
-              password on first login.
+              Creates login accounts for all staff in the Staff list who have an email address and
+              don&apos;t already have an account (active or deactivated). Each person&apos;s system
+              role is derived automatically from their job role. They will be prompted to change
+              their password on first login.
             </p>
 
             <form onSubmit={submit} className="space-y-3">
@@ -548,24 +564,8 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
                   className={inputCls}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  All new accounts will use this password — nurses must change it on first login.
+                  All new accounts will use this password — staff must change it on first login.
                 </p>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium mb-1">Default role</label>
-                <select
-                  title="Default role"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as AppRole)}
-                  className={inputCls}
-                >
-                  {ALL_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {ROLE_LABELS[r]}
-                    </option>
-                  ))}
-                </select>
               </div>
 
               <div className="flex justify-end gap-2 pt-2">
@@ -842,155 +842,138 @@ function UserRowItem({
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
   const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
-  const initials = (user.full_name ?? user.email ?? "?")
-    .split(/[\s@]/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((s) => s[0]?.toUpperCase())
-    .join("");
 
   return (
-    <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
-      <div className="flex items-center gap-3 min-w-0 sm:w-64 shrink-0">
-        <div className="h-9 w-9 rounded-full bg-primary/10 text-primary grid place-items-center shrink-0 font-semibold text-sm">
-          {initials || <Users className="h-4 w-4" />}
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <p className="text-sm font-medium truncate">{user.full_name ?? "Unnamed"}</p>
-            {user.must_change_password && (
-              <span
-                className="inline-flex items-center gap-0.5 text-[10px] bg-amber-100 text-amber-700 border border-amber-200 rounded-full px-1.5 py-0.5 font-medium whitespace-nowrap"
-                title="User must change password on next login"
-              >
-                <AlertTriangle className="h-2.5 w-2.5" />
-                Needs PW change
-              </span>
-            )}
-          </div>
-          <p className="text-[11px] text-muted-foreground truncate">{user.email}</p>
-          <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
-            <Clock className="h-2.5 w-2.5 shrink-0" />
-            <span
-              title={
-                user.last_sign_in_at
-                  ? new Date(user.last_sign_in_at).toLocaleString()
-                  : "Never signed in"
-              }
-            >
-              {formatRelativeTime(user.last_sign_in_at)}
-            </span>
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
-        {user.roles.length === 0 && (
-          <span className="text-xs text-muted-foreground italic">No roles assigned</span>
-        )}
-        {user.roles.map((r) => (
+    <tr className="border-t hover:bg-muted/30">
+      {/* Name */}
+      <td className="px-4 py-3">
+        <p className="font-medium text-sm">{user.full_name ?? "Unnamed"}</p>
+        {user.must_change_password && (
           <span
-            key={r}
-            className={`inline-flex items-center gap-1 rounded-full border text-xs px-2.5 py-0.5 ${ROLE_BADGE_COLORS[r]}`}
+            className="inline-flex items-center gap-0.5 text-[10px] bg-amber-100 text-amber-700 border border-amber-200 rounded-full px-1.5 py-0.5 font-medium mt-0.5"
+            title="User must change password on next login"
           >
-            {ROLE_LABELS[r]}
-            <button
-              type="button"
-              onClick={() => onRemove(user.id, r)}
-              className="hover:text-destructive ml-0.5"
-              title={`Revoke ${ROLE_LABELS[r]}`}
-            >
-              <Trash2 className="h-3 w-3" />
-            </button>
+            <AlertTriangle className="h-2.5 w-2.5" />
+            Needs PW change
           </span>
-        ))}
-      </div>
+        )}
+      </td>
 
-      {available.length > 0 && (
-        <div className="flex items-center gap-2 shrink-0">
-          <select
-            aria-label="Add role"
-            value={adding}
-            onChange={(e) => setAdding(e.target.value as AppRole | "")}
-            className="text-xs h-8 rounded-md border bg-background px-2 outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">Add role…</option>
-            {available.map((r) => (
-              <option key={r} value={r}>
+      {/* Email */}
+      <td className="px-4 py-3 text-xs text-muted-foreground">{user.email ?? "—"}</td>
+
+      {/* Roles */}
+      <td className="px-4 py-3">
+        <div className="flex flex-wrap gap-1">
+          {user.roles.length === 0 ? (
+            <span className="text-xs text-muted-foreground italic">No roles</span>
+          ) : (
+            user.roles.map((r) => (
+              <span
+                key={r}
+                className={`inline-flex items-center gap-1 rounded-full border text-[11px] px-2 py-0.5 ${ROLE_BADGE_COLORS[r]}`}
+              >
                 {ROLE_LABELS[r]}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={!adding}
-            onClick={() => {
-              if (adding) {
-                onAdd(user.id, adding);
-                setAdding("");
-              }
-            }}
-            className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1 disabled:opacity-40"
-          >
-            <Plus className="h-3 w-3" /> Add
-          </button>
+                <button
+                  type="button"
+                  onClick={() => onRemove(user.id, r)}
+                  className="hover:text-destructive ml-0.5"
+                  title={`Revoke ${ROLE_LABELS[r]}`}
+                >
+                  <Trash2 className="h-2.5 w-2.5" />
+                </button>
+              </span>
+            ))
+          )}
         </div>
-      )}
+      </td>
 
-      <div className="flex items-center gap-1 shrink-0">
+      {/* Add role */}
+      <td className="px-4 py-3">
+        {available.length > 0 && (
+          <div className="flex items-center gap-1.5">
+            <select
+              aria-label="Add role"
+              value={adding}
+              onChange={(e) => setAdding(e.target.value as AppRole | "")}
+              className="text-xs h-7 rounded-md border bg-background px-2 outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="">Add role…</option>
+              {available.map((r) => (
+                <option key={r} value={r}>
+                  {ROLE_LABELS[r]}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!adding}
+              onClick={() => {
+                if (adding) { onAdd(user.id, adding); setAdding(""); }
+              }}
+              className="h-7 px-2 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-0.5 disabled:opacity-40"
+            >
+              <Plus className="h-3 w-3" /> Add
+            </button>
+          </div>
+        )}
+      </td>
+
+      {/* Status */}
+      <td className="px-4 py-3">
         {user.is_active ? (
-          <>
-            <span
-              className="inline-flex items-center gap-1 text-[11px] text-success font-medium"
-              title="Login active"
-            >
-              <CheckCircle2 className="h-3.5 w-3.5" /> Active
-            </span>
-            <button
-              type="button"
-              onClick={() => onResetPassword(user)}
-              title="Reset password"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 shrink-0 transition-colors"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onDeactivate(user)}
-              title="Deactivate login"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 transition-colors"
-            >
-              <UserX className="h-3.5 w-3.5" />
-            </button>
-          </>
+          <span className="inline-flex items-center gap-1 text-[11px] text-success font-medium">
+            <CheckCircle2 className="h-3.5 w-3.5" /> Active
+          </span>
         ) : (
-          <>
-            <span
-              className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium"
-              title="Login deactivated"
-            >
-              <UserX className="h-3.5 w-3.5" /> Inactive
-            </span>
+          <span className="inline-flex items-center gap-1 text-[11px] text-destructive font-medium">
+            <UserX className="h-3.5 w-3.5" /> Inactive
+          </span>
+        )}
+      </td>
+
+      {/* Actions */}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1 justify-end">
+          {user.is_active ? (
+            <>
+              <button
+                type="button"
+                onClick={() => onResetPassword(user)}
+                title="Reset password"
+                className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 transition-colors"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={() => onDeactivate(user)}
+                title="Deactivate login"
+                className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              >
+                <UserX className="h-3.5 w-3.5" />
+              </button>
+            </>
+          ) : (
             <button
               type="button"
               onClick={() => onReactivate(user)}
               title="Reactivate login"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-success/40 hover:bg-success/10 text-muted-foreground hover:text-success shrink-0 transition-colors"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-success/40 hover:bg-success/10 text-muted-foreground hover:text-success transition-colors"
             >
               <UserCheck className="h-3.5 w-3.5" />
             </button>
-          </>
-        )}
-      </div>
-
-      <button
-        type="button"
-        onClick={() => onDelete(user)}
-        title="Delete user"
-        className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 transition-colors"
-      >
-        <Trash2 className="h-3.5 w-3.5" />
-      </button>
-    </div>
+          )}
+          <button
+            type="button"
+            onClick={() => onDelete(user)}
+            title="Delete user"
+            className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </td>
+    </tr>
   );
 }
