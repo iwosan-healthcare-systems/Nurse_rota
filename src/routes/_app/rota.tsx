@@ -26,6 +26,7 @@ import {
   isInternType,
   isGlobalHead,
   isMatron,
+  isPorterType,
   SHIFT_TIMES,
   type ShiftCode,
   type NurseInput,
@@ -385,7 +386,10 @@ function RotaPage() {
     if (effectiveWard)
       list = list.filter(
         (n) =>
-          isGlobalHead(n.role) || isMatron(n.role) || parseWards(n.ward).includes(effectiveWard),
+          isGlobalHead(n.role) ||
+          isMatron(n.role) ||
+          isPorterType(n.role) ||
+          parseWards(n.ward).includes(effectiveWard),
       );
     if (selectedRole) list = list.filter((n) => n.role === selectedRole);
     if (searchQuery.trim()) {
@@ -581,7 +585,11 @@ function RotaPage() {
     // Matrons are excluded here and handled separately (like coverage nurses) since they
     // are facility-wide (ward = null) and would otherwise be filtered out of ward runs.
     let wardNurses = facilityNurses.filter(
-      (n) => !isGlobalHead(n.role) && !isMatron(n.role) && !isInternType(n.role),
+      (n) =>
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isInternType(n.role) &&
+        !isPorterType(n.role),
     );
     if (isWardRun) {
       wardNurses = wardNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
@@ -1320,7 +1328,8 @@ function RotaPage() {
                     </td>
                     <td className="px-2 py-2 text-muted-foreground text-xs">
                       {(() => {
-                        if (isGlobalHead(n.role) || isMatron(n.role)) return "—";
+                        if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))
+                          return "—";
                         const ws = parseWards(n.ward);
                         if (!ws.length) return "—";
                         return (

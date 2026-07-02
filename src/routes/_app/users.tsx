@@ -40,7 +40,7 @@ export const Route = createFileRoute("/_app/users")({
   component: UsersPage,
 });
 
-const ALL_ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
+const ALL_ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter"];
 
 const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   admin: "bg-red-100 text-red-700 border-red-200",

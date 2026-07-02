@@ -2,7 +2,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, getToken, clearToken } from "@/lib/api";
 
-export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse";
+export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse" | "porter";
 
 export interface ApiUser {
   id: string;
@@ -201,7 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
-    canRequestLeave: cap("request_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"]),
+    canRequestLeave: cap("request_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter"]),
     canRequestShiftSwitch: cap("request_shift_switch", ["admin", "chief_matron"]),
     canApproveShiftSwitch: cap("approve_shift_switch", ["admin", "cno"]),
     canCreateLogin: ar === "admin",
@@ -243,6 +243,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   head_nurse: "Head Nurse",
   hr_admin: "HR / Admin",
   nurse: "Nurse",
+  porter: "Porter",
 };
 
 export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
@@ -252,4 +253,5 @@ export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
   head_nurse: "Provide coverage across wards, manage schedules and approve leave",
   hr_admin: "Manage staff records, leave requests and HR administration",
   nurse: "View your schedule, submit leave requests and access rota",
+  porter: "View your schedule, submit leave requests and access rota",
 };

@@ -73,23 +73,14 @@ export interface SafetyViolation {
 // 16-day cycle: 4M → 4OFF → 4N → 4OFF. Every N block is followed by 4 OFF days
 // so the rest rule (no M the day after N) is always satisfied.
 const NURSE_CYCLE: readonly ShiftCode[] = [
-  "M",
-  "M",
-  "M",
-  "M",
-  "OFF",
-  "OFF",
-  "OFF",
-  "OFF",
-  "N",
-  "N",
-  "N",
-  "N",
-  "OFF",
-  "OFF",
-  "OFF",
-  "OFF",
+  "M", "M", "M", "M",
+  "OFF", "OFF", "OFF", "OFF",
+  "N", "N", "N", "N",
+  "OFF", "OFF", "OFF", "OFF",
 ];
+
+// 8-day cycle: 4M → 4OFF. No night shifts — for porter-day and nursing assistant-day.
+const DAY_ONLY_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "M", "OFF", "OFF", "OFF", "OFF"];
 
 type WardMins = Pick<
   WardInput,
@@ -333,7 +324,19 @@ function inLeave(leave: LeaveInput[], nurseId: string, dateStr: string) {
 }
 
 export function isNAType(role: string) {
-  return /nurse\s*assistant/i.test(role);
+  return /nursing\s*assistant/i.test(role);
+}
+
+export function isNADayType(role: string) {
+  return /nursing\s*assistant\s*-\s*day/i.test(role);
+}
+
+export function isPorterType(role: string) {
+  return /^porter(\s*-\s*day)?$/i.test(role);
+}
+
+export function isPorterDayType(role: string) {
+  return /^porter\s*-\s*day$/i.test(role);
 }
 
 export function isInternType(role: string) {
@@ -888,7 +891,34 @@ export function generateSchedule(opts: {
     group.forEach((intern) => scheduled.add(intern.id));
   }
 
-  // 3. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
+  // 4. Porters (facility-level, ward=null — grouped with coverage nurses for approval)
+  //    porter-day: 4M→4OFF only.  porter: full 4M→4OFF→4N→4OFF cycle.
+  const porterDay = nurses.filter((n) => isPorterDayType(n.role));
+  const porterRegular = nurses.filter((n) => isPorterType(n.role) && !isPorterDayType(n.role));
+  scheduleGroup(
+    porterDay,
+    DAY_ONLY_CYCLE,
+    days,
+    opts.startDate,
+    leave,
+    null,
+    out,
+    periodOffset + stableGroupOffset(porterDay) * 4,
+  );
+  scheduleGroup(
+    porterRegular,
+    NURSE_CYCLE,
+    days,
+    opts.startDate,
+    leave,
+    null,
+    out,
+    periodOffset + stableGroupOffset(porterRegular) * 4,
+  );
+  porterDay.forEach((n) => scheduled.add(n.id));
+  porterRegular.forEach((n) => scheduled.add(n.id));
+
+  // 5. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
   // All roles use the universal 16-day NURSE_CYCLE (4M→4OFF→4N→4OFF).
 
   for (const ward of wards) {
@@ -897,7 +927,8 @@ export function generateSchedule(opts: {
         parseWards(n.ward)[0] === ward.name &&
         !isGlobalHead(n.role) &&
         !isInternType(n.role) &&
-        !isMatron(n.role),
+        !isMatron(n.role) &&
+        !isPorterType(n.role),
     );
 
     // Sort each sub-group by ID for stable, DB-order-independent scheduling.
@@ -909,11 +940,17 @@ export function generateSchedule(opts: {
     const regulars = wardNurses
       .filter((n) => !isNAType(n.role) && !isWardSupervisor(n.role))
       .sort((a, b) => a.id.localeCompare(b.id));
-    const nas = wardNurses.filter((n) => isNAType(n.role)).sort((a, b) => a.id.localeCompare(b.id));
+    const naRegular = wardNurses
+      .filter((n) => isNAType(n.role) && !isNADayType(n.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const naDay = wardNurses
+      .filter((n) => isNADayType(n.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
 
     const supervisorSeed = stableGroupOffset(supervisors) * 4;
     const regularSeed = stableGroupOffset(regulars) * 4;
-    const naSeed = stableGroupOffset(nas) * 4;
+    const naRegularSeed = stableGroupOffset(naRegular) * 4;
+    const naDaySeed = stableGroupOffset(naDay) * 4;
 
     scheduleGroup(
       supervisors,
@@ -936,14 +973,24 @@ export function generateSchedule(opts: {
       periodOffset + regularSeed,
     );
     scheduleGroup(
-      nas,
+      naRegular,
       NURSE_CYCLE,
       days,
       opts.startDate,
       leave,
       ward.name,
       out,
-      periodOffset + naSeed,
+      periodOffset + naRegularSeed,
+    );
+    scheduleGroup(
+      naDay,
+      DAY_ONLY_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      ward.name,
+      out,
+      periodOffset + naDaySeed,
     );
 
     // Only validate safety rules for wards that have staff in this run.

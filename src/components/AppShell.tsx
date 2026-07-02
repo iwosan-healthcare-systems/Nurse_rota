@@ -37,7 +37,15 @@ import {
   MENU_PERMISSIONS_KEY,
 } from "@/lib/menu-permissions";
 
-const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
+const ALL: AppRole[] = [
+  "admin",
+  "cno",
+  "chief_matron",
+  "head_nurse",
+  "hr_admin",
+  "nurse",
+  "porter",
+];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 
