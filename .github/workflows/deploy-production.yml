@@ -1,12 +1,48 @@
-name: Deploy to Production
+name: Deploy
 
 on:
   push:
     branches:
+      - main
       - production
 
 jobs:
-  deploy:
+  deploy-uat-api:
+    name: Deploy UAT API (main)
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy API to VPS (UAT)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "nurse-api/*"
+          target: "/root/nurse-api-uat"
+          strip_components: 1
+
+      - name: Install API dependencies and restart PM2 (UAT)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            cd /root/nurse-api-uat
+            npm install --production
+            pm2 restart nurse-api-uat || pm2 start server.js --name nurse-api-uat
+            pm2 save
+
+  deploy-production:
+    name: Deploy Production
+    if: github.ref == 'refs/heads/production'
     runs-on: ubuntu-latest
 
     steps:
@@ -22,12 +58,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build React app
+      - name: Build React app (Production)
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
-      - name: Deploy frontend to VPS
+      - name: Deploy frontend to VPS (Production)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -37,7 +73,7 @@ jobs:
           target: "/home/nrotaiwosanhealt/public_html"
           strip_components: 1
 
-      - name: Deploy API to VPS
+      - name: Deploy API to VPS (Production)
         uses: appleboy/scp-action@v0.1.7
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -47,7 +83,7 @@ jobs:
           target: "/root/nurse-api"
           strip_components: 1
 
-      - name: Install API dependencies and restart PM2
+      - name: Install API dependencies and restart PM2 (Production)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -58,5 +94,5 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             cd /root/nurse-api
             npm install --production
-            pm2 restart nurse-api
+            pm2 restart nurse-api || pm2 start server.js --name nurse-api
             pm2 save
