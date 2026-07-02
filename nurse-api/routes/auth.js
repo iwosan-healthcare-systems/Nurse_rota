@@ -142,4 +142,60 @@ router.patch('/admin/users/:id/reset-password', requireAuth, requireRole('admin'
   res.json({ success: true });
 }));
 
+router.post('/admin/bulk-create-users', requireAuth, requireRole('admin'), wrap(async (req, res) => {
+  const { default_password, role = 'nurse' } = req.body;
+  if (!default_password || default_password.length < 8)
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+
+  const validRoles = ['admin', 'cno', 'chief_matron', 'head_nurse', 'ward_manager', 'hr_admin', 'nurse'];
+  if (!validRoles.includes(role))
+    return res.status(400).json({ error: 'Invalid role' });
+
+  const { rows: nurses } = await pool.query(
+    `SELECT name, email FROM nurses WHERE email IS NOT NULL AND trim(email) != '' ORDER BY name`
+  );
+
+  if (nurses.length === 0)
+    return res.json({ created: [], skipped: [] });
+
+  const { rows: existing } = await pool.query(
+    `SELECT lower(trim(email)) AS email FROM profiles WHERE email IS NOT NULL`
+  );
+  const existingEmails = new Set(existing.map(r => r.email));
+
+  const hash = await bcrypt.hash(default_password, 12);
+  const created = [];
+  const skipped = [];
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const nurse of nurses) {
+      const email = nurse.email.trim().toLowerCase();
+      if (existingEmails.has(email)) {
+        skipped.push({ name: nurse.name, email, reason: 'Already has an account' });
+        continue;
+      }
+      const { rows } = await client.query(
+        `INSERT INTO profiles (email, full_name, password_hash, must_change_password)
+         VALUES ($1, $2, $3, true) RETURNING id`,
+        [email, nurse.name, hash]
+      );
+      await client.query(
+        `INSERT INTO user_roles (user_id, role) VALUES ($1, $2)`,
+        [rows[0].id, role]
+      );
+      created.push({ name: nurse.name, email });
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  res.json({ created, skipped });
+}));
+
 module.exports = router;

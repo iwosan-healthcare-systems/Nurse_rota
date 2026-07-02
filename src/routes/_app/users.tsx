@@ -17,6 +17,7 @@ import {
   UserX,
   UserCheck,
   CheckCircle2,
+  Zap,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
@@ -63,6 +64,7 @@ function UsersPage() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
+  const [showBulkCreate, setShowBulkCreate] = useState(false);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
@@ -185,6 +187,13 @@ function UsersPage() {
             </div>
             <button
               type="button"
+              onClick={() => setShowBulkCreate(true)}
+              className="inline-flex items-center gap-2 h-10 px-4 rounded-md border bg-card text-sm font-medium hover:bg-muted"
+            >
+              <Zap className="h-4 w-4" /> Generate Logins
+            </button>
+            <button
+              type="button"
               onClick={() => setShowCreate(true)}
               className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
             >
@@ -238,6 +247,15 @@ function UsersPage() {
           onCreated={() => {
             qc.invalidateQueries({ queryKey: ["user-profiles"] });
             setShowCreate(false);
+          }}
+        />
+      )}
+
+      {showBulkCreate && (
+        <BulkCreateModal
+          onClose={() => {
+            setShowBulkCreate(false);
+            qc.invalidateQueries({ queryKey: ["user-profiles"] });
           }}
         />
       )}
@@ -375,6 +393,196 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
             </button>
           </div>
         </form>
+      </div>
+    </div>
+  );
+}
+
+type BulkResult = {
+  created: { name: string; email: string }[];
+  skipped: { name: string; email: string; reason: string }[];
+};
+
+function BulkCreateModal({ onClose }: { onClose: () => void }) {
+  const [password, setPassword] = useState("Welcome@123");
+  const [role, setRole] = useState<AppRole>("nurse");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<BulkResult | null>(null);
+
+  const inputCls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  async function submit(e: React.SyntheticEvent) {
+    e.preventDefault();
+    if (password.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await api.post<BulkResult>("/auth/admin/bulk-create-users", {
+        default_password: password,
+        role,
+      });
+      setResult(res);
+      if (res.created.length > 0) {
+        toast.success(`${res.created.length} login${res.created.length !== 1 ? "s" : ""} created`);
+      }
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate logins");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-md p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="font-semibold text-lg flex items-center gap-2">
+            <Zap className="h-5 w-5 text-primary" /> Generate Logins
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="h-7 w-7 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {!result ? (
+          <>
+            <p className="text-sm text-muted-foreground">
+              Creates login accounts for all nurses in the Staff list who have an email address and
+              don&apos;t already have an account. Each nurse will be prompted to change their
+              password on first login.
+            </p>
+
+            <form onSubmit={submit} className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium mb-1">
+                  Default password <span className="text-destructive">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={8}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className={inputCls}
+                />
+                <p className="text-xs text-muted-foreground mt-1">
+                  All new accounts will use this password — nurses must change it on first login.
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium mb-1">Default role</label>
+                <select
+                  title="Default role"
+                  value={role}
+                  onChange={(e) => setRole(e.target.value as AppRole)}
+                  className={inputCls}
+                >
+                  {ALL_ROLES.map((r) => (
+                    <option key={r} value={r}>
+                      {ROLE_LABELS[r]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={onClose}
+                  className="h-9 px-4 rounded-md border text-sm hover:bg-muted"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={busy}
+                  className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-2 disabled:opacity-50"
+                >
+                  {busy ? (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" /> Generating…
+                    </>
+                  ) : (
+                    <>
+                      <Zap className="h-3.5 w-3.5" /> Generate
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </>
+        ) : (
+          <div className="space-y-4">
+            <div className="flex gap-3">
+              <div className="flex-1 rounded-lg bg-green-50 border border-green-200 p-3 text-center">
+                <p className="text-2xl font-bold text-green-700">{result.created.length}</p>
+                <p className="text-xs text-green-600 font-medium">Created</p>
+              </div>
+              <div className="flex-1 rounded-lg bg-muted/60 border p-3 text-center">
+                <p className="text-2xl font-bold text-muted-foreground">{result.skipped.length}</p>
+                <p className="text-xs text-muted-foreground font-medium">Skipped</p>
+              </div>
+            </div>
+
+            {result.created.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+                  Created
+                </p>
+                <div className="max-h-40 overflow-y-auto rounded-lg border divide-y text-sm">
+                  {result.created.map((u) => (
+                    <div key={u.email} className="px-3 py-2 flex justify-between gap-2">
+                      <span className="font-medium truncate">{u.name}</span>
+                      <span className="text-muted-foreground text-xs truncate">{u.email}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result.skipped.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1.5">
+                  Skipped
+                </p>
+                <div className="max-h-32 overflow-y-auto rounded-lg border divide-y text-sm">
+                  {result.skipped.map((u) => (
+                    <div key={u.email} className="px-3 py-2 flex justify-between gap-2">
+                      <span className="truncate">{u.name}</span>
+                      <span className="text-muted-foreground text-xs italic">{u.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result.created.length === 0 && result.skipped.length === 0 && (
+              <p className="text-sm text-center text-muted-foreground py-4">
+                No nurses with email addresses found in the Staff list.
+              </p>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onClose}
+                className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium"
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
