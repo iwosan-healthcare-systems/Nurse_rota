@@ -618,7 +618,13 @@ function StaffPage() {
         </div>
       )}
 
-      {showAdd && <AddNurseModal onClose={() => setShowAdd(false)} wards={wards} />}
+      {showAdd && (
+        <AddNurseModal
+          currentTargetHours={nurses[0]?.target_hours ?? 180}
+          onClose={() => setShowAdd(false)}
+          wards={wards}
+        />
+      )}
       {editingNurse && (
         <EditNurseModal nurse={editingNurse} wards={wards} onClose={() => setEditingNurse(null)} />
       )}
@@ -628,7 +634,12 @@ function StaffPage() {
           onClose={() => setShowSetHours(false)}
         />
       )}
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+      {showUpload && (
+        <UploadModal
+          currentTargetHours={nurses[0]?.target_hours ?? 180}
+          onClose={() => setShowUpload(false)}
+        />
+      )}
       {createLoginNurse && (
         <CreateLoginModal
           nurse={createLoginNurse}
@@ -722,9 +733,11 @@ function WardMultiField({
 }
 
 function AddNurseModal({
+  currentTargetHours,
   onClose,
   wards,
 }: {
+  currentTargetHours: number;
   onClose: () => void;
   wards: { name: string; facility: string | null }[];
 }) {
@@ -755,6 +768,8 @@ function AddNurseModal({
         facility: facility || null,
         ward: noWard ? null : formatWards(nurseWards),
       });
+      // Ensure the new nurse inherits the current global target hours
+      await api.patch("/nurses/bulk-target-hours", { target_hours: currentTargetHours });
     } catch (e) {
       setBusy(false);
       return toast.error(e instanceof Error ? e.message : "Failed to add nurse");
@@ -1020,7 +1035,13 @@ function EditNurseModal({
   );
 }
 
-function UploadModal({ onClose }: { onClose: () => void }) {
+function UploadModal({
+  currentTargetHours,
+  onClose,
+}: {
+  currentTargetHours: number;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
@@ -1077,6 +1098,8 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           ward: r.ward || null,
         })),
       );
+      // Re-apply the existing target hours so newly imported nurses aren't left on the DB default
+      await api.patch("/nurses/bulk-target-hours", { target_hours: currentTargetHours });
     } catch (e) {
       setBusy(false);
       return toast.error(e instanceof Error ? e.message : "Import failed");
