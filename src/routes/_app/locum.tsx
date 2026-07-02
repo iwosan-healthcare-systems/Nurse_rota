@@ -21,7 +21,7 @@ import {
   Stethoscope,
   ChevronRight,
 } from "lucide-react";
-import { useAuth } from "@/lib/auth-context";
+import { useAuth, NURSE_TIER_ROLES } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -160,7 +160,7 @@ function LocumPage() {
   // CNO (and admin, since admin is in approve_locum defaults) see all facilities.
   // Chief Matron is scoped to their own facility.
   const locumFacility: string | null = isCNO ? null : (nurseFacility ?? null);
-  const isNurse = activeRole === "nurse";
+  const isNurse = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
 
   type Tab = "my-requests" | "review" | "all" | "invites" | "history";
   const defaultTab: Tab = isNurse ? "invites" : isCNO ? "review" : "my-requests";

@@ -236,6 +236,8 @@ export function useAuthInternal() {
   return c;
 }
 
+export const NURSE_TIER_ROLES: AppRole[] = ["nurse", "porter", "nursing_assistant"];
+
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "System Administrator",
   cno: "Chief Nursing Officer",

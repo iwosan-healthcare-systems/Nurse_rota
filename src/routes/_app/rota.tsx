@@ -3,6 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { logAudit } from "@/lib/audit";
+import { NURSE_TIER_ROLES } from "@/lib/auth-context";
 import {
   AlertTriangle,
   CalendarDays,
@@ -145,6 +146,7 @@ function RotaPage() {
     activeRole,
   } = useAuth();
   const { myOnly } = Route.useSearch();
+  const isNurseTier = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
   const canEdit = canEditRota;
   const canGenerate = canAutoGenerate;
   const canSubmit = canSubmitApproval;
@@ -208,7 +210,7 @@ function RotaPage() {
       // Earliest assignment within the past 27 days = start of the active window.
       // Gaps between schedules (days with no assignments) ensure we don't bleed
       // into a previous finished window.
-      const statusParam = activeRole === "nurse" ? "&status=published" : "";
+      const statusParam = isNurseTier ? "&status=published" : "";
       const current = await api
         .get<
           { shift_date: string }[]
@@ -289,17 +291,11 @@ function RotaPage() {
   // Batching by 30 IDs keeps each response well under 1000 rows (30 × 28 = 840).
   const nurseIds = useMemo(() => nurses.map((n) => n.id), [nurses]);
   const { data: assignments = [], isLoading } = useQuery({
-    queryKey: [
-      "assignments",
-      ymd(startDate),
-      ymd(endDate),
-      nurseIds.length,
-      activeRole === "nurse",
-    ],
+    queryKey: ["assignments", ymd(startDate), ymd(endDate), nurseIds.length, isNurseTier],
     enabled: nurseIds.length > 0,
     staleTime: 2 * 60 * 1000,
     queryFn: async () => {
-      const statusParam = activeRole === "nurse" ? "&status=published" : "";
+      const statusParam = isNurseTier ? "&status=published" : "";
       return api.get<Assignment[]>(
         `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}${statusParam}`,
       );
@@ -1099,7 +1095,7 @@ function RotaPage() {
         )}
 
         {/* Role filter — hidden for nurse role */}
-        {activeRole !== "nurse" && (
+        {!isNurseTier && (
           <select
             title="Role"
             value={selectedRole}
@@ -1116,7 +1112,7 @@ function RotaPage() {
         )}
 
         {/* Search — hidden when viewing own schedule only */}
-        {!myOnly && activeRole !== "nurse" && (
+        {!myOnly && !isNurseTier && (
           <div className="relative">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
@@ -1262,11 +1258,9 @@ function RotaPage() {
       ) : !hasSchedule ? (
         <EmptyState
           icon={<CalendarDays className="h-6 w-6" />}
-          title={
-            activeRole === "nurse" ? "Schedule not yet published" : "No schedule for this period"
-          }
+          title={isNurseTier ? "Schedule not yet published" : "No schedule for this period"}
           description={
-            activeRole === "nurse"
+            isNurseTier
               ? "Your schedule for this period has not been published yet. Check back later."
               : "Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
           }
