@@ -265,12 +265,18 @@ function StaffPage() {
     setSearch("");
   };
 
-  // Ward names shown in the filter bar: scoped to the selected facility when one is active.
+  // Ward names shown in the filter bar: scoped to the selected facility (including
+  // untagged wards that predate facility assignment), deduplicated and sorted.
   const wardNames = useMemo(
     () =>
-      (filterFacility ? wards.filter((w) => w.facility === filterFacility) : wards).map(
-        (w) => w.name,
-      ),
+      [
+        ...new Set(
+          (filterFacility
+            ? wards.filter((w) => w.facility === filterFacility || !w.facility)
+            : wards
+          ).map((w) => w.name),
+        ),
+      ].sort(),
     [wards, filterFacility],
   );
 
@@ -755,10 +761,14 @@ function AddNurseModal({
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
-  // Only show wards belonging to the selected facility (or untagged wards).
-  const availableWards = (
-    facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards
-  ).map((w) => w.name);
+  // Only show wards for the selected facility (+ untagged), deduplicated + sorted.
+  const availableWards = [
+    ...new Set(
+      (facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards).map(
+        (w) => w.name,
+      ),
+    ),
+  ].sort();
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -903,10 +913,14 @@ function EditNurseModal({
   const [busy, setBusy] = useState(false);
 
   const noWard = isNoWardRole(role);
-  // Only show wards belonging to the selected facility (or untagged wards).
-  const availableWards = (
-    facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards
-  ).map((w) => w.name);
+  // Only show wards for the selected facility (+ untagged), deduplicated + sorted.
+  const availableWards = [
+    ...new Set(
+      (facility ? wards.filter((w) => w.facility === facility || !w.facility) : wards).map(
+        (w) => w.name,
+      ),
+    ),
+  ].sort();
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();

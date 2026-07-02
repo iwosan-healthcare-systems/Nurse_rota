@@ -414,7 +414,7 @@ function RotaPage() {
     queryKey: ["wards-by-facility", effectiveFacility],
     queryFn: async () => {
       const url = effectiveFacility
-        ? `/wards?facility=${encodeURIComponent(effectiveFacility)}`
+        ? `/wards?facility_or_null=${encodeURIComponent(effectiveFacility)}`
         : "/wards";
       const rows = await api.get<WardInput[]>(url);
       const seen = new Set<string>();
@@ -688,7 +688,9 @@ function RotaPage() {
         });
       }
 
-      await Promise.all(internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })));
+      await Promise.all(
+        internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
+      );
     }
 
     const schedulingNurses = [
