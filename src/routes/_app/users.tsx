@@ -18,8 +18,15 @@ import {
   UserCheck,
   CheckCircle2,
   Zap,
+  RotateCcw,
+  Eye,
+  EyeOff,
+  Copy,
+  ShieldAlert,
+  KeyRound,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { Modal } from "./staff";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 
@@ -65,6 +72,9 @@ function UsersPage() {
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showBulkCreate, setShowBulkCreate] = useState(false);
+  const [filterStatus, setFilterStatus] = useState<"" | "active" | "inactive">("");
+  const [filterRole, setFilterRole] = useState<AppRole | "">("");
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<UserRow | null>(null);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
@@ -152,13 +162,28 @@ function UsersPage() {
     }
   }
 
-  const filtered = search.trim()
-    ? users.filter(
-        (u) =>
-          u.full_name?.toLowerCase().includes(search.toLowerCase()) ||
-          u.email?.toLowerCase().includes(search.toLowerCase()),
-      )
-    : users;
+  const filtered = users
+    .filter((u) => {
+      if (search.trim()) {
+        const q = search.toLowerCase();
+        if (
+          !u.full_name?.toLowerCase().includes(q) &&
+          !u.email?.toLowerCase().includes(q)
+        )
+          return false;
+      }
+      if (filterStatus === "active" && !u.is_active) return false;
+      if (filterStatus === "inactive" && u.is_active) return false;
+      if (filterRole && !u.roles.includes(filterRole)) return false;
+      return true;
+    });
+
+  const activeFilters = [filterStatus, filterRole].filter(Boolean).length;
+  const clearFilters = () => {
+    setFilterStatus("");
+    setFilterRole("");
+    setSearch("");
+  };
 
   if (!isAdmin) {
     return (
@@ -172,19 +197,9 @@ function UsersPage() {
     <div className="space-y-6">
       <PageHeader
         title="User Profiles"
-        subtitle={`${users.length} user${users.length !== 1 ? "s" : ""} · Manage role assignments`}
+        subtitle={`${filtered.length} of ${users.length} user${users.length !== 1 ? "s" : ""} · Manage role assignments`}
         actions={
           <div className="flex items-center gap-2">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-              <input
-                type="search"
-                placeholder="Search users…"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="h-10 pl-8 pr-3 w-52 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-              />
-            </div>
             <button
               type="button"
               onClick={() => setShowBulkCreate(true)}
@@ -203,6 +218,55 @@ function UsersPage() {
         }
       />
 
+      {/* Filter bar */}
+      <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 flex flex-wrap items-center gap-2">
+        <div className="relative min-w-44 flex-1">
+          <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+          <input
+            type="search"
+            placeholder="Search by name or email…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full h-9 pl-9 pr-3 rounded-md bg-muted/60 text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+        <select
+          aria-label="Filter by status"
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value as "" | "active" | "inactive")}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+        <select
+          aria-label="Filter by role"
+          value={filterRole}
+          onChange={(e) => setFilterRole(e.target.value as AppRole | "")}
+          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        >
+          <option value="">All roles</option>
+          {ALL_ROLES.map((r) => (
+            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+          ))}
+        </select>
+        {(activeFilters > 0 || search) && (
+          <button
+            type="button"
+            onClick={clearFilters}
+            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted text-muted-foreground"
+          >
+            <X className="h-3.5 w-3.5" /> Clear
+            {activeFilters > 0 && (
+              <span className="ml-0.5 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[10px] grid place-items-center font-bold">
+                {activeFilters}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
+
       {isLoading ? (
         <p className="text-sm text-muted-foreground py-12 text-center">Loading users…</p>
       ) : users.length === 0 ? (
@@ -215,7 +279,7 @@ function UsersPage() {
         <div className="rounded-xl border bg-card overflow-hidden shadow-soft">
           {filtered.length === 0 ? (
             <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-              No users match &ldquo;{search}&rdquo;
+              No users match the current filters
             </p>
           ) : (
             <div className="divide-y">
@@ -228,6 +292,7 @@ function UsersPage() {
                   onDelete={deleteUser}
                   onDeactivate={deactivateUser}
                   onReactivate={reactivateUser}
+                  onResetPassword={(u) => setResetPasswordTarget(u)}
                 />
               ))}
             </div>
@@ -257,6 +322,14 @@ function UsersPage() {
             setShowBulkCreate(false);
             qc.invalidateQueries({ queryKey: ["user-profiles"] });
           }}
+        />
+      )}
+
+      {resetPasswordTarget && (
+        <ResetPasswordModal
+          name={resetPasswordTarget.full_name ?? resetPasswordTarget.email ?? "User"}
+          userId={resetPasswordTarget.id}
+          onClose={() => setResetPasswordTarget(null)}
         />
       )}
     </div>
@@ -588,6 +661,155 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+function generatePassword(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  return Array.from({ length: 12 }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+function ResetPasswordModal({
+  name,
+  userId,
+  onClose,
+}: {
+  name: string;
+  userId: string;
+  onClose: () => void;
+}) {
+  const [password, setPassword] = useState(() => generatePassword());
+  const [showPw, setShowPw] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  async function copyToClipboard() {
+    await navigator.clipboard.writeText(password);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (password.length < 8) return toast.error("Password must be at least 8 characters");
+    setBusy(true);
+    try {
+      await api.patch(`/auth/admin/users/${userId}/reset-password`, { password });
+      setDone(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reset password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const cls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <Modal title="Reset Password" onClose={onClose}>
+      {done ? (
+        <div className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-4">
+            <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-semibold text-emerald-800">Password reset successfully</p>
+              <p className="text-xs text-emerald-700 mt-0.5">
+                {name} will be prompted to change their password on next login.
+              </p>
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-medium text-muted-foreground mb-1.5">
+              Temporary password — share securely:
+            </p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 h-10 px-3 rounded-md border bg-muted text-sm font-mono flex items-center">
+                {password}
+              </code>
+              <button
+                type="button"
+                onClick={copyToClipboard}
+                className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted inline-flex items-center gap-1.5"
+              >
+                <Copy className="h-3.5 w-3.5" />
+                {copied ? "Copied!" : "Copy"}
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
+          >
+            Done
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={submit} className="space-y-4">
+          <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <ShieldAlert className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-800">
+              Resetting <strong>{name}</strong>&apos;s password will require them to set a new
+              password on their next login.
+            </p>
+          </div>
+          <div>
+            <label className="text-sm font-medium block mb-1.5">New temporary password</label>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <input
+                  type={showPw ? "text" : "password"}
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  minLength={8}
+                  required
+                  className={cls + " pr-9"}
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPw((v) => !v)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPassword(generatePassword())}
+                className="h-10 px-3 rounded-md border bg-card text-sm hover:bg-muted inline-flex items-center gap-1.5 shrink-0"
+                title="Generate new password"
+              >
+                <RotateCcw className="h-3.5 w-3.5" /> Generate
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Minimum 8 characters.</p>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 h-10 rounded-md border bg-background text-sm font-medium hover:bg-muted"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={busy || password.length < 8}
+              className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 inline-flex items-center justify-center gap-2"
+            >
+              {busy ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <KeyRound className="h-4 w-4" />
+              )}
+              Reset password
+            </button>
+          </div>
+        </form>
+      )}
+    </Modal>
+  );
+}
+
 function formatRelativeTime(iso: string | null): string {
   if (!iso) return "Never";
   const diff = Date.now() - new Date(iso).getTime();
@@ -608,6 +830,7 @@ function UserRowItem({
   onDelete,
   onDeactivate,
   onReactivate,
+  onResetPassword,
 }: {
   user: UserRow;
   onAdd: (id: string, role: AppRole) => void;
@@ -615,6 +838,7 @@ function UserRowItem({
   onDelete: (user: UserRow) => void;
   onDeactivate: (user: UserRow) => void;
   onReactivate: (user: UserRow) => void;
+  onResetPassword: (user: UserRow) => void;
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
   const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
@@ -724,9 +948,17 @@ function UserRowItem({
             </span>
             <button
               type="button"
+              onClick={() => onResetPassword(user)}
+              title="Reset password"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 shrink-0 transition-colors"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
               onClick={() => onDeactivate(user)}
               title="Deactivate login"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 shrink-0 transition-colors"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive shrink-0 transition-colors"
             >
               <UserX className="h-3.5 w-3.5" />
             </button>

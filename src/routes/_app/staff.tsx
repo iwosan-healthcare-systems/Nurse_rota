@@ -90,6 +90,7 @@ function StaffPage() {
   const [filterRole, setFilterRole] = useState("");
   const [filterFacility, setFilterFacility] = useState("");
   const [filterWard, setFilterWard] = useState("");
+  const [filterStatus, setFilterStatus] = useState<"" | "active" | "inactive">("");
   const [showAdd, setShowAdd] = useState(false);
   const [showUpload, setShowUpload] = useState(false);
   const [showSetHours, setShowSetHours] = useState(false);
@@ -123,7 +124,10 @@ function StaffPage() {
       ),
     [profileRows],
   );
-  const profileInfo = (name: string) => profileMap.get(name.toLowerCase());
+  const profileInfo = useMemo(
+    () => (name: string) => profileMap.get(name.toLowerCase()),
+    [profileMap],
+  );
 
   async function deactivateLogin(userId: string) {
     if (!confirm("Deactivate this login? The user will not be able to log in until reactivated."))
@@ -205,16 +209,22 @@ function StaffPage() {
         if (filterRole && n.role !== filterRole) return false;
         if (filterFacility && n.facility !== filterFacility) return false;
         if (filterWard && !parseWards(n.ward).includes(filterWard)) return false;
+        if (filterStatus) {
+          const info = profileInfo(n.name);
+          if (filterStatus === "active" && (!info || !info.isActive)) return false;
+          if (filterStatus === "inactive" && (!info || info.isActive)) return false;
+        }
         return true;
       }),
-    [nurses, search, filterRole, filterFacility, filterWard],
+    [nurses, search, filterRole, filterFacility, filterWard, filterStatus, profileInfo],
   );
 
-  const activeFilters = [filterRole, filterFacility, filterWard].filter(Boolean).length;
+  const activeFilters = [filterRole, filterFacility, filterWard, filterStatus].filter(Boolean).length;
   const clearFilters = () => {
     setFilterRole("");
     setFilterFacility("");
     setFilterWard("");
+    setFilterStatus("");
     setSearch("");
   };
 
@@ -328,6 +338,20 @@ function StaffPage() {
             </option>
           ))}
         </select>
+
+        {/* Login status filter */}
+        {canCreateLogin && (
+          <select
+            aria-label="Filter by login status"
+            value={filterStatus}
+            onChange={(e) => setFilterStatus(e.target.value as "" | "active" | "inactive")}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          >
+            <option value="">All logins</option>
+            <option value="active">Login active</option>
+            <option value="inactive">Login inactive</option>
+          </select>
+        )}
 
         {/* Clear filters */}
         {(activeFilters > 0 || search) && (
