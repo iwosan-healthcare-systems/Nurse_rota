@@ -908,10 +908,11 @@ export function generateSchedule(opts: {
   porterDay.forEach((n) => scheduled.add(n.id));
   porterRegular.forEach((n) => scheduled.add(n.id));
 
-  // 4b. Nursing Assistant - Day nurses with no ward assigned (facility-level).
-  //     NA-Day nurses WITH a ward are handled per-ward in step 5 below.
-  //     Uses DAY_ONLY_CYCLE (4M→4OFF, no nights) like porter-day.
-  const naFacilityDay = nurses.filter((n) => isNADayType(n.role) && !parseWards(n.ward)[0]);
+  // 4b. Nursing Assistant - Day (facility-level, ward=null — same pattern as porter-day).
+  //     Treated as facility-wide regardless of any ward field, so they always get
+  //     DAY_ONLY_CYCLE even when a ward is set in their profile.
+  //     They are excluded from the per-ward loop below to avoid double-scheduling.
+  const naFacilityDay = nurses.filter((n) => isNADayType(n.role));
   scheduleGroup(
     naFacilityDay,
     DAY_ONLY_CYCLE,
@@ -934,7 +935,8 @@ export function generateSchedule(opts: {
         !isGlobalHead(n.role) &&
         !isInternType(n.role) &&
         !isMatron(n.role) &&
-        !isPorterType(n.role),
+        !isPorterType(n.role) &&
+        !isNADayType(n.role),
     );
 
     // Sort each sub-group by ID for stable, DB-order-independent scheduling.
