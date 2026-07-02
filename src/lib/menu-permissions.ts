@@ -4,7 +4,7 @@ export const MENU_PERMISSIONS_KEY = "nurse_rota_menu_permissions";
 
 // Mirrors the nav array in AppShell — one source of truth for labels / defaults.
 // Icons live in AppShell; this module only cares about access control.
-const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter"];
+const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 

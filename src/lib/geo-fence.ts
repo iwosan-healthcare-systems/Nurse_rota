@@ -11,7 +11,7 @@ export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; labe
 };
 
 // Nurses must be within this distance of their own facility to clock in.
-// 500 m keeps each facility isolated — the closest pair (Ikoyi / Ligali) are ~2.9 km apart,
+// 1000 m keeps each facility isolated — the closest pair (Ikoyi / Ligali) are ~2.9 km apart,
 // and the two Ikeja campuses are ~1.2 km apart (nearestLocation picks the closer one).
 export const GEO_FENCE_RADIUS_M = 1000;
 

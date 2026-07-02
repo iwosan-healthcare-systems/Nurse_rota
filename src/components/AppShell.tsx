@@ -45,6 +45,7 @@ const ALL: AppRole[] = [
   "hr_admin",
   "nurse",
   "porter",
+  "nursing_assistant",
 ];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];

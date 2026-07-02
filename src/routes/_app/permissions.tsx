@@ -17,7 +17,7 @@ export const Route = createFileRoute("/_app/permissions")({
   component: PermissionsPage,
 });
 
-const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter"];
+const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"];
 
 type Capability = { key: string; label: string; roles: AppRole[] };
 
