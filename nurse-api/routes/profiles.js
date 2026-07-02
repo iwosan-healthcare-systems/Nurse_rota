@@ -35,7 +35,21 @@ router.get('/:id', wrap(async (req, res) => {
 }));
 
 router.patch('/:id', wrap(async (req, res) => {
-  const allowed = ['full_name', 'email', 'is_active', 'must_change_password'];
+  const userRoles = req.user?.roles || [];
+  const isAdmin = userRoles.some(r => ['admin', 'cno'].includes(r));
+
+  if (!isAdmin && req.params.id !== req.user.userId) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const adminOnlyFields = ['is_active', 'must_change_password'];
+  if (!isAdmin && Object.keys(req.body).some(k => adminOnlyFields.includes(k))) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const allowed = isAdmin
+    ? ['full_name', 'email', 'is_active', 'must_change_password']
+    : ['full_name', 'email'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
 

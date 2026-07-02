@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get('/', wrap(async (req, res) => {
@@ -33,7 +34,7 @@ router.get('/:id', wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.post('/', wrap(async (req, res) => {
+router.post('/', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const { name, email, role, facility, ward, employee_id } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
 
@@ -46,7 +47,7 @@ router.post('/', wrap(async (req, res) => {
 }));
 
 // Bulk insert nurses
-router.post('/bulk', wrap(async (req, res) => {
+router.post('/bulk', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const nurses = Array.isArray(req.body) ? req.body : [req.body];
   if (!nurses.length) return res.status(400).json({ error: 'Array of nurses required' });
 
@@ -74,7 +75,7 @@ router.post('/bulk', wrap(async (req, res) => {
 }));
 
 // Reset hours_this_month to 0 for a list of nurse IDs (or all if no ids given)
-router.patch('/reset-hours', wrap(async (req, res) => {
+router.patch('/reset-hours', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const { nurse_ids } = req.body;
   if (nurse_ids && Array.isArray(nurse_ids) && nurse_ids.length) {
     await pool.query(
@@ -88,14 +89,14 @@ router.patch('/reset-hours', wrap(async (req, res) => {
 }));
 
 // Bulk update target_hours for all nurses
-router.patch('/bulk-target-hours', wrap(async (req, res) => {
+router.patch('/bulk-target-hours', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const { target_hours } = req.body;
   if (target_hours == null) return res.status(400).json({ error: 'target_hours required' });
   await pool.query('UPDATE nurses SET target_hours = $1, updated_at = NOW()', [target_hours]);
   res.json({ success: true });
 }));
 
-router.patch('/:id', wrap(async (req, res) => {
+router.patch('/:id', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const allowed = ['name', 'email', 'role', 'facility', 'ward', 'employee_id', 'hours_this_month', 'target_hours', 'certifications'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
@@ -113,7 +114,7 @@ router.patch('/:id', wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.delete('/:id', wrap(async (req, res) => {
+router.delete('/:id', requireRole('admin', 'cno'), wrap(async (req, res) => {
   await pool.query('DELETE FROM nurses WHERE id = $1', [req.params.id]);
   res.json({ success: true });
 }));

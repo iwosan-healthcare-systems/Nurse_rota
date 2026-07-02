@@ -3,7 +3,8 @@ const pool = require('../db');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get('/', wrap(async (req, res) => {
-  const userId = req.query.user_id || req.user.userId;
+  // Always use the authenticated user's own ID — ignore any user_id query param
+  const userId = req.user.userId;
   const { rows } = await pool.query(
     'SELECT * FROM notification_state WHERE user_id = $1',
     [userId]

@@ -1,8 +1,9 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
-router.get('/', wrap(async (req, res) => {
+router.get('/', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const conditions = [];
   const params = [];
 
@@ -28,12 +29,17 @@ router.get('/', wrap(async (req, res) => {
 }));
 
 router.post('/', wrap(async (req, res) => {
-  const { action, actor_id, actor_name, actor_role, target } = req.body;
+  const { action, target } = req.body;
   if (!action) return res.status(400).json({ error: 'action is required' });
+
+  // Always derive actor identity from the authenticated session — never trust the body
+  const actor_id = req.user.userId;
+  const actor_name = req.user.full_name;
+  const actor_role = (req.user.roles || [])[0] ?? null;
 
   const { rows } = await pool.query(
     'INSERT INTO audit_logs (action, actor_id, actor_name, actor_role, target) VALUES ($1,$2,$3,$4,$5) RETURNING *',
-    [action, actor_id || null, actor_name || null, actor_role || null, target || null]
+    [action, actor_id, actor_name, actor_role, target || null]
   );
   res.status(201).json(rows[0]);
 }));

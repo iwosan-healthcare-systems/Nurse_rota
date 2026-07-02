@@ -1,11 +1,29 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.post('/increment-nurse-hours', wrap(async (req, res) => {
   const { p_nurse_id, p_hours } = req.body;
   if (!p_nurse_id || p_hours == null) return res.status(400).json({ error: 'p_nurse_id and p_hours required' });
-  await pool.query('SELECT increment_nurse_hours($1, $2)', [p_nurse_id, p_hours]);
+  const hours = parseFloat(p_hours);
+  if (!isFinite(hours) || hours <= 0 || hours > 24)
+    return res.status(400).json({ error: 'p_hours must be a positive number no greater than 24' });
+
+  // Admins/CNO can increment any nurse's hours; nurses can only increment their own
+  const userRoles = req.user?.roles || [];
+  const isAdmin = userRoles.some(r => ['admin', 'cno'].includes(r));
+  if (!isAdmin) {
+    const { rows: nurseRows } = await pool.query(
+      'SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1',
+      [req.user.userId]
+    );
+    if (!nurseRows[0] || nurseRows[0].id !== p_nurse_id) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
+
+  await pool.query('SELECT increment_nurse_hours($1, $2)', [p_nurse_id, hours]);
   res.json({ success: true });
 }));
 

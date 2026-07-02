@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 // ── Locum Requests ────────────────────────────────────────────
@@ -63,7 +64,7 @@ router.post('/requests', wrap(async (req, res) => {
   res.status(201).json(rows[0]);
 }));
 
-router.patch('/requests/:id', wrap(async (req, res) => {
+router.patch('/requests/:id', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
   const allowed = ['status', 'reviewed_by', 'reviewed_by_name', 'reviewed_at', 'decline_reason',
     'accepted_by_nurse_id', 'accepted_by_nurse_name', 'accepted_at', 'updated_at'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
@@ -84,9 +85,12 @@ router.patch('/requests/:id', wrap(async (req, res) => {
 
 // Atomic claim: update to filled only if status=invites_sent (race-safe)
 router.post('/requests/:id/claim', wrap(async (req, res) => {
-  const { accepted_by_nurse_id, accepted_by_nurse_name } = req.body;
-  if (!accepted_by_nurse_id || !accepted_by_nurse_name)
-    return res.status(400).json({ error: 'accepted_by_nurse_id and accepted_by_nurse_name required' });
+  // Derive nurse identity from the authenticated user — never trust the body for this
+  const { rows: nurseRows } = await pool.query(
+    'SELECT id, name FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1',
+    [req.user.userId]
+  );
+  if (!nurseRows[0]) return res.status(403).json({ error: 'Nurse record not found for this account' });
 
   const { rows } = await pool.query(
     `UPDATE locum_requests
@@ -94,7 +98,7 @@ router.post('/requests/:id/claim', wrap(async (req, res) => {
          accepted_at = NOW(), updated_at = NOW()
      WHERE id = $3 AND status = 'invites_sent'
      RETURNING *`,
-    [accepted_by_nurse_id, accepted_by_nurse_name, req.params.id]
+    [nurseRows[0].id, nurseRows[0].name, req.params.id]
   );
   res.json(rows[0] ?? null);
 }));

@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get('/:key', wrap(async (req, res) => {
@@ -8,7 +9,7 @@ router.get('/:key', wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.put('/:key', wrap(async (req, res) => {
+router.put('/:key', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const { value } = req.body;
   if (value === undefined) return res.status(400).json({ error: 'value is required' });
 

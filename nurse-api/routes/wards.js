@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get('/', wrap(async (req, res) => {
@@ -20,7 +21,7 @@ router.get('/', wrap(async (req, res) => {
   res.json(rows);
 }));
 
-router.post('/', wrap(async (req, res) => {
+router.post('/', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const { name, facility, ratio, min_morning_nurses, min_morning_supervisor, min_morning_na,
     min_night_nurses, min_night_supervisor, min_night_na, patients, staffed } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
@@ -37,7 +38,7 @@ router.post('/', wrap(async (req, res) => {
   res.status(201).json(rows[0]);
 }));
 
-router.patch('/:id', wrap(async (req, res) => {
+router.patch('/:id', requireRole('admin', 'cno'), wrap(async (req, res) => {
   const allowed = ['name', 'facility', 'ratio', 'patients', 'staffed',
     'min_morning_nurses', 'min_morning_supervisor', 'min_morning_na',
     'min_night_nurses', 'min_night_supervisor', 'min_night_na'];
@@ -56,7 +57,7 @@ router.patch('/:id', wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.delete('/:id', wrap(async (req, res) => {
+router.delete('/:id', requireRole('admin', 'cno'), wrap(async (req, res) => {
   await pool.query('DELETE FROM wards WHERE id = $1', [req.params.id]);
   res.json({ success: true });
 }));

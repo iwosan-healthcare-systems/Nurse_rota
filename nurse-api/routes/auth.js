@@ -79,10 +79,11 @@ router.post('/change-password', requireAuth, wrap(async (req, res) => {
   if (!new_password || new_password.length < 8)
     return res.status(400).json({ error: 'Password must be at least 8 characters' });
 
-  const { rows } = await pool.query('SELECT password_hash FROM profiles WHERE id = $1', [req.user.userId]);
+  const { rows } = await pool.query('SELECT password_hash, must_change_password FROM profiles WHERE id = $1', [req.user.userId]);
   if (!rows[0]) return res.status(404).json({ error: 'User not found' });
 
-  if (current_password && rows[0].password_hash) {
+  if (!rows[0].must_change_password) {
+    if (!current_password) return res.status(400).json({ error: 'Current password is required' });
     const valid = await bcrypt.compare(current_password, rows[0].password_hash);
     if (!valid) return res.status(401).json({ error: 'Current password is incorrect' });
   }

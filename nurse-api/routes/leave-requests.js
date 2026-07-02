@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const pool = require('../db');
+const { requireRole } = require('../middleware/auth');
 const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get('/', wrap(async (req, res) => {
@@ -84,7 +85,17 @@ router.post('/', wrap(async (req, res) => {
 }));
 
 router.patch('/:id', wrap(async (req, res) => {
-  const allowed = ['status', 'reviewed_by', 'reviewed_at', 'review_note', 'from_date', 'to_date', 'reason', 'type'];
+  const userRoles = req.user?.roles || [];
+  const isManager = userRoles.some(r => ['admin', 'cno', 'chief_matron', 'hr_admin'].includes(r));
+
+  const managerOnlyFields = ['status', 'reviewed_by', 'reviewed_at', 'review_note'];
+  if (!isManager && Object.keys(req.body).some(k => managerOnlyFields.includes(k))) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+
+  const allowed = isManager
+    ? ['status', 'reviewed_by', 'reviewed_at', 'review_note', 'from_date', 'to_date', 'reason', 'type']
+    : ['from_date', 'to_date', 'reason', 'type'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
 
