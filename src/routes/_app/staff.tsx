@@ -314,9 +314,9 @@ function StaffPage() {
         }
       />
 
-      <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 flex flex-wrap items-center gap-2">
-        {/* Name search */}
-        <div className="relative min-w-44 flex-1">
+      <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 space-y-2">
+        {/* Name search — full width on all sizes */}
+        <div className="relative">
           <Search className="h-4 w-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
           <input
             type="search"
@@ -328,87 +328,91 @@ function StaffPage() {
           />
         </div>
 
-        {/* Role filter */}
-        <select
-          aria-label="Filter by role"
-          value={filterRole}
-          onChange={(e) => setFilterRole(e.target.value)}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All roles</option>
-          {NURSE_ROLES.map((r) => (
-            <option key={r} value={r}>
-              {r}
-            </option>
-          ))}
-        </select>
-
-        {/* Facility filter */}
-        <select
-          aria-label="Filter by facility"
-          value={filterFacility}
-          onChange={(e) => {
-            setFilterFacility(e.target.value);
-            setFilterWard(""); // ward list changes when facility changes
-          }}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All facilities</option>
-          {FACILITIES.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
-
-        {/* Ward filter */}
-        <select
-          aria-label="Filter by ward"
-          value={filterWard}
-          onChange={(e) => setFilterWard(e.target.value)}
-          className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        >
-          <option value="">All wards</option>
-          {wardNames.map((w) => (
-            <option key={w} value={w}>
-              {w}
-            </option>
-          ))}
-        </select>
-
-        {/* Login status filter */}
-        {canCreateLogin && (
+        {/* Filter dropdowns — 2-col grid on mobile, single row on sm+ */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          {/* Role filter */}
           <select
-            aria-label="Filter by login status"
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as "" | "active" | "inactive")}
-            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+            aria-label="Filter by role"
+            value={filterRole}
+            onChange={(e) => setFilterRole(e.target.value)}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
           >
-            <option value="">All logins</option>
-            <option value="active">Login active</option>
-            <option value="inactive">Login inactive</option>
+            <option value="">All roles</option>
+            {NURSE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
           </select>
-        )}
 
-        {/* Clear filters */}
-        {(activeFilters > 0 || search) && (
-          <button
-            type="button"
-            onClick={clearFilters}
-            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted text-muted-foreground"
+          {/* Facility filter */}
+          <select
+            aria-label="Filter by facility"
+            value={filterFacility}
+            onChange={(e) => {
+              setFilterFacility(e.target.value);
+              setFilterWard("");
+            }}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
           >
-            <X className="h-3.5 w-3.5" /> Clear
-            {activeFilters > 0 && (
-              <span className="ml-0.5 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[10px] grid place-items-center font-bold">
-                {activeFilters}
-              </span>
-            )}
-          </button>
-        )}
+            <option value="">All facilities</option>
+            {FACILITIES.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
 
-        <span className="ml-auto text-xs text-muted-foreground whitespace-nowrap">
-          {filtered.length} of {nurses.length}
-        </span>
+          {/* Ward filter */}
+          <select
+            aria-label="Filter by ward"
+            value={filterWard}
+            onChange={(e) => setFilterWard(e.target.value)}
+            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
+          >
+            <option value="">All wards</option>
+            {wardNames.map((w) => (
+              <option key={w} value={w}>
+                {w}
+              </option>
+            ))}
+          </select>
+
+          {/* Login status filter */}
+          {canCreateLogin && (
+            <select
+              aria-label="Filter by login status"
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value as "" | "active" | "inactive")}
+              className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
+            >
+              <option value="">All logins</option>
+              <option value="active">Login active</option>
+              <option value="inactive">Login inactive</option>
+            </select>
+          )}
+
+          {/* Clear + count row */}
+          <div className="col-span-2 sm:contents flex items-center justify-between">
+            {(activeFilters > 0 || search) && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted text-muted-foreground"
+              >
+                <X className="h-3.5 w-3.5" /> Clear
+                {activeFilters > 0 && (
+                  <span className="ml-0.5 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[10px] grid place-items-center font-bold">
+                    {activeFilters}
+                  </span>
+                )}
+              </button>
+            )}
+            <span className="sm:ml-auto text-xs text-muted-foreground whitespace-nowrap">
+              {filtered.length} of {nurses.length}
+            </span>
+          </div>
+        </div>
       </div>
 
       {isLoading ? (
