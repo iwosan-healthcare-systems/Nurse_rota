@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -144,14 +144,10 @@ function ShiftPage() {
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("id, shift, shift_date, ward, status")
-        .eq("nurse_id", nurseId!)
-        .eq("shift_date", today)
-        .eq("status", "published")
-        .maybeSingle();
-      return data as Assignment | null;
+      const arr = await api.get<Assignment[]>(
+        `/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`,
+      );
+      return arr[0] ?? null;
     },
   });
 
@@ -160,12 +156,10 @@ function ShiftPage() {
     queryKey: ["nurse-info", nurseId],
     enabled: !!nurseId,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("nurses")
-        .select("role, facility")
-        .eq("id", nurseId!)
-        .maybeSingle();
-      return data ? { role: data.role ?? null, facility: data.facility ?? null } : null;
+      const arr = await api
+        .get<{ role: string | null; facility: string | null }[]>(`/nurses?id=${nurseId}`)
+        .catch(() => []);
+      return arr[0] ? { role: arr[0].role ?? null, facility: arr[0].facility ?? null } : null;
     },
   });
   const nurseJobRole = nurseInfo?.role ?? null;
@@ -193,18 +187,8 @@ function ShiftPage() {
   const { data: shiftLog } = useQuery<ShiftLog | null>({
     queryKey: ["my-shift-log", nurseId, today],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("*")
-        .eq("nurse_id", nurseId!)
-        .eq("is_leave", false)
-        .or(`ended_at.is.null,shift_date.eq.${today}`)
-        .order("started_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      return data as ShiftLog | null;
-    },
+    queryFn: () =>
+      api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${today}`),
     refetchInterval: 30000,
   });
 
@@ -221,14 +205,12 @@ function ShiftPage() {
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("locum_requests")
-        .select("id, shift, ward, facility")
-        .eq("accepted_by_nurse_id", nurseId!)
-        .eq("shift_date", today)
-        .eq("status", "filled")
-        .maybeSingle();
-      return data as { id: string; shift: "M" | "N"; ward: string; facility: string } | null;
+      const arr = await api
+        .get<
+          { id: string; shift: "M" | "N"; ward: string; facility: string }[]
+        >(`/locum/requests?accepted_by_nurse_id=${nurseId}&shift_date=${today}&status=filled&limit=1`)
+        .catch(() => []);
+      return arr[0] ?? null;
     },
   });
 
@@ -242,15 +224,13 @@ function ShiftPage() {
     queryKey: ["my-swap-today", nurseId, today],
     enabled: !!nurseId,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("leave_requests")
-        .select("id, nurse_name, reason")
-        .eq("status", "Approved")
-        .eq("from_date", today)
-        .eq("type", "Swap")
-        .like("reason", `SHIFT_SWITCH|${nurseId}|%`);
-      if (!data?.length) return null;
-      const row = data[0];
+      const rows = await api
+        .get<
+          { id: string; nurse_name: string; reason: string }[]
+        >(`/leave-requests?status=Approved&from_date=${today}&type=Swap&reason_like=${encodeURIComponent(`SHIFT_SWITCH|${nurseId}|`)}&limit=1`)
+        .catch(() => []);
+      if (!rows.length) return null;
+      const row = rows[0];
       const parts = (row.reason ?? "").slice("SHIFT_SWITCH|".length).split("|");
       const shiftA = parts[2] ?? "";
       return {
@@ -266,14 +246,10 @@ function ShiftPage() {
     queryKey: ["my-period-hours", nurseId],
     enabled: !!nurseId,
     queryFn: async () => {
-      const { data } = await supabase
-        .from("nurse_period_hours")
-        .select("*")
-        .eq("nurse_id", nurseId!)
-        .order("period_start", { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      return data as PeriodHours | null;
+      const arr = await api
+        .get<PeriodHours[]>(`/nurse-period-hours?nurse_id=${nurseId}&limit=1`)
+        .catch(() => []);
+      return arr[0] ?? null;
     },
   });
 
@@ -287,29 +263,22 @@ function ShiftPage() {
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
 
-      const { data: winRow } = await supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .eq("nurse_id", nurseId!)
-        .gte("shift_date", lb)
-        .eq("status", "published")
-        .order("shift_date", { ascending: true })
-        .limit(1);
+      const winRow = await api
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
+        .catch(() => []);
 
-      const periodStart = winRow?.[0]?.shift_date ?? lb;
+      const periodStart = winRow[0]?.shift_date ?? lb;
       const periodEnd = new Date(periodStart + "T00:00:00");
       periodEnd.setDate(periodEnd.getDate() + 27);
       const pe = `${periodEnd.getFullYear()}-${String(periodEnd.getMonth() + 1).padStart(2, "0")}-${String(periodEnd.getDate()).padStart(2, "0")}`;
 
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("*")
-        .eq("nurse_id", nurseId!)
-        .eq("is_locum", false)
-        .gte("shift_date", periodStart)
-        .lte("shift_date", pe)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as ShiftLog[];
+      return api
+        .get<
+          ShiftLog[]
+        >(`/shift-logs?nurse_id=${nurseId}&is_locum=false&from=${periodStart}&to=${pe}`)
+        .catch(() => []);
     },
   });
 
@@ -371,39 +340,37 @@ function ShiftPage() {
     const lookback = new Date();
     lookback.setDate(lookback.getDate() - 27);
     const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-    const { data: winRow } = await supabase
-      .from("shift_assignments")
-      .select("shift_date")
-      .eq("nurse_id", nurseId)
-      .gte("shift_date", lb)
-      .order("shift_date", { ascending: true })
-      .limit(1);
-    const periodStart = winRow?.[0]?.shift_date ?? today;
+    const winRows = await api.get<{ shift_date: string }[]>(
+      `/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`,
+    );
+    const periodStart = winRows[0]?.shift_date ?? today;
 
     const recordedLate = (lateMins ?? 0) > 0;
 
-    const { error } = await supabase.from("shift_logs").insert({
-      nurse_id: nurseId,
-      shift_date: today,
-      shift_type: shiftType,
-      started_at: startedAt.toISOString(),
-      expected_end_at: expectedEnd.toISOString(),
-      period_start: periodStart,
-      is_late: recordedLate,
-      late_minutes: recordedLate ? lateMins : null,
-      late_reason: lateReason?.trim() || null,
-      latitude: geo?.lat ?? null,
-      longitude: geo?.lng ?? null,
-      ip_address: geo?.ip ?? null,
-      is_locum: !!todayLocum,
-      locum_request_id: todayLocum?.id ?? null,
-      is_swap: !!todaySwap,
-      swap_note: todaySwap
-        ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
-        : null,
-    });
-
-    if (error) return toast.error(error.message);
+    try {
+      await api.post("/shift-logs", {
+        nurse_id: nurseId,
+        shift_date: today,
+        shift_type: shiftType,
+        started_at: startedAt.toISOString(),
+        expected_end_at: expectedEnd.toISOString(),
+        period_start: periodStart,
+        is_late: recordedLate,
+        late_minutes: recordedLate ? lateMins : null,
+        late_reason: lateReason?.trim() || null,
+        latitude: geo?.lat ?? null,
+        longitude: geo?.lng ?? null,
+        ip_address: geo?.ip ?? null,
+        is_locum: !!todayLocum,
+        locum_request_id: todayLocum?.id ?? null,
+        is_swap: !!todaySwap,
+        swap_note: todaySwap
+          ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
+          : null,
+      });
+    } catch (e) {
+      return toast.error(e instanceof Error ? e.message : "Failed to start shift");
+    }
     setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
     toast.success(
       recordedLate
@@ -438,16 +405,20 @@ function ShiftPage() {
     const endedAt = isAuto ? new Date(log.expected_end_at) : new Date();
     const hours = hoursLogged(log.started_at, endedAt.toISOString());
 
-    const { error } = await supabase
-      .from("shift_logs")
-      .update({ ended_at: endedAt.toISOString(), hours_logged: hours })
-      .eq("id", log.id);
-
-    if (error) return toast.error(error.message);
+    try {
+      await api.patch(`/shift-logs/${log.id}`, {
+        ended_at: endedAt.toISOString(),
+        hours_logged: hours,
+      });
+    } catch (e) {
+      return toast.error(e instanceof Error ? e.message : "Failed to end shift");
+    }
 
     // Locum hours are tracked separately — do not add to the nurse's regular monthly total.
     if (nurseId && !log.is_locum)
-      await supabase.rpc("increment_nurse_hours", { p_nurse_id: nurseId, p_hours: hours });
+      await api
+        .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
+        .catch(() => {});
 
     if (!isAuto) toast.success(`Shift ended — ${fmtHours(hours)} logged`);
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
@@ -922,27 +893,12 @@ function AllNursesShiftView() {
 
   const { data: nurses = [] } = useQuery<NurseRow[]>({
     queryKey: ["nurses"],
-    queryFn: async () =>
-      ((
-        await supabase
-          .from("nurses")
-          .select("id,name,role,ward,facility,target_hours")
-          .order("name")
-      ).data ?? []) as NurseRow[],
+    queryFn: () => api.get<NurseRow[]>("/nurses"),
   });
 
   const { data: logs = [] } = useQuery<AllShiftLog[]>({
     queryKey: ["all-shift-logs-current"],
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select(
-          "nurse_id,hours_logged,shift_date,shift_type,started_at,ended_at,is_late,late_minutes",
-        )
-        .gte("shift_date", lbStr)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as AllShiftLog[];
-    },
+    queryFn: () => api.get<AllShiftLog[]>(`/shift-logs?from=${lbStr}`),
   });
 
   // Build per-nurse totals

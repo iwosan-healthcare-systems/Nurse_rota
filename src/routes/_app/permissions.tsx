@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { Check, X, Plus, Trash2, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
@@ -22,7 +22,6 @@ const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admi
 type Capability = { key: string; label: string; roles: AppRole[] };
 
 const DEFAULT_CAPABILITIES: Capability[] = [
-  // ── Dashboard & Rota ──────────────────────────────────────────────────────
   { key: "view_dashboard", label: "View Dashboard", roles: ROLES },
   { key: "view_rota", label: "View Rota", roles: ROLES },
   {
@@ -30,39 +29,25 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Edit Rota (manual cell changes)",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-  {
-    key: "auto_generate",
-    label: "Run Auto-Schedule",
-    roles: ["admin", "cno", "chief_matron"],
-  },
-
-  // ── Staff & Wards ─────────────────────────────────────────────────────────
+  { key: "auto_generate", label: "Run Auto-Schedule", roles: ["admin", "cno", "chief_matron"] },
   {
     key: "manage_staff",
     label: "Manage Staff (create / edit)",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
-  {
-    key: "edit_target_hours",
-    label: "Set Staff Target Hours",
-    roles: ["admin"],
-  },
+  { key: "edit_target_hours", label: "Set Staff Target Hours", roles: ["admin"] },
   {
     key: "manage_wards",
     label: "Manage Wards & Staffing Ratios",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-
-  // ── Leave ─────────────────────────────────────────────────────────────────
   { key: "request_leave", label: "Request Leave", roles: ROLES },
   {
     key: "approve_leave",
     label: "Approve / Reject Leave",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-
-  // ── Shift switches ────────────────────────────────────────────────────────
   {
     key: "request_shift_switch",
     label: "Request Shift Switch (Chief Matron initiates)",
@@ -73,8 +58,6 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Approve / Reject Shift Switch (CNO approves)",
     roles: ["admin", "cno"],
   },
-
-  // ── Approval workflow ────────────────────────────────────────────────────
   {
     key: "submit_approval",
     label: "Submit Rota for Approval",
@@ -87,18 +70,8 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   { key: "approve_cno", label: "CNO Approval Step", roles: ["admin", "cno"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
-  {
-    key: "revert_published",
-    label: "Revert Published Rota to Draft",
-    roles: ["admin"],
-  },
-  {
-    key: "download_rota",
-    label: "Download Published Rota (Excel / PDF)",
-    roles: ROLES,
-  },
-
-  // ── Printing ─────────────────────────────────────────────────────────────
+  { key: "revert_published", label: "Revert Published Rota to Draft", roles: ["admin"] },
+  { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: ROLES },
   {
     key: "print_staff_list",
     label: "Print Staff Directory (by facility / ward)",
@@ -109,8 +82,6 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Print / Download Published Schedule",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-
-  // ── Reports, Audit & Access ───────────────────────────────────────────────
   {
     key: "view_reports",
     label: "View Reports",
@@ -118,8 +89,6 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   { key: "view_audit", label: "View Audit Log", roles: ["admin", "cno"] },
   { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin"] },
-
-  // ── Bank Shift (Locum) ─────────────────────────────────────────────────────
   {
     key: "request_locum",
     label: "Initiate Locum Shift Request",
@@ -135,11 +104,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Send Locum Invites to OFF Nurses",
     roles: ["admin", "chief_matron"],
   },
-  {
-    key: "respond_locum_invite",
-    label: "Accept / Decline a Locum Invite (Nurse)",
-    roles: ROLES,
-  },
+  { key: "respond_locum_invite", label: "Accept / Decline a Locum Invite (Nurse)", roles: ROLES },
   {
     key: "view_locum_hours",
     label: "View Locum Hours Tracking",
@@ -183,59 +148,55 @@ function PermissionsPage() {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
 
-  // Sync authoritative values from DB on mount (overrides any stale localStorage cache)
   useEffect(() => {
-    supabase
-      .from("portal_settings")
-      .select("value")
-      .eq("key", "capabilities")
-      .single()
-      .then(({ data }) => {
-        if (data?.value) {
-          const saved = data.value as { key: string; roles: AppRole[] }[];
-          const merged = mergeCapabilities(saved);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+    api
+      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>("/portal-settings/capabilities")
+      .then(({ value }) => {
+        if (value) {
+          const merged = mergeCapabilities(value);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
           setCapabilities(merged);
         }
-      });
+      })
+      .catch(() => { /* non-critical */ });
   }, []);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["permissions-users"],
     enabled: isAdmin,
     queryFn: async () => {
-      const [{ data: profs, error: e1 }, { data: rls, error: e2 }] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name").order("full_name"),
-        supabase.from("user_roles").select("user_id, role"),
+      const [profs, rls] = await Promise.all([
+        api.get<{ id: string; email: string | null; full_name: string | null }[]>("/profiles"),
+        api.get<{ user_id: string; role: string }[]>("/user-roles"),
       ]);
-      if (e1) throw e1;
-      if (e2) throw e2;
       const map = new Map<string, AppRole[]>();
-      (rls ?? []).forEach((r) => {
+      rls.forEach((r) => {
         const arr = map.get(r.user_id) ?? [];
         arr.push(r.role as AppRole);
         map.set(r.user_id, arr);
       });
-      return (profs ?? []).map((p) => ({ ...p, roles: map.get(p.id) ?? [] })) as UserRow[];
+      return profs.map((p) => ({ ...p, roles: map.get(p.id) ?? [] })) as UserRow[];
     },
   });
 
   async function addRole(userId: string, role: AppRole) {
-    const { error } = await supabase.from("user_roles").insert({ user_id: userId, role });
-    if (error) return toast.error(error.message);
-    toast.success(`Granted ${ROLE_LABELS[role]}`);
-    qc.invalidateQueries({ queryKey: ["permissions-users"] });
+    try {
+      await api.post("/user-roles", { user_id: userId, role });
+      toast.success(`Granted ${ROLE_LABELS[role]}`);
+      qc.invalidateQueries({ queryKey: ["permissions-users"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to grant role");
+    }
   }
 
   async function removeRole(userId: string, role: AppRole) {
-    const { error } = await supabase
-      .from("user_roles")
-      .delete()
-      .eq("user_id", userId)
-      .eq("role", role);
-    if (error) return toast.error(error.message);
-    toast.success(`Revoked ${ROLE_LABELS[role]}`);
-    qc.invalidateQueries({ queryKey: ["permissions-users"] });
+    try {
+      await api.del(`/user-roles?user_id=${userId}&role=${role}`);
+      toast.success(`Revoked ${ROLE_LABELS[role]}`);
+      qc.invalidateQueries({ queryKey: ["permissions-users"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to revoke role");
+    }
   }
 
   function startEdit() {
@@ -251,38 +212,36 @@ function PermissionsPage() {
   async function saveEdit() {
     const payload = draft.map((c) => ({ key: c.key, roles: c.roles }));
     setSaving(true);
-    const { error } = await supabase
-      .from("portal_settings")
-      .upsert({ key: "capabilities", value: payload });
-    setSaving(false);
-    if (error) {
-      toast.error("Failed to save: " + error.message);
-      return;
+    try {
+      await api.put("/portal-settings/capabilities", { value: payload });
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
+      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
+      setCapabilities(draft);
+      setEditing(false);
+      toast.success("Permissions saved");
+    } catch (e: unknown) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSaving(false);
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
-    setCapabilities(draft);
-    setEditing(false);
-    toast.success("Permissions saved");
   }
 
   async function resetDefaults() {
     if (!confirm("Reset all capabilities to system defaults?")) return;
     setSaving(true);
-    const { error } = await supabase
-      .from("portal_settings")
-      .upsert({ key: "capabilities", value: [] });
-    setSaving(false);
-    if (error) {
-      toast.error("Failed to reset: " + error.message);
-      return;
+    try {
+      await api.put("/portal-settings/capabilities", { value: [] });
+      localStorage.removeItem(STORAGE_KEY);
+      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
+      setCapabilities(DEFAULT_CAPABILITIES);
+      setDraft([]);
+      setEditing(false);
+      toast.success("Permissions reset to defaults");
+    } catch (e: unknown) {
+      toast.error("Failed to reset: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSaving(false);
     }
-    localStorage.removeItem(STORAGE_KEY);
-    window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
-    setCapabilities(DEFAULT_CAPABILITIES);
-    setDraft([]);
-    setEditing(false);
-    toast.success("Permissions reset to defaults");
   }
 
   function toggleRole(capKey: string, role: AppRole) {
@@ -310,7 +269,6 @@ function PermissionsPage() {
     <div className="space-y-8">
       <PageHeader title="Permissions" subtitle="Role capability matrix & user role assignments" />
 
-      {/* Matrix */}
       <section className="rounded-xl border bg-card overflow-hidden">
         <div className="px-5 py-4 border-b flex items-center justify-between gap-4">
           <div>
@@ -405,13 +363,11 @@ function PermissionsPage() {
           </p>
         ) : (
           <p className="px-5 py-3 border-t text-xs text-muted-foreground">
-            Capabilities are enforced server-side by row-level security policies. Changes here
-            update the reference matrix.
+            Capabilities are enforced server-side. Changes here update the reference matrix.
           </p>
         )}
       </section>
 
-      {/* User roles */}
       <section className="rounded-xl border bg-card overflow-hidden">
         <div className="px-5 py-4 border-b">
           <h2 className="text-sm font-semibold">User role assignments</h2>

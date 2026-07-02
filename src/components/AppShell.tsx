@@ -30,8 +30,12 @@ import {
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
 import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
-import { supabase } from "@/integrations/supabase/client";
-import { loadMenuPermissions, getEffectiveRoles, MENU_PERMISSIONS_KEY } from "@/lib/menu-permissions";
+import { api, getToken } from "@/lib/api";
+import {
+  loadMenuPermissions,
+  getEffectiveRoles,
+  MENU_PERMISSIONS_KEY,
+} from "@/lib/menu-permissions";
 
 const ALL: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
 const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
@@ -55,12 +59,17 @@ const nav = [
   { to: "/audit", label: "Audit Log", icon: ShieldCheck, roles: ["admin", "cno"] as AppRole[] },
   { to: "/users", label: "User Profiles", icon: UserCog, roles: ["admin"] as AppRole[] },
   { to: "/permissions", label: "Permissions", icon: KeyRound, roles: ["admin"] as AppRole[] },
-  { to: "/menu-permissions", label: "Menu Access", icon: LayoutGrid, roles: ["admin"] as AppRole[] },
+  {
+    to: "/menu-permissions",
+    label: "Menu Access",
+    icon: LayoutGrid,
+    roles: ["admin"] as AppRole[],
+  },
 ] as const;
 
+// eslint-disable-next-line react-refresh/only-export-components
 export async function appBeforeLoad() {
-  const { data } = await supabase.auth.getSession();
-  if (!data.session) throw redirect({ to: "/login" });
+  if (!getToken()) throw redirect({ to: "/login" });
 }
 
 export function AppShell() {
@@ -82,22 +91,26 @@ export function AppShell() {
   const [open, setOpen] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
 
-  // Auto-end any overdue shifts server-side on every app load (safety net for closed browsers)
   useEffect(() => {
-    void supabase.rpc("auto_end_overdue_shifts");
+    void api.post("/rpc/auto-end-overdue-shifts");
   }, []);
 
-  // Auto-close the period at 8am the day after the last published shift ends
   useEffect(() => {
-    void supabase.rpc("auto_close_period").then(({ data }) => {
-      const result = data as { closed: boolean; period_start?: string; period_end?: string } | null;
-      if (result?.closed) {
-        toast.success(
-          `Period ${result.period_start} → ${result.period_end} has been automatically closed and archived.`,
-          { duration: 8000 },
-        );
-      }
-    });
+    api
+      .post<{ closed: boolean; period_start?: string; period_end?: string }>(
+        "/rpc/auto-close-period",
+      )
+      .then((result) => {
+        if (result?.closed) {
+          toast.success(
+            `Period ${result.period_start} → ${result.period_end} has been automatically closed and archived.`,
+            { duration: 8000 },
+          );
+        }
+      })
+      .catch(() => {
+        /* non-critical */
+      });
   }, []);
 
   // Same-tab / same-browser cache updates (instant)
@@ -111,37 +124,19 @@ export function AppShell() {
     };
   }, []);
 
-  // Authoritative load from DB + Realtime subscription so changes apply across all users/devices
+  // Authoritative load from API on mount; changes propagate on next load
   useEffect(() => {
-    supabase
-      .from("portal_settings")
-      .select("value")
-      .eq("key", "menu_permissions")
-      .single()
-      .then(({ data }) => {
-        if (data?.value) {
-          const perms = data.value as Record<string, AppRole[]>;
-          setMenuPermissions(perms);
-          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(perms));
+    api
+      .get<{ key: string; value: Record<string, AppRole[]> }>("/portal-settings/menu_permissions")
+      .then(({ value }) => {
+        if (value) {
+          setMenuPermissions(value);
+          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(value));
         }
+      })
+      .catch(() => {
+        /* non-critical */
       });
-
-    const channel = supabase
-      .channel("portal-settings-menu")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "portal_settings", filter: "key=eq.menu_permissions" },
-        (payload) => {
-          const perms = ((payload.new ?? {}) as { value?: Record<string, AppRole[]> }).value ?? {};
-          setMenuPermissions(perms);
-          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(perms));
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
   }, []);
 
   useEffect(() => {
@@ -151,7 +146,6 @@ export function AppShell() {
   useEffect(() => {
     if (!loading && !user) navigate({ to: "/login" });
   }, [user, loading, navigate]);
-
 
   if (needsRoleSelection) {
     return (
@@ -175,19 +169,14 @@ export function AppShell() {
   }
 
   const visibleNav = nav.filter((n) => {
-    // Admin always sees every page — menu permissions apply to non-admin roles only.
     if (activeRole === "admin") return true;
     const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
     return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
   });
 
-  // Synchronous permission check — computed before render so there is never a
-  // flash of the real page content before a redirect kicks in.
-  const currentNavItem = nav.find(
-    (n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)),
-  );
+  const currentNavItem = nav.find((n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)));
   const isPathPermitted =
-    loading || // auth still resolving — don't block yet
+    loading ||
     !activeRole ||
     !currentNavItem ||
     activeRole === "admin" ||
@@ -202,13 +191,11 @@ export function AppShell() {
 
   return (
     <div className="h-screen flex overflow-hidden bg-background text-foreground">
-      {/* Sidebar — desktop: fixed height, never scrolls */}
       <aside className="hidden lg:flex w-64 shrink-0 bg-sidebar text-sidebar-foreground flex-col h-screen">
         <SidebarContent path={path} items={visibleNav} />
         <UserBlock fullName={fullName} role={primaryRole} signOut={signOut} />
       </aside>
 
-      {/* Mobile drawer */}
       {open && (
         <div className="lg:hidden fixed inset-0 z-40">
           <button
@@ -278,7 +265,6 @@ function fmtDate(d: string) {
   });
 }
 
-// Group a sorted array of date strings into clusters separated by gaps > 14 days.
 function clusterDates(rawDates: string[]): string[][] {
   if (!rawDates.length) return [];
   const sorted = [...new Set(rawDates)].sort();
@@ -301,70 +287,22 @@ function clusterDates(rawDates: string[]): string[][] {
 }
 
 type NotifState = "unread" | "read";
+type NotifRow = { notif_key: string; is_read: boolean };
 
-function useNotifState(
+function getNotifState(
   notifKey: string | null,
-  userId: string | null,
-): [NotifState | null, () => void, () => void] {
-  // null = not yet loaded from DB (avoid showing badge before we know the real state)
-  const [state, setState] = useState<NotifState | null>(null);
+  allNotifs: NotifRow[] | undefined,
+): NotifState | null {
+  if (!notifKey || allNotifs === undefined) return null;
+  const row = allNotifs.find((r) => r.notif_key === notifKey);
+  return row ? (row.is_read ? "read" : "unread") : "unread";
+}
 
-  // Load initial state from DB
-  useEffect(() => {
-    if (!notifKey || !userId) {
-      setState(null);
-      return;
-    }
-    supabase
-      .from("notification_state")
-      .select("is_read")
-      .eq("user_id", userId)
-      .eq("notif_key", notifKey)
-      .maybeSingle()
-      .then(({ data }) => setState(data?.is_read ? "read" : "unread"));
-  }, [notifKey, userId]);
-
-  // Real-time sync — updates other devices/tabs immediately
-  useEffect(() => {
-    if (!notifKey || !userId) return;
-    const channel = supabase
-      .channel(`notif-${userId}-${notifKey}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "notification_state",
-          filter: `user_id=eq.${userId}`,
-        },
-        (payload) => {
-          const row = (payload.new ?? {}) as { notif_key?: string; is_read?: boolean };
-          if (row.notif_key === notifKey) setState(row.is_read ? "read" : "unread");
-        },
-      )
-      .subscribe();
-    return () => {
-      void supabase.removeChannel(channel);
-    };
-  }, [notifKey, userId]);
-
-  function upsert(isRead: boolean) {
-    if (!notifKey || !userId) return;
-    // Optimistic update so the UI responds immediately
-    setState(isRead ? "read" : "unread");
-    void supabase
-      .from("notification_state")
-      .upsert(
-        { user_id: userId, notif_key: notifKey, is_read: isRead, updated_at: new Date().toISOString() },
-        { onConflict: "user_id,notif_key" },
-      )
-      .then(({ error }) => {
-        // Roll back optimistic update on failure so the badge is truthful
-        if (error) setState(isRead ? "unread" : "read");
-      });
-  }
-
-  return [state, () => upsert(true), () => upsert(false)];
+function upsertNotif(userId: string, notifKey: string, isRead: boolean, refetch: () => void) {
+  api
+    .post("/notifications/upsert", [{ user_id: userId, notif_key: notifKey, is_read: isRead }])
+    .then(() => refetch())
+    .catch(() => {});
 }
 
 function RotaReminderBell({
@@ -382,6 +320,18 @@ function RotaReminderBell({
   const [showAllNotifs, setShowAllNotifs] = useState(false);
   const today = new Date().toISOString().slice(0, 10);
 
+  const ymd = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+  // Shared notification state for this user (polled every 2 min)
+  const { data: allNotifs, refetch: refetchNotifs } = useQuery({
+    queryKey: ["notif-state", userId],
+    enabled: !!userId,
+    staleTime: 60 * 1000,
+    refetchInterval: 2 * 60 * 1000,
+    queryFn: () => api.get<NotifRow[]>("/notifications"),
+  });
+
   // ── Management: next rota deadline ────────────────────────────────────────
   const { data: mgmtNotif } = useQuery({
     queryKey: ["rota-reminder"],
@@ -390,15 +340,10 @@ function RotaReminderBell({
     queryFn: async () => {
       const threeMonthsAgo = new Date();
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-      const ymd = (d: Date) =>
-        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .eq("status", "published")
-        .gte("shift_date", ymd(threeMonthsAgo))
-        .order("shift_date", { ascending: true });
+      const data = await api.get<{ shift_date: string }[]>(
+        `/shift-assignments?status=published&from=${ymd(threeMonthsAgo)}`,
+      );
 
       if (!data?.length) return null;
 
@@ -415,14 +360,11 @@ function RotaReminderBell({
       deadlineDt.setDate(deadlineDt.getDate() - 14);
       const deadline = ymd(deadlineDt);
 
-      const { data: next } = await supabase
-        .from("shift_assignments")
-        .select("id")
-        .gte("shift_date", nextPeriodStart)
-        .limit(1)
-        .maybeSingle();
+      const next = await api.get<{ id: string }[]>(
+        `/shift-assignments?from=${nextPeriodStart}&limit=1`,
+      );
 
-      return { periodStart, periodEnd, nextPeriodStart, deadline, nextRotaExists: !!next };
+      return { periodStart, periodEnd, nextPeriodStart, deadline, nextRotaExists: next.length > 0 };
     },
   });
 
@@ -430,7 +372,7 @@ function RotaReminderBell({
     canSeeManagement && mgmtNotif && !mgmtNotif.nextRotaExists
       ? `rota_notif_v2_${mgmtNotif.periodStart}`
       : null;
-  const [mgmtState, mgmtMarkRead, mgmtMarkUnread] = useNotifState(mgmtKey, userId);
+  const mgmtState = getNotifState(mgmtKey, allNotifs);
 
   // ── Staff: rota published notification ────────────────────────────────────
   const { data: staffNotif } = useQuery({
@@ -440,16 +382,10 @@ function RotaReminderBell({
     queryFn: async () => {
       const threeMonthsAgo = new Date();
       threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
-      const ymd = (d: Date) =>
-        `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("shift_date, ward")
-        .eq("nurse_id", nurseId!)
-        .eq("status", "published")
-        .gte("shift_date", ymd(threeMonthsAgo))
-        .order("shift_date", { ascending: true });
+      const data = await api.get<{ shift_date: string; ward: string | null }[]>(
+        `/shift-assignments?nurse_id=${nurseId}&status=published&from=${ymd(threeMonthsAgo)}`,
+      );
 
       if (!data?.length) return null;
 
@@ -461,15 +397,17 @@ function RotaReminderBell({
       const periodEnd = latest[latest.length - 1];
 
       const ward =
-        data.find((d) => d.shift_date >= periodStart && d.shift_date <= periodEnd && d.ward !== null)
-          ?.ward ?? null;
+        data.find(
+          (d) => d.shift_date >= periodStart && d.shift_date <= periodEnd && d.ward !== null,
+        )?.ward ?? null;
 
       return { periodStart, periodEnd, ward };
     },
   });
 
-  const staffKey = nurseId && staffNotif ? `staff_notif_v2_${nurseId}_${staffNotif.periodStart}` : null;
-  const [staffState, staffMarkRead, staffMarkUnread] = useNotifState(staffKey, userId);
+  const staffKey =
+    nurseId && staffNotif ? `staff_notif_v2_${nurseId}_${staffNotif.periodStart}` : null;
+  const staffState = getNotifState(staffKey, allNotifs);
 
   // ── Locum: pending-action counts ─────────────────────────────────────────
   const { data: locumCount = 0 } = useQuery({
@@ -479,61 +417,46 @@ function RotaReminderBell({
     queryFn: async () => {
       let total = 0;
 
-      // Nurse: pending invites
       if (nurseId) {
-        const { count } = await supabase
-          .from("locum_invites")
-          .select("id", { count: "exact", head: true })
-          .eq("nurse_id", nurseId)
-          .eq("status", "pending");
-        total += count ?? 0;
+        const invites = await api.get<{ id: string }[]>(
+          `/locum/invites?nurse_id=${nurseId}&status=pending`,
+        );
+        total += invites.length;
       }
 
-      // CNO / admin: pending review requests
       if (activeRole === "cno" || activeRole === "admin") {
-        const { count } = await supabase
-          .from("locum_requests")
-          .select("id", { count: "exact", head: true })
-          .eq("status", "pending");
-        total += count ?? 0;
+        const requests = await api.get<{ id: string }[]>("/locum/requests?status=pending");
+        total += requests.length;
       }
 
-      // Chief Matron / admin: approved requests awaiting invite send
       if ((activeRole === "chief_matron" || activeRole === "admin") && userId) {
-        const { count } = await supabase
-          .from("locum_requests")
-          .select("id", { count: "exact", head: true })
-          .eq("requested_by", userId)
-          .eq("status", "approved");
-        total += count ?? 0;
-      }
-
-      // All roles: unread filled/declined locum notifications
-      if (userId) {
-        const { data: unread } = await supabase
-          .from("notification_state")
-          .select("notif_key")
-          .eq("user_id", userId)
-          .eq("is_read", false)
-          .or("notif_key.like.locum_filled_%,notif_key.like.locum_declined_%");
-        total += unread?.length ?? 0;
+        const requests = await api.get<{ id: string }[]>(
+          `/locum/requests?requested_by=${userId}&status=approved`,
+        );
+        total += requests.length;
       }
 
       return total;
     },
   });
 
+  // Unread locum notifications from shared notif state
+  const locumUnread =
+    allNotifs?.filter(
+      (r) =>
+        !r.is_read &&
+        (r.notif_key.startsWith("locum_filled_") || r.notif_key.startsWith("locum_declined_")),
+    ).length ?? 0;
+
   // ── Computed alert counts ─────────────────────────────────────────────────
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
-  const showLocum = locumCount > 0;
+  const showLocum = locumCount + locumUnread > 0;
 
-  // Only count as unread once the DB has responded (state !== null)
   const mgmtUnread = showMgmt && mgmtState === "unread";
   const staffUnread = showStaff && staffState === "unread";
   const unreadCount = (mgmtUnread ? 1 : 0) + (staffUnread ? 1 : 0) + (showLocum ? 1 : 0);
 
-  // Build ordered notifications list — newest/most urgent first
   const allNotifItems = [
     ...(showLocum ? [{ kind: "locum" as const }] : []),
     ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
@@ -555,6 +478,11 @@ function RotaReminderBell({
 
   const hasCritical = mgmtOverdue;
 
+  function markNotif(key: string | null, isRead: boolean) {
+    if (!key || !userId) return;
+    upsertNotif(userId, key, isRead, refetchNotifs);
+  }
+
   return (
     <div className="relative">
       <button
@@ -567,7 +495,7 @@ function RotaReminderBell({
         {unreadCount > 0 && (
           <span
             className={cn(
-              "absolute top-1 right-1 min-w-[16px] h-4 px-0.5 rounded-full text-[9px] font-bold text-white grid place-items-center",
+              "absolute top-1 right-1 min-w-4 h-4 px-0.5 rounded-full text-[9px] font-bold text-white grid place-items-center",
               hasCritical ? "bg-destructive" : "bg-amber-500",
             )}
           >
@@ -611,7 +539,9 @@ function RotaReminderBell({
                         <span className="h-1.5 w-1.5 rounded-full bg-violet-500 shrink-0" />
                       </div>
                       <p className="text-xs">
-                        {locumCount} locum item{locumCount !== 1 ? "s" : ""} need{locumCount === 1 ? "s" : ""} your attention.
+                        {locumCount + locumUnread} locum item
+                        {locumCount + locumUnread !== 1 ? "s" : ""} need
+                        {locumCount + locumUnread === 1 ? "s" : ""} your attention.
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Open the Bank Shift (Locum) page to view and respond.
@@ -640,7 +570,7 @@ function RotaReminderBell({
                           <button
                             type="button"
                             title={staffState === "unread" ? "Mark as read" : "Mark as unread"}
-                            onClick={staffState === "unread" ? staffMarkRead : staffMarkUnread}
+                            onClick={() => markNotif(staffKey, staffState === "unread")}
                             className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
                           >
                             {staffState === "unread" ? "Mark read" : "Mark unread"}
@@ -718,7 +648,7 @@ function RotaReminderBell({
                           <button
                             type="button"
                             title={mgmtState === "unread" ? "Mark as read" : "Mark as unread"}
-                            onClick={mgmtState === "unread" ? mgmtMarkRead : mgmtMarkUnread}
+                            onClick={() => markNotif(mgmtKey, mgmtState === "unread")}
                             className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
                           >
                             {mgmtState === "unread" ? "Mark read" : "Mark unread"}
@@ -781,7 +711,7 @@ function ForcePasswordChangeScreen({
 }: {
   fullName: string | null;
   onChanged: () => void;
-  signOut: () => Promise<void>;
+  signOut: () => void;
 }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
@@ -799,12 +729,7 @@ function ForcePasswordChangeScreen({
     }
     setBusy(true);
     try {
-      const { error: authError } = await supabase.auth.updateUser({ password: newPassword });
-      if (authError) throw new Error(authError.message);
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        await supabase.from("profiles").update({ must_change_password: false }).eq("id", user.id);
-      }
+      await api.post("/auth/change-password", { new_password: newPassword });
       toast.success("Password updated successfully");
       onChanged();
     } catch (e: unknown) {
@@ -814,7 +739,8 @@ function ForcePasswordChangeScreen({
     }
   }
 
-  const cls = "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+  const cls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
 
   return (
     <div className="min-h-screen bg-background text-foreground grid place-items-center px-4">
@@ -897,7 +823,7 @@ function RoleSelectionScreen({
   fullName: string | null;
   roles: AppRole[];
   selectRole: (role: AppRole) => void;
-  signOut: () => Promise<void>;
+  signOut: () => void;
 }) {
   const [selected, setSelected] = useState<AppRole>(roles[0]);
 
@@ -1040,7 +966,7 @@ function UserBlock({
 }: {
   fullName: string | null;
   role: string | undefined;
-  signOut: () => Promise<void>;
+  signOut: () => void;
 }) {
   return (
     <div className="px-4 py-4 border-t border-sidebar-border flex items-center gap-3">

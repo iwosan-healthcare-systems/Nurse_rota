@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
@@ -220,15 +220,10 @@ function ApprovalsPage() {
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses-approvals"],
     staleTime: 10 * 60 * 1000,
-    queryFn: async () =>
-      ((await supabase.from("nurses").select("id, name, role, ward, facility").order("name"))
-        .data ?? []) as {
-        id: string;
-        name: string;
-        role: string;
-        ward: string | null;
-        facility: string | null;
-      }[],
+    queryFn: () =>
+      api.get<{ id: string; name: string; role: string; ward: string | null; facility: string | null }[]>(
+        "/nurses",
+      ),
   });
 
   const { data: rows = [], isLoading } = useQuery({
@@ -244,14 +239,9 @@ function ApprovalsPage() {
         const day = String(d.getDate()).padStart(2, "0");
         return `${d.getFullYear()}-${m}-${day}`;
       };
-      const { data, error } = await supabase
-        .from("shift_assignments")
-        .select("id, shift_date, status, nurse_id, ward, shift")
-        .gte("shift_date", ymd(sixAgo))
-        .lte("shift_date", ymd(threeAhead))
-        .limit(50000);
-      if (error) throw error;
-      return (data ?? []) as PendingRow[];
+      return api.get<PendingRow[]>(
+        `/shift-assignments?from=${ymd(sixAgo)}&to=${ymd(threeAhead)}&limit=50000`,
+      );
     },
   });
 
@@ -374,19 +364,19 @@ function ApprovalsPage() {
   ): Promise<string | null> {
     const facilityIds = allNurses.filter((n) => n.facility === win.facility).map((n) => n.id);
     if (!facilityIds.length) return null;
-    for (let i = 0; i < facilityIds.length; i += 200) {
-      let q = supabase
-        .from("shift_assignments")
-        .update({ status: toStatus })
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", win.endDate)
-        .in("nurse_id", facilityIds.slice(i, i + 200));
-      if (win.ward !== null) q = q.eq("ward", win.ward);
-      else q = q.is("ward", null);
-      if (fromStatus) q = q.eq("status", fromStatus);
-      if (neqStatus) q = q.neq("status", neqStatus);
-      const { error } = await q;
-      if (error) return error.message;
+    try {
+      const qs = new URLSearchParams({
+        nurse_ids: facilityIds.join(","),
+        shift_date_from: win.startDate,
+        shift_date_to: win.endDate,
+      });
+      if (win.ward !== null) qs.set("ward", win.ward);
+      else qs.set("ward_null", "true");
+      if (fromStatus) qs.set("status", fromStatus);
+      if (neqStatus) qs.set("neq_status", neqStatus);
+      await api.patch(`/shift-assignments?${qs}`, { status: toStatus });
+    } catch (e) {
+      return e instanceof Error ? e.message : "Update failed";
     }
     return null;
   }
@@ -409,24 +399,25 @@ function ApprovalsPage() {
             (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
         )
         .map((n) => n.id);
-      for (let i = 0; i < globalIds.length; i += 200) {
-        await supabase
-          .from("shift_assignments")
-          .update({ status: "submitted" })
-          .gte("shift_date", win.startDate)
-          .lte("shift_date", win.endDate)
-          .eq("status", "draft")
-          .in("nurse_id", globalIds.slice(i, i + 200));
+      if (globalIds.length) {
+        await api
+          .patch(
+            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate}&shift_date_to=${win.endDate}&status=draft`,
+            { status: "submitted" },
+          )
+          .catch(() => {});
       }
     }
 
     setBusy(null);
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action: "Submitted rota for approval",
-      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
-    });
+    await api
+      .post("/audit-logs", {
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+        action: "Submitted rota for approval",
+        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+      })
+      .catch(() => {});
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["approvals"] });
   }
@@ -454,27 +445,28 @@ function ApprovalsPage() {
             (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
         )
         .map((n) => n.id);
-      for (let i = 0; i < globalIds.length; i += 200) {
-        await supabase
-          .from("shift_assignments")
-          .update({ status: "published" })
-          .gte("shift_date", win.startDate)
-          .lte("shift_date", win.endDate)
-          .neq("status", "published")
-          .in("nurse_id", globalIds.slice(i, i + 200));
+      if (globalIds.length) {
+        await api
+          .patch(
+            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate}&shift_date_to=${win.endDate}&neq_status=published`,
+            { status: "published" },
+          )
+          .catch(() => {});
       }
     }
 
     setBusy(null);
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action:
-        nextStatus === "published"
-          ? "Rota published"
-          : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
-      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
-    });
+    await api
+      .post("/audit-logs", {
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+        action:
+          nextStatus === "published"
+            ? "Rota published"
+            : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
+        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+      })
+      .catch(() => {});
     if (nextStatus === "published") {
       const nextStart = scheduleEndDate(win.startDate);
       const nextStartDt = new Date(nextStart + "T00:00:00");
@@ -499,12 +491,14 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", win.status);
     setBusy(null);
     if (err) return toast.error(err);
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action: "Rota returned to draft",
-      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
-    });
+    await api
+      .post("/audit-logs", {
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+        action: "Rota returned to draft",
+        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+      })
+      .catch(() => {});
     toast.success("Returned to draft");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -521,12 +515,14 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", "published");
     setBusy(null);
     if (err) return toast.error(err);
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action: "Unpublished rota — returned to Draft",
-      target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
-    });
+    await api
+      .post("/audit-logs", {
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+        action: "Unpublished rota — returned to Draft",
+        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+      })
+      .catch(() => {});
     toast.success("Rota unpublished — schedule is unchanged and now editable");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -547,22 +543,12 @@ function ApprovalsPage() {
         (n) => isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role),
       );
     }
-    const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
     const nurseIds = scopedNurses.map((n) => n.id);
-    const BATCH = 50;
-    for (let i = 0; i < nurseIds.length; i += BATCH) {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("nurse_id, shift_date, shift")
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", endDate)
-        .eq("status", "published")
-        .in("nurse_id", nurseIds.slice(i, i + BATCH));
-      if (data)
-        allAssignments.push(
-          ...(data as { nurse_id: string; shift_date: string; shift: string }[]),
-        );
-    }
+    const allAssignments = nurseIds.length
+      ? await api.get<{ nurse_id: string; shift_date: string; shift: string }[]>(
+          `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${win.startDate}&to=${endDate}&status=published`,
+        )
+      : [];
     const assignMap = new Map<string, string>();
     allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));

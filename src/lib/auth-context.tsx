@@ -1,9 +1,18 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { Session, User } from "@supabase/supabase-js";
-import { supabase } from "@/integrations/supabase/client";
+import { api, getToken, clearToken } from "@/lib/api";
 
 export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse";
+
+export interface ApiUser {
+  id: string;
+  email: string;
+  full_name: string | null;
+  roles: AppRole[];
+  must_change_password: boolean;
+  nurse_id: string | null;
+  nurse_facility: string | null;
+}
 
 const CAPABILITIES_KEY = "nurse_rota_capabilities";
 
@@ -19,8 +28,7 @@ function capabilityRoles(key: string, defaults: AppRole[]): AppRole[] {
 }
 
 interface AuthCtx {
-  user: User | null;
-  session: Session | null;
+  user: ApiUser | null;
   roles: AppRole[];
   activeRole: AppRole | null;
   fullName: string | null;
@@ -60,7 +68,7 @@ interface AuthCtx {
   canViewLocumHours: boolean;
   canViewReports: boolean;
   canViewAudit: boolean;
-  signOut: () => Promise<void>;
+  signOut: () => void;
 }
 
 const Ctx = createContext<AuthCtx | null>(null);
@@ -72,120 +80,73 @@ export function rememberSelectedRole(uid: string, role: AppRole) {
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  // Incremented whenever capabilities change so can* values are recomputed.
+  const [user, setUser] = useState<ApiUser | null>(null);
   const [capabilitiesVersion, setCapabilitiesVersion] = useState(0);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
-  const [fullName, setFullName] = useState<string | null>(null);
-  const [nurseFacility, setNurseFacility] = useState<string | null>(null);
-  const [nurseId, setNurseId] = useState<string | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_e, s) => {
-      setSession(s);
-      setUser(s?.user ?? null);
-      if (s?.user) {
-        setTimeout(() => loadProfile(s.user.id), 0);
-      } else {
-        setRoles([]);
-        setActiveRole(null);
-        setFullName(null);
-        setNurseFacility(null);
-        setNurseId(null);
-        setMustChangePassword(false);
-      }
-    });
-
-    supabase.auth.getSession().then(async ({ data }) => {
-      setSession(data.session);
-      setUser(data.session?.user ?? null);
-      if (data.session?.user) await loadProfile(data.session.user.id);
+    if (!getToken()) {
       setLoading(false);
-    });
-
-    return () => subscription.unsubscribe();
+      return;
+    }
+    api.get<ApiUser>('/auth/me')
+      .then((me) => {
+        applyUser(me);
+      })
+      .catch(() => {
+        clearToken();
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  // Pull capability overrides from DB once on mount so every device gets the admin's settings.
+  // Pull capability overrides from API once on mount.
   useEffect(() => {
-    supabase
-      .from("portal_settings")
-      .select("value")
-      .eq("key", "capabilities")
-      .single()
-      .then(({ data }) => {
-        if (data?.value) {
-          localStorage.setItem(
-            CAPABILITIES_KEY,
-            JSON.stringify(data.value as { key: string; roles: AppRole[] }[]),
-          );
+    if (!getToken()) return;
+    api
+      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>("/portal-settings/capabilities")
+      .then(({ value }) => {
+        if (value && Array.isArray(value)) {
+          localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(value));
           setCapabilitiesVersion((v) => v + 1);
         }
+      })
+      .catch(() => {
+        /* non-critical */
       });
   }, []);
 
-  // Re-read capabilities from localStorage whenever the permissions page fires a save event.
+  // Re-read capabilities from localStorage when permissions page saves.
   useEffect(() => {
     const handler = () => setCapabilitiesVersion((v) => v + 1);
     window.addEventListener("capabilities-changed", handler);
     return () => window.removeEventListener("capabilities-changed", handler);
   }, []);
 
-  async function loadProfile(uid: string) {
-    try {
-      const [{ data: roleData }, { data: profRows }, { data: profDetail }] = await Promise.all([
-        supabase.rpc("get_my_roles"),
-        supabase.rpc("get_my_profile"),
-        supabase.from("profiles").select("must_change_password").eq("id", uid).maybeSingle(),
-      ]);
-      const name = (profRows as { full_name: string | null }[] | null)?.[0]?.full_name ?? null;
-      const loadedRoles = ((roleData as string[]) ?? []).map((r) => r as AppRole);
-      setMustChangePassword((profDetail as { must_change_password?: boolean } | null)?.must_change_password ?? false);
+  function applyUser(me: ApiUser) {
+    setUser(me);
+    setRoles(me.roles);
+    setMustChangePassword(me.must_change_password);
 
-      setRoles(loadedRoles);
-      setFullName(name);
-
-      // Resolve active role:
-      // - Single role → use it automatically (no selection needed)
-      // - Multiple roles → restore from sessionStorage, or require selection
-      if (loadedRoles.length === 1) {
-        setActiveRole(loadedRoles[0]);
-      } else if (loadedRoles.length > 1) {
-        const stored = sessionStorage.getItem(selectedRoleStorageKey(uid)) as AppRole | null;
-        if (stored && loadedRoles.includes(stored)) {
-          setActiveRole(stored);
-        } else {
-          setActiveRole(null); // Triggers role selection screen
-        }
+    if (me.roles.length === 1) {
+      setActiveRole(me.roles[0]);
+    } else if (me.roles.length > 1) {
+      const stored = sessionStorage.getItem(selectedRoleStorageKey(me.id)) as AppRole | null;
+      if (stored && me.roles.includes(stored)) {
+        setActiveRole(stored);
       } else {
         setActiveRole(null);
       }
-
-      if (name) {
-        const { data: nurseRow } = await supabase
-          .from("nurses")
-          .select("id, facility")
-          .eq("name", name)
-          .maybeSingle();
-        setNurseFacility(nurseRow?.facility ?? null);
-        setNurseId(nurseRow?.id ?? null);
-      } else {
-        setNurseFacility(null);
-        setNurseId(null);
-      }
-    } catch {
-      setRoles([]);
+    } else {
       setActiveRole(null);
-      setFullName(null);
-      setNurseFacility(null);
-      setNurseId(null);
     }
+  }
+
+  // Exposed so login.tsx can hydrate the context after a successful login.
+  function setLoggedInUser(me: ApiUser) {
+    applyUser(me);
   }
 
   function selectRole(role: AppRole) {
@@ -197,24 +158,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMustChangePassword(false);
   }
 
+  function signOut() {
+    if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
+    clearToken();
+    setUser(null);
+    setRoles([]);
+    setActiveRole(null);
+    setMustChangePassword(false);
+  }
+
   const ar = activeRole;
-  // capabilitiesVersion read here so a change triggers recomputation of can* flags below.
   void capabilitiesVersion;
   const hasRole = (r: AppRole) => ar === r;
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
-  // Shorthand: true if the active role is in the saved (or default) capability roles.
   const cap = (key: string, defaults: AppRole[]) =>
     ar !== null && capabilityRoles(key, defaults).includes(ar);
-  const isInActiveRole = (...rs: AppRole[]) => ar !== null && rs.includes(ar);
 
   const value: AuthCtx = {
     user,
-    session,
     roles,
     activeRole,
-    fullName,
-    nurseFacility,
-    nurseId,
+    fullName: user?.full_name ?? null,
+    nurseFacility: user?.nurse_facility ?? null,
+    nurseId: user?.nurse_id ?? null,
     loading,
     needsRoleSelection: roles.length > 1 && activeRole === null,
     mustChangePassword,
@@ -248,20 +214,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canViewLocumHours: cap("view_locum_hours", ["admin", "cno", "chief_matron"]),
     canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "hr_admin"]),
     canViewAudit: cap("view_audit", ["admin", "cno"]),
-    signOut: async () => {
-      if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
-      setActiveRole(null);
-      setNurseId(null);
-      await supabase.auth.signOut();
-    },
+    signOut,
   };
 
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
+  return (
+    <Ctx.Provider value={{ ...value, setLoggedInUser } as AuthCtx & { setLoggedInUser: (u: ApiUser) => void }}>
+      {children}
+    </Ctx.Provider>
+  );
 }
 
 export function useAuth() {
   const c = useContext(Ctx);
   if (!c) throw new Error("useAuth must be used within AuthProvider");
+  return c;
+}
+
+export function useAuthInternal() {
+  const c = useContext(Ctx) as (AuthCtx & { setLoggedInUser: (u: ApiUser) => void }) | null;
+  if (!c) throw new Error("useAuthInternal must be used within AuthProvider");
   return c;
 }
 

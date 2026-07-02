@@ -1,7 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import {
   Users,
   Building2,
@@ -142,29 +142,16 @@ function NurseDashboard() {
   const { data: nurseRecord } = useQuery<NurseRecord | null>({
     queryKey: ["my-nurse-record", nurseId],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("nurses")
-        .select("id, name, role, ward, facility, hours_this_month, target_hours")
-        .eq("id", nurseId!)
-        .maybeSingle();
-      return data as NurseRecord | null;
-    },
+    queryFn: () => api.get<NurseRecord | null>(`/nurses/${nurseId}`),
   });
 
   const { data: todayAssignment } = useQuery<Assignment | null>({
     queryKey: ["my-today-assignment", nurseId, today],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("shift, shift_date, ward, status")
-        .eq("nurse_id", nurseId!)
-        .eq("shift_date", today)
-        .eq("status", "published")
-        .maybeSingle();
-      return data as Assignment | null;
-    },
+    queryFn: () =>
+      api
+        .get<Assignment[]>(`/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`)
+        .then((arr) => arr[0] ?? null),
   });
 
   const next7 = ymd(new Date(Date.now() + 86400000));
@@ -172,63 +159,34 @@ function NurseDashboard() {
   const { data: upcomingAssignments = [] } = useQuery<Assignment[]>({
     queryKey: ["my-upcoming", nurseId, next7],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("shift, shift_date, ward")
-        .eq("nurse_id", nurseId!)
-        .gte("shift_date", next7)
-        .lte("shift_date", end7)
-        .eq("status", "published")
-        .order("shift_date", { ascending: true });
-      return (data ?? []) as Assignment[];
-    },
+    queryFn: () =>
+      api.get<Assignment[]>(
+        `/shift-assignments?nurse_id=${nurseId}&from=${next7}&to=${end7}&status=published`,
+      ),
   });
 
   const { data: activeLog } = useQuery<ShiftLog | null>({
     queryKey: ["my-active-log", nurseId, today],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("id, shift_type, started_at, expected_end_at, hours_logged, ended_at")
-        .eq("nurse_id", nurseId!)
-        .eq("shift_date", today)
-        .maybeSingle();
-      return data as ShiftLog | null;
-    },
+    queryFn: () => api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${today}`),
     refetchInterval: 60000,
   });
 
   const { data: periodLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["my-period-logs-dash", nurseId],
     enabled: !!nurseId,
-    queryFn: async () => {
+    queryFn: () => {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
       const lb = ymd(lookback);
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("hours_logged, shift_date")
-        .eq("nurse_id", nurseId!)
-        .gte("shift_date", lb)
-        .not("hours_logged", "is", null);
-      return (data ?? []) as ShiftLog[];
+      return api.get<ShiftLog[]>(`/shift-logs?nurse_id=${nurseId}&from=${lb}&hours_not_null=true`);
     },
   });
 
   const { data: myLeave = [] } = useQuery<LeaveRequest[]>({
     queryKey: ["my-leave", nurseId],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("leave_requests")
-        .select("id, type, from_date, to_date, status, created_at")
-        .eq("nurse_id", nurseId!)
-        .order("created_at", { ascending: false })
-        .limit(5);
-      return (data ?? []) as LeaveRequest[];
-    },
+    queryFn: () => api.get<LeaveRequest[]>(`/leave-requests?nurse_id=${nurseId}&limit=5`),
   });
 
   const periodHours = periodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
@@ -500,17 +458,15 @@ function ManagementDashboard() {
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
-    queryFn: async () => (await supabase.from("nurses").select("*")).data ?? [],
+    queryFn: () => api.get<Record<string, unknown>[]>("/nurses"),
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
-    queryFn: async () => (await supabase.from("wards").select("*")).data ?? [],
+    queryFn: () => api.get<Record<string, unknown>[]>("/wards"),
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
-    queryFn: async () =>
-      (await supabase.from("leave_requests").select("*").order("created_at", { ascending: false }))
-        .data ?? [],
+    queryFn: () => api.get<Record<string, unknown>[]>("/leave-requests"),
   });
 
   const nurses = facilityFilter

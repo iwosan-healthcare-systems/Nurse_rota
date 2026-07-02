@@ -36,3 +36,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# SSH keys (used locally to set up GitHub Actions secrets — never commit)
+github_actions_key
+github_actions_key.pub
+
+# nurse-api
+nurse-api/.env
+nurse-api/node_modules/

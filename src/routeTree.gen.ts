@@ -286,18 +286,18 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppMenuPermissionsRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/leave': {
-      id: '/_app/leave'
-      path: '/leave'
-      fullPath: '/leave'
-      preLoaderRoute: typeof AppLeaveRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/locum': {
       id: '/_app/locum'
       path: '/locum'
       fullPath: '/locum'
       preLoaderRoute: typeof AppLocumRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/leave': {
+      id: '/_app/leave'
+      path: '/leave'
+      fullPath: '/leave'
+      preLoaderRoute: typeof AppLeaveRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/audit': {

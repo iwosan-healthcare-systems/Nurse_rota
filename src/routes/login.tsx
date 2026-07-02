@@ -1,6 +1,6 @@
-import { createFileRoute, useNavigate, Link, redirect } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { api, setToken, getToken } from "@/lib/api";
 import { Loader2 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { toast } from "sonner";
@@ -10,6 +10,8 @@ import {
   ROLE_LABELS,
   selectedRoleStorageKey,
   useAuth,
+  useAuthInternal,
+  type ApiUser,
   type AppRole,
 } from "@/lib/auth-context";
 
@@ -20,24 +22,10 @@ function toAppRoles(rawRoles: unknown): AppRole[] {
   return rawRoles.filter((role): role is AppRole => APP_ROLES.includes(role as AppRole));
 }
 
-async function getCurrentRoles() {
-  const { data, error } = await supabase.rpc("get_my_roles");
-  if (error) throw error;
-  return toAppRoles(data);
-}
-
 export const Route = createFileRoute("/login")({
   beforeLoad: async () => {
-    const { data } = await supabase.auth.getSession();
-    if (!data.session) return;
-
-    const roles = await getCurrentRoles();
-    const stored =
-      typeof sessionStorage === "undefined"
-        ? null
-        : (sessionStorage.getItem(selectedRoleStorageKey(data.session.user.id)) as AppRole | null);
-
-    if (roles.length > 1 && (!stored || !roles.includes(stored))) return;
+    if (!getToken()) return;
+    // Token exists; redirect home — auth-context will validate on mount
     throw redirect({ to: "/" });
   },
   head: () => ({
@@ -61,12 +49,13 @@ export const Route = createFileRoute("/login")({
 function LoginPage() {
   const navigate = useNavigate();
   const { user, roles, needsRoleSelection, selectRole } = useAuth();
+  const { setLoggedInUser } = useAuthInternal();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [roleOptions, setRoleOptions] = useState<AppRole[]>([]);
   const [selectedRole, setSelectedRole] = useState<AppRole | "">("");
-  const [signedInUserId, setSignedInUserId] = useState<string | null>(null);
+  const [pendingUser, setPendingUser] = useState<ApiUser | null>(null);
 
   const isChoosingRole = roleOptions.length > 1;
 
@@ -74,8 +63,7 @@ function LoginPage() {
     if (!needsRoleSelection || roles.length <= 1) return;
     setRoleOptions(roles);
     setSelectedRole((current) => (current && roles.includes(current) ? current : roles[0]));
-    setSignedInUserId(user?.id ?? null);
-  }, [needsRoleSelection, roles, user?.id]);
+  }, [needsRoleSelection, roles]);
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -86,22 +74,26 @@ function LoginPage() {
 
     setBusy(true);
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
-      const userId = data.user?.id;
-      const nextRoles = await getCurrentRoles();
+      const data = await api.post<{ token: string; user: ApiUser }>('/auth/login', { email, password });
+      setToken(data.token);
 
-      if (userId && nextRoles.length > 1) {
-        sessionStorage.removeItem(selectedRoleStorageKey(userId));
-        setSignedInUserId(userId);
+      const nextUser = data.user;
+      const nextRoles = toAppRoles(nextUser.roles);
+
+      if (nextRoles.length > 1) {
+        sessionStorage.removeItem(selectedRoleStorageKey(nextUser.id));
+        setPendingUser(nextUser);
         setRoleOptions(nextRoles);
         setSelectedRole(nextRoles[0]);
+        // Hydrate the auth context so useAuth().roles is populated during role selection
+        setLoggedInUser(nextUser);
         toast.success("Select a role to continue");
         return;
       }
 
-      if (userId && nextRoles.length === 1) {
-        rememberSelectedRole(userId, nextRoles[0]);
+      if (nextRoles.length === 1) {
+        rememberSelectedRole(nextUser.id, nextRoles[0]);
+        setLoggedInUser(nextUser);
         selectRole(nextRoles[0]);
       }
 
@@ -120,7 +112,7 @@ function LoginPage() {
       return;
     }
 
-    const userId = signedInUserId ?? user?.id;
+    const userId = pendingUser?.id ?? user?.id;
     if (userId) rememberSelectedRole(userId, selectedRole);
     selectRole(selectedRole);
     toast.success(`Signed in as ${ROLE_LABELS[selectedRole]}`);

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useEffect, useRef, useState, useMemo, type FormEvent } from "react";
 import {
   UserPlus,
@@ -25,12 +25,6 @@ import {
   ShieldAlert,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import {
-  adminCreateUser,
-  adminBanUser,
-  adminUnbanUser,
-  adminResetUserPassword,
-} from "@/integrations/supabase/admin-client";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -108,29 +102,15 @@ function StaffPage() {
   const { data: nurses = [], isLoading } = useQuery({
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("nurses")
-        .select("id, name, role, facility, ward, email, hours_this_month, target_hours")
-        .order("name", { ascending: true });
-      if (error) throw error;
-      return data as Nurse[];
-    },
+    queryFn: () => api.get<Nurse[]>("/nurses"),
   });
 
   const { data: profileRows = [] } = useQuery({
     queryKey: ["profile-names"],
     enabled: canCreateLogin,
     staleTime: 10 * 60 * 1000,
-    queryFn: async () => {
-      // Try with is_active; fall back to basic select if the migration hasn't run yet.
-      const { data, error } = await supabase.from("profiles").select("id, full_name, is_active");
-      if (error) {
-        const { data: fallback } = await supabase.from("profiles").select("id, full_name");
-        return (fallback ?? []).map((p) => ({ id: p.id, full_name: p.full_name, is_active: true }));
-      }
-      return data ?? [];
-    },
+    queryFn: () =>
+      api.get<{ id: string; full_name: string | null; is_active: boolean }[]>("/profiles"),
   });
   const profileMap = useMemo(
     () =>
@@ -148,12 +128,7 @@ function StaffPage() {
     if (!confirm("Deactivate this login? The user will not be able to log in until reactivated."))
       return;
     try {
-      await adminBanUser(userId);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_active: false })
-        .eq("id", userId);
-      if (error) throw new Error(error.message);
+      await api.patch(`/auth/admin/users/${userId}/ban`);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       toast.success("Login deactivated");
@@ -164,12 +139,7 @@ function StaffPage() {
 
   async function reactivateLogin(userId: string) {
     try {
-      await adminUnbanUser(userId);
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_active: true })
-        .eq("id", userId);
-      if (error) throw new Error(error.message);
+      await api.patch(`/auth/admin/users/${userId}/unban`);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       toast.success("Login reactivated");
@@ -181,8 +151,7 @@ function StaffPage() {
   const { data: wards = [] } = useQuery<{ name: string; facility: string | null }[]>({
     queryKey: ["wards"],
     staleTime: 30 * 60 * 1000,
-    queryFn: async () =>
-      (await supabase.from("wards").select("name, facility").order("name")).data ?? [],
+    queryFn: () => api.get<{ name: string; facility: string | null }[]>("/wards"),
   });
 
   // Hours from shift_logs for the current period (period_start of the most recent
@@ -196,14 +165,10 @@ function StaffPage() {
   const { data: shiftLogs = [] } = useQuery<{ nurse_id: string; hours_logged: number | null }[]>({
     queryKey: ["staff-shift-logs-current", periodStart],
     staleTime: 2 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("nurse_id, hours_logged")
-        .gte("shift_date", periodStart)
-        .not("ended_at", "is", null);
-      return (data ?? []) as { nurse_id: string; hours_logged: number | null }[];
-    },
+    queryFn: () =>
+      api.get<{ nurse_id: string; hours_logged: number | null }[]>(
+        `/shift-logs?from=${periodStart}&ended_at_not_null=true`,
+      ),
   });
 
   const hoursMap = useMemo(() => {
@@ -217,10 +182,7 @@ function StaffPage() {
   }, [shiftLogs]);
 
   const delMut = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("nurses").delete().eq("id", id);
-      if (error) throw error;
-    },
+    mutationFn: (id: string) => api.del(`/nurses/${id}`),
     onSuccess: async (_, id) => {
       toast.success("Nurse removed");
       qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -468,7 +430,7 @@ function StaffPage() {
                       )}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                      <span className="truncate block max-w-[180px]" title={n.email ?? ""}>
+                      <span className="truncate block max-w-45" title={n.email ?? ""}>
                         {n.email ?? <span className="text-xs italic opacity-50">—</span>}
                       </span>
                     </td>
@@ -711,15 +673,19 @@ function AddNurseModal({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.from("nurses").insert({
-      name,
-      email: email || null,
-      role,
-      facility: facility || null,
-      ward: noWard ? null : formatWards(nurseWards),
-    });
+    try {
+      await api.post("/nurses", {
+        name,
+        email: email || null,
+        role,
+        facility: facility || null,
+        ward: noWard ? null : formatWards(nurseWards),
+      });
+    } catch (e) {
+      setBusy(false);
+      return toast.error(e instanceof Error ? e.message : "Failed to add nurse");
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
     toast.success("Nurse added");
     logAudit("Added nurse", name);
     qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -841,18 +807,19 @@ function EditNurseModal({
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase
-      .from("nurses")
-      .update({
+    try {
+      await api.patch(`/nurses/${nurse.id}`, {
         name,
         email: email || null,
         role,
         facility: facility || null,
         ward: noWard ? null : formatWards(nurseWards),
-      })
-      .eq("id", nurse.id);
+      });
+    } catch (e) {
+      setBusy(false);
+      return toast.error(e instanceof Error ? e.message : "Failed to update");
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
     toast.success("Profile updated");
     logAudit("Updated nurse profile", name);
     qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -992,17 +959,22 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   async function importAll() {
     if (!facility) return toast.error("Select a facility before importing");
     setBusy(true);
-    const { error } = await supabase.from("nurses").insert(
-      rows.map((r) => ({
-        name: r.name,
-        email: r.email || null,
-        role: r.role,
-        facility,
-        ward: r.ward || null,
-      })),
-    );
+    try {
+      await api.post(
+        "/nurses/bulk",
+        rows.map((r) => ({
+          name: r.name,
+          email: r.email || null,
+          role: r.role,
+          facility,
+          ward: r.ward || null,
+        })),
+      );
+    } catch (e) {
+      setBusy(false);
+      return toast.error(e instanceof Error ? e.message : "Import failed");
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
     toast.success(`Imported ${rows.length} nurses into ${facility}`);
     logAudit("Imported nurses from Excel", `${rows.length} rows — ${facility}`);
     qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -1129,12 +1101,13 @@ function SetTargetHoursModal({
     )
       return;
     setBusy(true);
-    const { error } = await supabase
-      .from("nurses")
-      .update({ target_hours: hours })
-      .gte("target_hours", 0);
+    try {
+      await api.patch("/nurses/bulk-target-hours", { target_hours: hours });
+    } catch (e) {
+      setBusy(false);
+      return toast.error(e instanceof Error ? e.message : "Failed to update");
+    }
     setBusy(false);
-    if (error) return toast.error(error.message);
     toast.success(`Target hours updated to ${hours}h for all staff`);
     logAudit("Updated global target hours", `${hours}h`);
     qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -1264,15 +1237,13 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
   // Fetch the nurse's current email fresh from the DB on open — the parent
   // list may be serving a cached (stale) row where email is still null.
   useEffect(() => {
-    if (nurse.email) return; // already have it from cache
-    supabase
-      .from("nurses")
-      .select("email")
-      .eq("id", nurse.id)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (data?.email) setEmail(data.email);
-      });
+    if (nurse.email) return;
+    api
+      .get<{ email: string | null }>(`/nurses/${nurse.id}`)
+      .then((n) => {
+        if (n?.email) setEmail(n.email);
+      })
+      .catch(() => {});
   }, [nurse.id, nurse.email]);
 
   function copyPassword() {
@@ -1294,24 +1265,15 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
     }
     setBusy(true);
     try {
-      // adminCreateUser uses the service-role key — creates the account
-      // instantly with email already confirmed. No confirmation email is sent.
-      const userId = await adminCreateUser({ email, password, fullName: nurse.name });
+      const { id: userId } = await api.post<{ id: string }>("/auth/admin/create-user", {
+        email,
+        password,
+        full_name: nurse.name,
+      });
 
       await Promise.all([
-        supabase.from("user_roles").insert({
-          user_id: userId,
-          role: role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"],
-        }),
-        supabase.from("profiles").upsert({
-          id: userId,
-          full_name: nurse.name,
-          email,
-          must_change_password: true,
-          updated_at: new Date().toISOString(),
-        }),
-        // Persist the email back to the nurses record if it changed.
-        supabase.from("nurses").update({ email }).eq("id", nurse.id),
+        api.post("/user-roles", { user_id: userId, role }),
+        api.patch(`/nurses/${nurse.id}`, { email }),
       ]);
 
       logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
@@ -1458,8 +1420,7 @@ function ResetPasswordModal({
     if (password.length < 8) return toast.error("Password must be at least 8 characters");
     setBusy(true);
     try {
-      await adminResetUserPassword(userId, password);
-      await supabase.from("profiles").update({ must_change_password: true }).eq("id", userId);
+      await api.patch(`/auth/admin/users/${userId}/reset-password`, { password });
       await logAudit("Reset password", name);
       setDone(true);
     } catch (err) {

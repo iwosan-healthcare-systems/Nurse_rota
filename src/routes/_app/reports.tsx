@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useState, useMemo } from "react";
 import {
   Download,
@@ -244,45 +244,28 @@ function ReportsContent() {
   const { data: nurses = [] } = useQuery<Nurse[]>({
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
-    queryFn: async () =>
-      (
-        await supabase
-          .from("nurses")
-          .select("id, name, role, facility, ward, target_hours, hours_this_month")
-      ).data ?? [],
+    queryFn: () => api.get<Nurse[]>("/nurses"),
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
     staleTime: 30 * 60 * 1000,
-    queryFn: async () =>
-      (await supabase.from("wards").select("id, name, facility").order("name")).data ?? [],
+    queryFn: () => api.get<{ id: string; name: string; facility: string | null }[]>("/wards"),
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
     staleTime: 5 * 60 * 1000,
-    queryFn: async () =>
-      (
-        await supabase
-          .from("leave_requests")
-          .select("id, nurse_id, from_date, to_date, status, type, reason")
-      ).data ?? [],
+    queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
   // Current period regular shift logs (last 28 days) — locum excluded
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["shift-logs-current"],
     staleTime: 2 * 60 * 1000,
-    queryFn: async () => {
+    queryFn: () => {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("*")
-        .eq("is_locum", false)
-        .gte("shift_date", lb)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as ShiftLog[];
+      return api.get<ShiftLog[]>(`/shift-logs?is_locum=false&from=${lb}`);
     },
   });
 
@@ -290,43 +273,21 @@ function ReportsContent() {
   const { data: locumShiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["locum-shift-logs-report"],
     staleTime: 2 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select("*")
-        .eq("is_locum", true)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as ShiftLog[];
-    },
+    queryFn: () => api.get<ShiftLog[]>("/shift-logs?is_locum=true"),
   });
 
   // Filled locum requests — provides ward / facility context for each locum log
   const { data: locumFilledRequests = [] } = useQuery<LocumFilledRequest[]>({
     queryKey: ["locum-filled-report"],
     staleTime: 2 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("locum_requests")
-        .select(
-          "id, shift_date, shift, facility, ward, accepted_by_nurse_id, accepted_by_nurse_name, accepted_at",
-        )
-        .eq("status", "filled")
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as LocumFilledRequest[];
-    },
+    queryFn: () => api.get<LocumFilledRequest[]>("/locum/requests?status=filled"),
   });
 
   // All saved period summaries
   const { data: periodSummaries = [] } = useQuery<PeriodHours[]>({
     queryKey: ["period-hours-all"],
     staleTime: 30 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("nurse_period_hours")
-        .select("*")
-        .order("period_start", { ascending: false });
-      return (data ?? []) as PeriodHours[];
-    },
+    queryFn: () => api.get<PeriodHours[]>("/nurse-period-hours"),
   });
 
   // Published schedule assignments (for archive tab)
@@ -335,17 +296,13 @@ function ReportsContent() {
   >({
     queryKey: ["archive-assignments"],
     staleTime: 30 * 60 * 1000,
-    queryFn: async () => {
+    queryFn: () => {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("nurse_id, shift_date, ward, shift")
-        .eq("status", "published")
-        .gte("shift_date", cutoff)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as ArchiveAssignment[];
+      return api.get<ArchiveAssignment[]>(
+        `/shift-assignments?status=published&from=${cutoff}`,
+      );
     },
     enabled: tab === "schedules",
   });
@@ -517,29 +474,26 @@ function ReportsContent() {
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
 
-      const { data: winRow } = await supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .gte("shift_date", lb)
-        .order("shift_date", { ascending: true })
-        .limit(1);
-      const periodStart = winRow?.[0]?.shift_date ?? lb;
+      const winArr = await api.get<{ shift_date: string }[]>(
+        `/shift-assignments?from=${lb}&limit=1`,
+      );
+      const periodStart = winArr[0]?.shift_date ?? lb;
 
-      for (const nurse of nurses) {
-        const totalHours = nurseHoursMap.get(nurse.id) ?? 0;
-        const totalShifts = nurseShiftCountMap.get(nurse.id) ?? 0;
-        if (totalHours === 0) continue;
-        await supabase.from("nurse_period_hours").upsert(
-          {
-            nurse_id: nurse.id,
-            period_start: periodStart,
-            period_end: today,
-            total_hours: totalHours,
-            total_shifts: totalShifts,
-          },
-          { onConflict: "nurse_id,period_start" },
-        );
-        await supabase.from("nurses").update({ hours_this_month: 0 }).eq("id", nurse.id);
+      const upsertRows = nurses
+        .map((nurse) => ({
+          nurse_id: nurse.id,
+          period_start: periodStart,
+          period_end: today,
+          total_hours: nurseHoursMap.get(nurse.id) ?? 0,
+          total_shifts: nurseShiftCountMap.get(nurse.id) ?? 0,
+        }))
+        .filter((r) => r.total_hours > 0);
+
+      if (upsertRows.length) {
+        await api.post("/nurse-period-hours/upsert", upsertRows);
+        await api.patch("/nurses/reset-hours", {
+          nurse_ids: upsertRows.map((r) => r.nurse_id),
+        });
       }
 
       toast.success("Period closed — hours archived and counters reset");
@@ -744,26 +698,18 @@ ${staffToPrint
 
   // ── Schedule archive download ─────────────────────────────────────────────
   async function fetchScheduleData(win: ArchiveWindow) {
-    // Scope to this facility's nurses to prevent cross-facility contamination.
     const facilityNurseIds = win.facility
       ? nurses.filter((n) => n.facility === win.facility).map((n) => n.id)
       : nurses.map((n) => n.id);
 
-    const allAssignments: { nurse_id: string; shift_date: string; shift: string }[] = [];
-    const BATCH = 50;
-    for (let i = 0; i < facilityNurseIds.length; i += BATCH) {
-      let q = supabase
-        .from("shift_assignments")
-        .select("nurse_id, shift_date, shift")
-        .gte("shift_date", win.startDate)
-        .lte("shift_date", win.endDate)
-        .eq("status", "published")
-        .in("nurse_id", facilityNurseIds.slice(i, i + BATCH));
-      if (win.ward !== null) q = q.eq("ward", win.ward);
-      else q = q.is("ward", null);
-      const { data } = await q;
-      if (data) allAssignments.push(...(data as typeof allAssignments));
-    }
+    const wardParam =
+      win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
+    const allAssignments = facilityNurseIds.length
+      ? await api.get<{ nurse_id: string; shift_date: string; shift: string }[]>(
+          `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published${wardParam}`,
+        )
+      : [];
+
     const assignMap = new Map(
       allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date}`, a.shift]),
     );

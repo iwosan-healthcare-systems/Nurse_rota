@@ -1,25 +1,28 @@
-import { supabase } from "@/integrations/supabase/client";
+import { api, getToken } from "@/lib/api";
+
+function getUserFromToken(): { id: string; full_name: string; role: string } | null {
+  const token = getToken();
+  if (!token) return null;
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    return {
+      id: payload.userId ?? '',
+      full_name: payload.full_name ?? 'Unknown',
+      role: (payload.roles as string[])?.[0] ?? 'nurse',
+    };
+  } catch {
+    return null;
+  }
+}
 
 export async function logAudit(action: string, target?: string) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return;
-  const { data: prof } = await supabase
-    .from("profiles")
-    .select("full_name")
-    .eq("id", user.id)
-    .maybeSingle();
-  const { data: roles } = await supabase
-    .from("user_roles")
-    .select("role")
-    .eq("user_id", user.id)
-    .limit(1);
-  await supabase.from("audit_logs").insert({
-    actor_id: user.id,
-    actor_name: prof?.full_name ?? user.email ?? "Unknown",
-    actor_role: roles?.[0]?.role ?? "nurse",
+  const actor = getUserFromToken();
+  if (!actor) return;
+  await api.post('/audit-logs', {
+    actor_id: actor.id,
+    actor_name: actor.full_name,
+    actor_role: actor.role,
     action,
     target: target ?? null,
-  });
+  }).catch(() => { /* audit failures are non-fatal */ });
 }

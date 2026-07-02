@@ -9,7 +9,7 @@ import {
   saveMenuPermissions,
   getEffectiveRoles,
 } from "@/lib/menu-permissions";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { Check, X, Pencil, RotateCcw, ShieldAlert, Lock } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -44,14 +44,12 @@ function MenuPermissionsPage() {
 
   // Load the authoritative value from DB on mount
   useEffect(() => {
-    supabase
-      .from("portal_settings")
-      .select("value")
-      .eq("key", "menu_permissions")
-      .single()
-      .then(({ data }) => {
-        if (data?.value) setOverrides(data.value as Record<string, AppRole[]>);
-      });
+    api
+      .get<{ key: string; value: Record<string, AppRole[]> }>("/portal-settings/menu_permissions")
+      .then(({ value }) => {
+        if (value) setOverrides(value);
+      })
+      .catch(() => {});
   }, []);
 
   function startEdit() {
@@ -79,36 +77,34 @@ function MenuPermissionsPage() {
       if (defaultSorted !== draftSorted) toStore[def.key] = roles;
     }
     setSaving(true);
-    const { error } = await supabase
-      .from("portal_settings")
-      .upsert({ key: "menu_permissions", value: toStore });
-    setSaving(false);
-    if (error) {
-      toast.error("Failed to save: " + error.message);
-      return;
+    try {
+      await api.put("/portal-settings/menu_permissions", { value: toStore });
+      saveMenuPermissions(toStore);
+      setOverrides(toStore);
+      setEditing(false);
+      toast.success("Menu permissions saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
     }
-    saveMenuPermissions(toStore); // update local cache + fire same-tab event
-    setOverrides(toStore);
-    setEditing(false);
-    toast.success("Menu permissions saved");
   }
 
   async function resetDefaults() {
     if (!confirm("Reset menu visibility to system defaults for all roles?")) return;
     setSaving(true);
-    const { error } = await supabase
-      .from("portal_settings")
-      .upsert({ key: "menu_permissions", value: {} });
-    setSaving(false);
-    if (error) {
-      toast.error("Failed to reset: " + error.message);
-      return;
+    try {
+      await api.put("/portal-settings/menu_permissions", { value: {} });
+      saveMenuPermissions({});
+      setOverrides({});
+      setDraft({});
+      setEditing(false);
+      toast.success("Menu permissions reset to defaults");
+    } catch (e) {
+      toast.error("Failed to reset: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
     }
-    saveMenuPermissions({});
-    setOverrides({});
-    setDraft({});
-    setEditing(false);
-    toast.success("Menu permissions reset to defaults");
   }
 
   function toggleRole(navKey: string, role: AppRole) {

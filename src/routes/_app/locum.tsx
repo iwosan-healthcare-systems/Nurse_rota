@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useState } from "react";
 import {
   Plus,
@@ -179,105 +179,59 @@ function LocumPage() {
   const { data: myRequests = [], isLoading: myLoading } = useQuery({
     queryKey: ["locum-my", user?.id],
     enabled: isMatron && !!user?.id,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locum_requests")
-        .select("*")
-        .eq("requested_by", user!.id)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as LocumRequest[];
-    },
+    queryFn: () => api.get<LocumRequest[]>(`/locum/requests?requested_by=${user!.id}`),
   });
 
   const { data: pendingRequests = [], isLoading: pendingLoading } = useQuery({
     queryKey: ["locum-pending"],
     enabled: isCNO,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locum_requests")
-        .select("*")
-        .eq("status", "pending")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as LocumRequest[];
-    },
+    queryFn: () => api.get<LocumRequest[]>("/locum/requests?status=pending"),
   });
 
   const { data: allRequests = [], isLoading: allLoading } = useQuery({
     queryKey: ["locum-all"],
     enabled: isCNO,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locum_requests")
-        .select("*")
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as LocumRequest[];
-    },
+    queryFn: () => api.get<LocumRequest[]>("/locum/requests"),
   });
 
   const { data: filledRequests = [], isLoading: historyLoading } = useQuery({
     queryKey: ["locum-history", locumFacility],
     enabled: canViewLocumHours,
-    queryFn: async () => {
-      let q = supabase
-        .from("locum_requests")
-        .select("*")
-        .eq("status", "filled")
-        .order("accepted_at", { ascending: false });
-      if (locumFacility) q = q.eq("facility", locumFacility);
-      const { data, error } = await q;
-      if (error) throw error;
-      return data as LocumRequest[];
-    },
+    queryFn: () =>
+      api.get<LocumRequest[]>(
+        `/locum/requests?status=filled${locumFacility ? `&facility=${locumFacility}` : ""}`,
+      ),
   });
 
   const { data: locumLogs = [] } = useQuery({
     queryKey: ["locum-shift-logs"],
     enabled: canViewLocumHours,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_logs")
-        .select(
-          "nurse_id, shift_date, hours_logged, started_at, ended_at, is_late, late_minutes, late_reason",
-        )
-        .eq("is_locum", true)
-        .order("shift_date", { ascending: false });
-      return (data ?? []) as {
-        nurse_id: string;
-        shift_date: string;
-        hours_logged: number | null;
-        started_at: string;
-        ended_at: string | null;
-        is_late: boolean;
-        late_minutes: number | null;
-        late_reason: string | null;
-      }[];
-    },
+    queryFn: () =>
+      api.get<
+        {
+          nurse_id: string;
+          shift_date: string;
+          hours_logged: number | null;
+          started_at: string;
+          ended_at: string | null;
+          is_late: boolean;
+          late_minutes: number | null;
+          late_reason: string | null;
+        }[]
+      >("/shift-logs?is_locum=true"),
   });
 
   const { data: myInvites = [], isLoading: invitesLoading } = useQuery({
     queryKey: ["locum-invites", nurseId],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("locum_invites")
-        .select("*, locum_request:locum_requests(*)")
-        .eq("nurse_id", nurseId!)
-        .order("created_at", { ascending: false });
-      if (error) throw error;
-      return data as LocumInvite[];
-    },
+    refetchInterval: 30 * 1000,
+    queryFn: () => api.get<LocumInvite[]>(`/locum/invites?nurse_id=${nurseId}`),
   });
 
   const { data: wards = [] } = useQuery({
     queryKey: ["wards-simple"],
     staleTime: 5 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase.from("wards").select("name, facility").order("name");
-      return (data ?? []) as { name: string; facility: string | null }[];
-    },
+    queryFn: () => api.get<{ name: string; facility: string | null }[]>("/wards"),
   });
 
   // ── Action handlers ───────────────────────────────────────────────────────────
@@ -291,33 +245,25 @@ function LocumPage() {
     ventilated_patients: number;
     hdu_nurses: number;
   }) {
-    const { data: req, error } = await supabase
-      .from("locum_requests")
-      .insert({
-        ...form,
-        status: "pending",
-        requested_by: user!.id,
-        requested_by_name: fullName ?? user!.email ?? "Unknown",
-      })
-      .select()
-      .single();
-    if (error) throw new Error(error.message);
+    const req = await api.post<LocumRequest>("/locum/requests", {
+      ...form,
+      status: "pending",
+      requested_by: user!.id,
+      requested_by_name: fullName ?? user!.email ?? "Unknown",
+    });
 
-    // Notify all CNO users
-    const { data: cnoUsers } = await supabase
-      .from("user_roles")
-      .select("user_id")
-      .eq("role", "cno");
-    if (cnoUsers?.length) {
-      await supabase.from("notification_state").upsert(
-        cnoUsers.map((u) => ({
-          user_id: u.user_id,
-          notif_key: `locum_review_${req.id}`,
-          is_read: false,
-          updated_at: new Date().toISOString(),
-        })),
-        { onConflict: "user_id,notif_key" },
-      );
+    const cnoUsers = await api.get<{ user_id: string }[]>("/user-roles?role=cno").catch(() => []);
+    if (cnoUsers.length) {
+      await api
+        .post(
+          "/notifications/upsert",
+          cnoUsers.map((u) => ({
+            user_id: u.user_id,
+            notif_key: `locum_review_${req.id}`,
+            is_read: false,
+          })),
+        )
+        .catch(() => {});
     }
 
     await logAudit(
@@ -332,37 +278,19 @@ function LocumPage() {
   }
 
   async function handleApprove(req: LocumRequest) {
-    const { error } = await supabase
-      .from("locum_requests")
-      .update({
-        status: "approved",
-        reviewed_by: user!.id,
-        reviewed_by_name: fullName ?? user!.email ?? "CNO",
-        reviewed_at: new Date().toISOString(),
-      })
-      .eq("id", req.id);
-    if (error) throw new Error(error.message);
+    await api.patch(`/locum/requests/${req.id}`, {
+      status: "approved",
+      reviewed_by: user!.id,
+      reviewed_by_name: fullName ?? user!.email ?? "CNO",
+      reviewed_at: new Date().toISOString(),
+    });
 
-    // Notify requesting matron
-    await supabase.from("notification_state").upsert(
-      {
-        user_id: req.requested_by,
-        notif_key: `locum_approved_${req.id}`,
-        is_read: false,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,notif_key" },
-    );
-    // Mark CNO's review notification as read
-    await supabase.from("notification_state").upsert(
-      {
-        user_id: user!.id,
-        notif_key: `locum_review_${req.id}`,
-        is_read: true,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,notif_key" },
-    );
+    await api
+      .post("/notifications/upsert", [
+        { user_id: req.requested_by, notif_key: `locum_approved_${req.id}`, is_read: false },
+        { user_id: user!.id, notif_key: `locum_review_${req.id}`, is_read: true },
+      ])
+      .catch(() => {});
 
     await logAudit(
       "Locum request approved",
@@ -378,37 +306,20 @@ function LocumPage() {
   }
 
   async function handleDecline(req: LocumRequest, reason: string) {
-    const { error } = await supabase
-      .from("locum_requests")
-      .update({
-        status: "declined",
-        reviewed_by: user!.id,
-        reviewed_by_name: fullName ?? user!.email ?? "CNO",
-        reviewed_at: new Date().toISOString(),
-        decline_reason: reason,
-      })
-      .eq("id", req.id);
-    if (error) throw new Error(error.message);
+    await api.patch(`/locum/requests/${req.id}`, {
+      status: "declined",
+      reviewed_by: user!.id,
+      reviewed_by_name: fullName ?? user!.email ?? "CNO",
+      reviewed_at: new Date().toISOString(),
+      decline_reason: reason,
+    });
 
-    // Notify requesting matron with decline reason
-    await supabase.from("notification_state").upsert(
-      {
-        user_id: req.requested_by,
-        notif_key: `locum_declined_${req.id}`,
-        is_read: false,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,notif_key" },
-    );
-    await supabase.from("notification_state").upsert(
-      {
-        user_id: user!.id,
-        notif_key: `locum_review_${req.id}`,
-        is_read: true,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,notif_key" },
-    );
+    await api
+      .post("/notifications/upsert", [
+        { user_id: req.requested_by, notif_key: `locum_declined_${req.id}`, is_read: false },
+        { user_id: user!.id, notif_key: `locum_review_${req.id}`, is_read: true },
+      ])
+      .catch(() => {});
 
     await logAudit(
       "Locum request declined",
@@ -429,7 +340,8 @@ function LocumPage() {
       return;
     }
 
-    const { error: invErr } = await supabase.from("locum_invites").insert(
+    await api.post(
+      "/locum/invites",
       offNurses.map((n) => ({
         locum_request_id: req.id,
         nurse_id: n.nurse_id,
@@ -437,39 +349,25 @@ function LocumPage() {
         status: "pending",
       })),
     );
-    if (invErr) throw new Error(invErr.message);
 
-    const { error: reqErr } = await supabase
-      .from("locum_requests")
-      .update({ status: "invites_sent" })
-      .eq("id", req.id);
-    if (reqErr) throw new Error(reqErr.message);
+    await api.patch(`/locum/requests/${req.id}`, { status: "invites_sent" });
 
-    // Notify nurses with auth accounts
     const notifRows = offNurses
       .filter((n) => n.auth_user_id)
       .map((n) => ({
         user_id: n.auth_user_id!,
         notif_key: `locum_invite_${req.id}_${n.nurse_id}`,
         is_read: false,
-        updated_at: new Date().toISOString(),
       }));
     if (notifRows.length) {
-      await supabase
-        .from("notification_state")
-        .upsert(notifRows, { onConflict: "user_id,notif_key" });
+      await api.post("/notifications/upsert", notifRows).catch(() => {});
     }
 
-    // Mark matron's approved notification as actioned
-    await supabase.from("notification_state").upsert(
-      {
-        user_id: req.requested_by,
-        notif_key: `locum_approved_${req.id}`,
-        is_read: true,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "user_id,notif_key" },
-    );
+    await api
+      .post("/notifications/upsert", [
+        { user_id: req.requested_by, notif_key: `locum_approved_${req.id}`, is_read: true },
+      ])
+      .catch(() => {});
 
     await logAudit(
       "Locum invites sent",
@@ -484,25 +382,19 @@ function LocumPage() {
   }
 
   async function handleAcceptInvite(invite: LocumInvite) {
-    // Atomic: only claim if the request is still open
-    const { data: claimed } = await supabase
-      .from("locum_requests")
-      .update({
-        status: "filled",
-        accepted_by_nurse_id: nurseId,
-        accepted_by_nurse_name: fullName ?? "Nurse",
-        accepted_at: new Date().toISOString(),
-      })
-      .eq("id", invite.locum_request_id)
-      .eq("status", "invites_sent")
-      .select();
+    // Atomic: only claim if the request is still open (status=invites_sent)
+    const claimed = await api.post<LocumRequest | null>(
+      `/locum/requests/${invite.locum_request_id}/claim`,
+      { accepted_by_nurse_id: nurseId, accepted_by_nurse_name: fullName ?? "Nurse" },
+    );
 
-    if (!claimed?.length) {
-      // Race: someone else claimed it first
-      await supabase
-        .from("locum_invites")
-        .update({ status: "unavailable", responded_at: new Date().toISOString() })
-        .eq("id", invite.id);
+    if (!claimed) {
+      await api
+        .patch(`/locum/invites/${invite.id}`, {
+          status: "unavailable",
+          responded_at: new Date().toISOString(),
+        })
+        .catch(() => {});
       toast.error("This locum shift was already taken — another nurse accepted first.");
       qc.invalidateQueries({ queryKey: ["locum-invites"] });
       qc.invalidateQueries({ queryKey: ["locum-bell"] });
@@ -511,53 +403,62 @@ function LocumPage() {
       return;
     }
 
-    // Mark this invite accepted
-    await supabase
-      .from("locum_invites")
-      .update({ status: "accepted", responded_at: new Date().toISOString() })
-      .eq("id", invite.id);
+    await api.patch(`/locum/invites/${invite.id}`, {
+      status: "accepted",
+      responded_at: new Date().toISOString(),
+    });
 
-    // Mark all other pending invites for this request as unavailable
-    await supabase
-      .from("locum_invites")
-      .update({ status: "unavailable", responded_at: new Date().toISOString() })
-      .eq("locum_request_id", invite.locum_request_id)
-      .eq("status", "pending")
-      .neq("id", invite.id);
+    // Notify other pending invitees and mark them unavailable
+    const otherPending = await api
+      .get<
+        { nurse_name: string }[]
+      >(`/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending`)
+      .catch(() => [] as { nurse_name: string }[]);
+    if (otherPending.length) {
+      const names = otherPending.map((i) => i.nurse_name).join(",");
+      const otherProfiles = await api
+        .get<{ id: string }[]>(`/profiles?full_names=${encodeURIComponent(names)}`)
+        .catch(() => [] as { id: string }[]);
+      if (otherProfiles.length) {
+        await api
+          .post(
+            "/notifications/upsert",
+            otherProfiles.map((p) => ({
+              user_id: p.id,
+              notif_key: `locum_filled_nurse_${invite.locum_request_id}`,
+              is_read: false,
+            })),
+          )
+          .catch(() => {});
+      }
+      await api
+        .patch(
+          `/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending&neq_id=${invite.id}`,
+          { status: "unavailable", responded_at: new Date().toISOString() },
+        )
+        .catch(() => {});
+    }
 
-    // Update nurse's shift assignment from OFF → locum shift type
+    // Update nurse's shift assignment OFF → locum shift type
     if (nurseId && invite.locum_request) {
-      await supabase
-        .from("shift_assignments")
-        .update({ shift: invite.locum_request.shift })
-        .eq("nurse_id", nurseId)
-        .eq("shift_date", invite.locum_request.shift_date)
-        .eq("shift", "OFF");
+      await api
+        .patch(
+          `/shift-assignments?nurse_ids=${nurseId}&shift_date_from=${invite.locum_request.shift_date}&shift_date_to=${invite.locum_request.shift_date}&shift=OFF`,
+          { shift: invite.locum_request.shift },
+        )
+        .catch(() => {});
     }
 
     // Notify matron and CNO
     if (invite.locum_request) {
       const req = invite.locum_request;
-      await supabase.from("notification_state").upsert(
-        {
-          user_id: req.requested_by,
-          notif_key: `locum_filled_matron_${req.id}`,
-          is_read: false,
-          updated_at: new Date().toISOString(),
-        },
-        { onConflict: "user_id,notif_key" },
-      );
-      if (req.reviewed_by) {
-        await supabase.from("notification_state").upsert(
-          {
-            user_id: req.reviewed_by,
-            notif_key: `locum_filled_cno_${req.id}`,
-            is_read: false,
-            updated_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,notif_key" },
-        );
-      }
+      const notifRows = [
+        { user_id: req.requested_by, notif_key: `locum_filled_matron_${req.id}`, is_read: false },
+        ...(req.reviewed_by
+          ? [{ user_id: req.reviewed_by, notif_key: `locum_filled_cno_${req.id}`, is_read: false }]
+          : []),
+      ];
+      await api.post("/notifications/upsert", notifRows).catch(() => {});
     }
 
     await logAudit(
@@ -572,14 +473,11 @@ function LocumPage() {
   }
 
   async function handleDeclineInvite(invite: LocumInvite, reason: string) {
-    await supabase
-      .from("locum_invites")
-      .update({
-        status: "declined",
-        decline_reason: reason,
-        responded_at: new Date().toISOString(),
-      })
-      .eq("id", invite.id);
+    await api.patch(`/locum/invites/${invite.id}`, {
+      status: "declined",
+      decline_reason: reason,
+      responded_at: new Date().toISOString(),
+    });
 
     await logAudit(
       "Locum invite declined",
@@ -1620,43 +1518,53 @@ function SendInvitesModal({
   const { data: offNurses, isLoading } = useQuery({
     queryKey: ["locum-off-nurses", request.shift_date, request.facility],
     queryFn: async () => {
-      // 1. Get nurses at this facility
-      const { data: facilityNurses } = await supabase
-        .from("nurses")
-        .select("id, name")
-        .eq("facility", request.facility);
+      // 1. Get nurses at this facility with ward/role for eligibility filtering
+      const facilityNurses = await api
+        .get<
+          { id: string; name: string; role: string | null; ward: string | null }[]
+        >(`/nurses?facility=${encodeURIComponent(request.facility)}`)
+        .catch(() => []);
 
-      const facilityIds = facilityNurses?.map((n) => n.id) ?? [];
+      const facilityIds = facilityNurses.map((n) => n.id);
       if (!facilityIds.length) return [] as OffNurse[];
 
-      // 2. Of those nurses, find which ones have a published OFF on this date.
-      //    Batch in groups of 200 to stay well under PostgREST's URL limit.
-      const BATCH = 200;
-      const offIds = new Set<string>();
-      for (let i = 0; i < facilityIds.length; i += BATCH) {
-        const { data: assignments } = await supabase
-          .from("shift_assignments")
-          .select("nurse_id")
-          .eq("shift_date", request.shift_date)
-          .eq("shift", "OFF")
-          .eq("status", "published")
-          .in("nurse_id", facilityIds.slice(i, i + BATCH));
-        assignments?.forEach((a) => offIds.add(a.nurse_id));
-      }
+      // 2. Single query — custom API accepts nurse_ids as comma-sep ANY($1)
+      const offAssignments = await api
+        .get<
+          { nurse_id: string }[]
+        >(`/shift-assignments?shift_date=${request.shift_date}&shift=OFF&status=published&nurse_ids=${facilityIds.join(",")}`)
+        .catch(() => []);
 
-      const nurses = (facilityNurses ?? []).filter((n) => offIds.has(n.id));
-      if (!nurses.length) return [] as OffNurse[];
+      const offIds = new Set(offAssignments.map((a) => a.nurse_id));
+      const offNursesList = facilityNurses.filter((n) => offIds.has(n.id));
+      if (!offNursesList.length) return [] as OffNurse[];
 
-      // 3. Look up auth user IDs by matching name → profiles.full_name
-      const names = nurses.map((n) => n.name);
-      const { data: profiles } = await supabase
-        .from("profiles")
-        .select("id, full_name")
-        .in("full_name", names);
+      // 3. Filter to request ward only; exclude matrons, nurse assistants, and interns
+      const isExcludedRole = (role: string | null) =>
+        /matron/i.test(role ?? "") ||
+        /nurse\s*assistant/i.test(role ?? "") ||
+        /intern/i.test(role ?? "");
+      const eligible = offNursesList.filter(
+        (n) =>
+          !isExcludedRole(n.role) &&
+          (n.ward ?? "")
+            .split("|")
+            .map((w) => w.trim())
+            .includes(request.ward),
+      );
+      if (!eligible.length) return [] as OffNurse[];
 
-      const profileMap = Object.fromEntries((profiles ?? []).map((p) => [p.full_name, p.id]));
+      // 4. Look up auth user IDs by matching name → profiles.full_name
+      const names = eligible.map((n) => n.name);
+      const profiles = await api
+        .get<
+          { id: string; full_name: string }[]
+        >(`/profiles?full_names=${encodeURIComponent(names.join(","))}`)
+        .catch(() => []);
 
-      return nurses.map((n) => ({
+      const profileMap = Object.fromEntries(profiles.map((p) => [p.full_name, p.id]));
+
+      return eligible.map((n) => ({
         nurse_id: n.id,
         nurse_name: n.name,
         auth_user_id: profileMap[n.name] ?? null,
@@ -1690,8 +1598,10 @@ function SendInvitesModal({
         </div>
 
         <p className="text-sm text-muted-foreground">
-          The invite will be sent to nurses who are on <strong>OFF</strong> duty on this date at{" "}
-          <strong>{request.facility}</strong>. The first nurse to accept will be assigned the shift.
+          The invite will be sent to nurses in the <strong>{request.ward}</strong> ward who are on{" "}
+          <strong>OFF</strong> duty on this date at <strong>{request.facility}</strong>, excluding
+          matrons, nurse assistants, and interns. The first nurse to accept will be assigned the
+          shift.
         </p>
 
         {isLoading ? (

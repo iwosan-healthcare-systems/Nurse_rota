@@ -1,10 +1,23 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import { adminCreateUser, adminDeleteUser, adminListUsers, adminBanUser, adminUnbanUser } from "@/integrations/supabase/admin-client";
+import { api } from "@/lib/api";
 import { useState } from "react";
-import { Users, Search, Plus, Trash2, Shield, UserCog, Loader2, X, Clock, AlertTriangle, UserX, UserCheck, CheckCircle2 } from "lucide-react";
+import {
+  Users,
+  Search,
+  Plus,
+  Trash2,
+  Shield,
+  UserCog,
+  Loader2,
+  X,
+  Clock,
+  AlertTriangle,
+  UserX,
+  UserCheck,
+  CheckCircle2,
+} from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -30,13 +43,18 @@ const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   nurse: "bg-muted text-muted-foreground border-border",
 };
 
-type UserRow = {
+type ProfileRow = {
   id: string;
   email: string | null;
   full_name: string | null;
-  roles: AppRole[];
   is_active: boolean;
   must_change_password: boolean;
+};
+
+type RoleRow = { user_id: string; role: string };
+
+type UserRow = ProfileRow & {
+  roles: AppRole[];
   last_sign_in_at: string | null;
 };
 
@@ -50,54 +68,53 @@ function UsersPage() {
     queryKey: ["user-profiles"],
     enabled: isAdmin,
     queryFn: async () => {
-      const [{ data: profs, error: e1 }, { data: rls, error: e2 }, authUsers] = await Promise.all([
-        supabase.from("profiles").select("id, email, full_name, is_active, must_change_password").order("full_name"),
-        supabase.from("user_roles").select("user_id, role"),
-        adminListUsers().catch(() => [] as { id: string; last_sign_in_at: string | null }[]),
+      const [profs, rls] = await Promise.all([
+        api.get<ProfileRow[]>("/auth/admin/users"),
+        api.get<RoleRow[]>("/user-roles"),
       ]);
-      if (e1) throw e1;
-      if (e2) throw e2;
       const roleMap = new Map<string, AppRole[]>();
-      (rls ?? []).forEach((r) => {
+      rls.forEach((r) => {
         const arr = roleMap.get(r.user_id) ?? [];
         arr.push(r.role as AppRole);
         roleMap.set(r.user_id, arr);
       });
-      const signInMap = new Map(authUsers.map((u) => [u.id, u.last_sign_in_at]));
-      return (profs ?? []).map((p) => ({
+      return profs.map((p) => ({
         ...p,
-        is_active: (p as { is_active?: boolean }).is_active ?? true,
-        must_change_password: (p as { must_change_password?: boolean }).must_change_password ?? false,
         roles: roleMap.get(p.id) ?? [],
-        last_sign_in_at: signInMap.get(p.id) ?? null,
+        last_sign_in_at: null,
       })) as UserRow[];
     },
   });
 
   async function addRole(userId: string, role: AppRole) {
-    const { error } = await supabase.from("user_roles").insert({ user_id: userId, role });
-    if (error) return toast.error(error.message);
-    toast.success(`Granted: ${ROLE_LABELS[role]}`);
-    qc.invalidateQueries({ queryKey: ["user-profiles"] });
+    try {
+      await api.post("/user-roles", { user_id: userId, role });
+      toast.success(`Granted: ${ROLE_LABELS[role]}`);
+      qc.invalidateQueries({ queryKey: ["user-profiles"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to grant role");
+    }
   }
 
   async function removeRole(userId: string, role: AppRole) {
-    const { error } = await supabase
-      .from("user_roles")
-      .delete()
-      .eq("user_id", userId)
-      .eq("role", role);
-    if (error) return toast.error(error.message);
-    toast.success(`Revoked: ${ROLE_LABELS[role]}`);
-    qc.invalidateQueries({ queryKey: ["user-profiles"] });
+    try {
+      await api.del(`/user-roles?user_id=${userId}&role=${role}`);
+      toast.success(`Revoked: ${ROLE_LABELS[role]}`);
+      qc.invalidateQueries({ queryKey: ["user-profiles"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to revoke role");
+    }
   }
 
   async function deactivateUser(user: UserRow) {
-    if (!confirm(`Deactivate "${user.full_name ?? user.email}"? They will not be able to log in until reactivated.`))
+    if (
+      !confirm(
+        `Deactivate "${user.full_name ?? user.email}"? They will not be able to log in until reactivated.`,
+      )
+    )
       return;
     try {
-      await adminBanUser(user.id);
-      await supabase.from("profiles").update({ is_active: false }).eq("id", user.id);
+      await api.patch(`/auth/admin/users/${user.id}/ban`);
       toast.success("Login deactivated");
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
@@ -108,8 +125,7 @@ function UsersPage() {
 
   async function reactivateUser(user: UserRow) {
     try {
-      await adminUnbanUser(user.id);
-      await supabase.from("profiles").update({ is_active: true }).eq("id", user.id);
+      await api.patch(`/auth/admin/users/${user.id}/unban`);
       toast.success("Login reactivated");
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
@@ -126,7 +142,7 @@ function UsersPage() {
     )
       return;
     try {
-      await adminDeleteUser(user.id);
+      await api.del(`/auth/admin/users/${user.id}`);
       toast.success("User deleted");
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
@@ -195,7 +211,7 @@ function UsersPage() {
           ) : (
             <div className="divide-y">
               {filtered.map((u) => (
-                <UserRow
+                <UserRowItem
                   key={u.id}
                   user={u}
                   onAdd={addRole}
@@ -246,28 +262,12 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
     }
     setBusy(true);
     try {
-      // adminCreateUser uses the service-role key — creates the account
-      // instantly with email already confirmed. No confirmation email is sent.
-      const userId = await adminCreateUser({
+      const { id: userId } = await api.post<{ id: string }>("/auth/admin/create-user", {
         email: form.email,
         password: form.password,
-        fullName: form.fullName,
+        full_name: form.fullName || form.email,
       });
-
-      await Promise.all([
-        supabase.from("user_roles").insert({
-          user_id: userId,
-          role: form.role as import("@/integrations/supabase/types").Database["public"]["Enums"]["app_role"],
-        }),
-        supabase.from("profiles").upsert({
-          id: userId,
-          full_name: form.fullName || form.email,
-          email: form.email,
-          must_change_password: true,
-          updated_at: new Date().toISOString(),
-        }),
-      ]);
-
+      await api.post("/user-roles", { user_id: userId, role: form.role });
       toast.success(`User created — ${form.email} can log in immediately`);
       onCreated();
     } catch (e: unknown) {
@@ -393,7 +393,7 @@ function formatRelativeTime(iso: string | null): string {
   return new Date(iso).toLocaleDateString();
 }
 
-function UserRow({
+function UserRowItem({
   user,
   onAdd,
   onRemove,
@@ -419,7 +419,6 @@ function UserRow({
 
   return (
     <div className="px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3">
-      {/* Avatar + name */}
       <div className="flex items-center gap-3 min-w-0 sm:w-64 shrink-0">
         <div className="h-9 w-9 rounded-full bg-primary/10 text-primary grid place-items-center shrink-0 font-semibold text-sm">
           {initials || <Users className="h-4 w-4" />}
@@ -440,14 +439,19 @@ function UserRow({
           <p className="text-[11px] text-muted-foreground truncate">{user.email}</p>
           <p className="text-[11px] text-muted-foreground flex items-center gap-1 mt-0.5">
             <Clock className="h-2.5 w-2.5 shrink-0" />
-            <span title={user.last_sign_in_at ? new Date(user.last_sign_in_at).toLocaleString() : "Never signed in"}>
+            <span
+              title={
+                user.last_sign_in_at
+                  ? new Date(user.last_sign_in_at).toLocaleString()
+                  : "Never signed in"
+              }
+            >
               {formatRelativeTime(user.last_sign_in_at)}
             </span>
           </p>
         </div>
       </div>
 
-      {/* Role badges */}
       <div className="flex flex-wrap gap-1.5 flex-1 min-w-0">
         {user.roles.length === 0 && (
           <span className="text-xs text-muted-foreground italic">No roles assigned</span>
@@ -470,7 +474,6 @@ function UserRow({
         ))}
       </div>
 
-      {/* Add role */}
       {available.length > 0 && (
         <div className="flex items-center gap-2 shrink-0">
           <select
@@ -502,7 +505,6 @@ function UserRow({
         </div>
       )}
 
-      {/* Active status + deactivate/reactivate */}
       <div className="flex items-center gap-1 shrink-0">
         {user.is_active ? (
           <>
@@ -541,7 +543,6 @@ function UserRow({
         )}
       </div>
 
-      {/* Delete user */}
       <button
         type="button"
         onClick={() => onDelete(user)}

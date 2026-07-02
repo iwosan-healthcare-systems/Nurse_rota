@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useMemo, useState } from "react";
 import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -18,6 +18,7 @@ type LeaveRow = {
   id: string;
   nurse_id: string | null;
   nurse_name: string;
+  requested_by: string | null;
   type: string;
   from_date: string;
   to_date: string;
@@ -77,42 +78,28 @@ function LeavePage() {
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id, nurseId],
+    refetchInterval: 30 * 1000,
     queryFn: async () => {
       if (canApproveLeave) {
-        const { data, error } = await supabase
-          .from("leave_requests")
-          .select("*")
-          .order("created_at", { ascending: false });
-        if (error) throw error;
-        return data as LeaveRow[];
+        return api.get<LeaveRow[]>("/leave-requests");
       }
 
-      // Two separate queries — .or() can't be used here because the SHIFT_SWITCH|
-      // sentinel contains "|" which PostgREST treats as a filter separator.
-      const [ownResult, switchResult] = await Promise.all([
-        supabase
-          .from("leave_requests")
-          .select("*")
-          .eq("requested_by", user!.id)
-          .order("created_at", { ascending: false }),
+      // Two separate queries — nurse A sees their own requests; nurse B sees switch requests
+      // where they are the target (switch_nurse_b = nurseId).
+      const [ownRows, switchRows] = await Promise.all([
+        api.get<LeaveRow[]>(`/leave-requests?requested_by=${user!.id}`),
         nurseId
-          ? supabase
-              .from("leave_requests")
-              .select("*")
-              .like("reason", `${SWITCH_PREFIX}${nurseId}|%`)
-              .order("created_at", { ascending: false })
-          : Promise.resolve({ data: [], error: null }),
+          ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`)
+          : Promise.resolve([] as LeaveRow[]),
       ]);
-      if (ownResult.error) throw ownResult.error;
-      if (switchResult.error) throw switchResult.error;
 
-      // Merge and deduplicate (nurse A sees their own request; nurse B sees the same row)
+      // Merge and deduplicate
       const seen = new Set<string>();
       const merged: LeaveRow[] = [];
-      for (const row of [...(ownResult.data ?? []), ...(switchResult.data ?? [])]) {
+      for (const row of [...ownRows, ...switchRows]) {
         if (!seen.has(row.id)) {
           seen.add(row.id);
-          merged.push(row as LeaveRow);
+          merged.push(row);
         }
       }
       return merged.sort((a, b) => b.created_at.localeCompare(a.created_at));
@@ -159,181 +146,192 @@ function LeavePage() {
   }
 
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
-    if (status === "Approved" && l.nurse_id) {
-      // Fetch only working (M/N) locked assignments — these are the shifts that need cover.
-      const { data: publishedShifts } = await supabase
-        .from("shift_assignments")
-        .select("id, shift_date, shift")
-        .eq("nurse_id", l.nurse_id)
-        .gte("shift_date", l.from_date)
-        .lte("shift_date", l.to_date)
-        .in("status", ["submitted", "approved_chief", "approved_cno", "published"])
-        .in("shift", ["M", "N"]);
-
-      if (publishedShifts && publishedShifts.length > 0) {
-        // Mark each working shift as LEAVE while keeping the rota published.
-        await Promise.all(
-          publishedShifts.map((s) =>
-            supabase.from("shift_assignments").update({ shift: "LEAVE" }).eq("id", s.id),
-          ),
+    try {
+      if (status === "Approved" && l.nurse_id) {
+        const publishedShifts = await api.get<{ id: string; shift_date: string; shift: string }[]>(
+          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status_in=submitted,approved_chief,approved_cno,published&shift_in=M,N`,
         );
 
-        // Credit standard hours for each leave shift so the nurse's total is unaffected.
-        // Skip dates that already have a shift_log (nurse clocked in before leave was approved).
-        const { data: existingLogs } = await supabase
-          .from("shift_logs")
-          .select("shift_date")
-          .eq("nurse_id", l.nurse_id)
-          .in(
-            "shift_date",
-            publishedShifts.map((s) => s.shift_date),
+        if (publishedShifts.length > 0) {
+          await Promise.all(
+            publishedShifts.map((s) => api.patch(`/shift-assignments/${s.id}`, { shift: "LEAVE" })),
           );
-        const alreadyLogged = new Set(existingLogs?.map((e) => e.shift_date) ?? []);
-        const shiftsToCredit = publishedShifts.filter(
-          (s) => !alreadyLogged.has(s.shift_date) && (s.shift === "M" || s.shift === "N"),
-        );
 
-        if (shiftsToCredit.length > 0) {
-          await supabase
-            .from("shift_logs")
-            .insert(
+          const existingLogs = await api.get<{ shift_date: string }[]>(
+            `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
+          );
+          const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date));
+          const shiftsToCredit = publishedShifts.filter(
+            (s) => !alreadyLogged.has(s.shift_date) && (s.shift === "M" || s.shift === "N"),
+          );
+
+          if (shiftsToCredit.length > 0) {
+            await api.post(
+              "/shift-logs/bulk",
               shiftsToCredit.map((s) =>
                 buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N"),
               ),
             );
-          const totalHours = shiftsToCredit.reduce(
-            (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N"] ?? 0),
-            0,
-          );
-          await supabase.rpc("increment_nurse_hours", {
-            p_nurse_id: l.nurse_id,
-            p_hours: totalHours,
-          });
-        }
+            const totalHours = shiftsToCredit.reduce(
+              (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N"] ?? 0),
+              0,
+            );
+            await api
+              .post("/rpc/increment-nurse-hours", { p_nurse_id: l.nurse_id, p_hours: totalHours })
+              .catch(() => {});
+          }
 
-        const { error } = await supabase
-          .from("leave_requests")
-          .update({
+          await api.patch(`/leave-requests/${l.id}`, {
             status: "Approved",
             reviewed_by: user?.id,
             reviewed_at: new Date().toISOString(),
             review_note: note || null,
-          })
-          .eq("id", l.id);
-        if (error) return toast.error(error.message);
+          });
 
-        const mDates = publishedShifts.filter((s) => s.shift === "M").map((s) => s.shift_date);
-        const nDates = publishedShifts.filter((s) => s.shift === "N").map((s) => s.shift_date);
-        const parts: string[] = [];
-        if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
-        if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
-        toast.success(
-          `Leave approved — rota updated. CNO action required: ${parts.join("; ")} need shift cover.`,
-          { duration: 8000 },
-        );
-        logAudit(
-          `Approved leave (post-publish): ${publishedShifts.length} shift(s) marked LEAVE`,
-          l.nurse_name,
-        );
-        qc.invalidateQueries({ queryKey: ["leave"] });
-        qc.invalidateQueries({ queryKey: ["assignments"] });
-        return;
+          const mDates = publishedShifts.filter((s) => s.shift === "M").map((s) => s.shift_date);
+          const nDates = publishedShifts.filter((s) => s.shift === "N").map((s) => s.shift_date);
+          const parts: string[] = [];
+          if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
+          if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
+          toast.success(
+            `Leave approved — rota updated. CNO action required: ${parts.join("; ")} need shift cover.`,
+            { duration: 8000 },
+          );
+          logAudit(
+            `Approved leave (post-publish): ${publishedShifts.length} shift(s) marked LEAVE`,
+            l.nurse_name,
+          );
+          if (l.requested_by) {
+            await api
+              .post("/notifications/upsert", [
+                { user_id: l.requested_by, notif_key: `leave_approved_${l.id}`, is_read: false },
+              ])
+              .catch(() => {});
+          }
+          qc.invalidateQueries({ queryKey: ["leave"] });
+          qc.invalidateQueries({ queryKey: ["assignments"] });
+          return;
+        }
       }
-    }
 
-    // No locked working shifts in this window (draft rota or Rejected) — standard path.
-    const { error } = await supabase
-      .from("leave_requests")
-      .update({
+      // No locked working shifts in this window (draft rota or Rejected) — standard path.
+      await api.patch(`/leave-requests/${l.id}`, {
         status,
         reviewed_by: user?.id,
         reviewed_at: new Date().toISOString(),
         review_note: note || null,
-      })
-      .eq("id", l.id);
-    if (error) return toast.error(error.message);
-    toast.success(`Leave ${status.toLowerCase()}`);
-    logAudit(`${status} leave request`, l.nurse_name);
-    qc.invalidateQueries({ queryKey: ["leave"] });
+      });
+      toast.success(`Leave ${status.toLowerCase()}`);
+      logAudit(`${status} leave request`, l.nurse_name);
+      if (l.requested_by) {
+        await api
+          .post("/notifications/upsert", [
+            {
+              user_id: l.requested_by,
+              notif_key: `leave_${status.toLowerCase()}_${l.id}`,
+              is_read: false,
+            },
+          ])
+          .catch(() => {});
+      }
+      qc.invalidateQueries({ queryKey: ["leave"] });
+    } catch {
+      toast.error("Failed to update leave request");
+    }
   }
 
   async function reviewSwitch(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
-    if (status === "Approved") {
-      const sw = parseSwitch(l);
-      if (!sw) return toast.error("Invalid shift switch data");
+    try {
+      if (status === "Approved") {
+        const sw = parseSwitch(l);
+        if (!sw) return toast.error("Invalid shift switch data");
 
-      // Fetch both nurses' published assignments for the switch date
-      const [{ data: assignA }, { data: assignB }] = await Promise.all([
-        supabase
-          .from("shift_assignments")
-          .select("id, shift")
-          .eq("nurse_id", l.nurse_id ?? "")
-          .eq("shift_date", sw.date)
-          .eq("status", "published")
-          .maybeSingle(),
-        supabase
-          .from("shift_assignments")
-          .select("id, shift")
-          .eq("nurse_id", sw.nurseBId)
-          .eq("shift_date", sw.date)
-          .eq("status", "published")
-          .maybeSingle(),
-      ]);
+        const [arrA, arrB] = await Promise.all([
+          api.get<{ id: string; shift: string }[]>(
+            `/shift-assignments?nurse_id=${l.nurse_id ?? ""}&shift_date=${sw.date}&status=published&limit=1`,
+          ),
+          api.get<{ id: string; shift: string }[]>(
+            `/shift-assignments?nurse_id=${sw.nurseBId}&shift_date=${sw.date}&status=published&limit=1`,
+          ),
+        ]);
+        const assignA = arrA[0] ?? null;
+        const assignB = arrB[0] ?? null;
 
-      if (!assignA || !assignB) {
-        return toast.error(
-          "Cannot apply switch — one or both nurses have no published shift on that date.",
-        );
-      }
-
-      if (assignA.shift === "LEAVE") {
-        // Nurse A is on approved leave — only assign Nurse B the intended working shift.
-        // sw.shiftA holds the shift type encoded at request time (M or N).
-        const targetShift = sw.shiftA === "M" || sw.shiftA === "N" ? sw.shiftA : null;
-        if (!targetShift) {
+        if (!assignA || !assignB) {
           return toast.error(
-            "Cannot apply — no valid working shift (M/N) was recorded for Nurse A at request time. Please re-submit the switch request.",
+            "Cannot apply switch — one or both nurses have no published shift on that date.",
           );
         }
-        const { error } = await supabase
-          .from("shift_assignments")
-          .update({ shift: targetShift })
-          .eq("id", assignB.id);
-        if (error) return toast.error(error.message);
-        qc.invalidateQueries({ queryKey: ["assignments"] });
-        logAudit(
-          `Leave coverage applied: ${sw.nurseBName} covers ${l.nurse_name}'s ${targetShift} shift`,
-          sw.date,
-        );
-      } else {
-        // Normal swap — both nurses exchange their current published shifts.
-        const [{ error: e1 }, { error: e2 }] = await Promise.all([
-          supabase.from("shift_assignments").update({ shift: assignB.shift }).eq("id", assignA.id),
-          supabase.from("shift_assignments").update({ shift: assignA.shift }).eq("id", assignB.id),
-        ]);
-        if (e1 || e2) return toast.error((e1 ?? e2)!.message);
-        qc.invalidateQueries({ queryKey: ["assignments"] });
-        logAudit(
-          `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
-          sw.date,
-        );
-      }
-    }
 
-    const { error } = await supabase
-      .from("leave_requests")
-      .update({
+        if (assignA.shift === "LEAVE") {
+          const targetShift = sw.shiftA === "M" || sw.shiftA === "N" ? sw.shiftA : null;
+          if (!targetShift) {
+            return toast.error(
+              "Cannot apply — no valid working shift (M/N) was recorded for Nurse A at request time. Please re-submit the switch request.",
+            );
+          }
+          await api.patch(`/shift-assignments/${assignB.id}`, { shift: targetShift });
+          qc.invalidateQueries({ queryKey: ["assignments"] });
+          logAudit(
+            `Leave coverage applied: ${sw.nurseBName} covers ${l.nurse_name}'s ${targetShift} shift`,
+            sw.date,
+          );
+        } else {
+          await Promise.all([
+            api.patch(`/shift-assignments/${assignA.id}`, { shift: assignB.shift }),
+            api.patch(`/shift-assignments/${assignB.id}`, { shift: assignA.shift }),
+          ]);
+          qc.invalidateQueries({ queryKey: ["assignments"] });
+          logAudit(
+            `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
+            sw.date,
+          );
+        }
+      }
+
+      await api.patch(`/leave-requests/${l.id}`, {
         status,
         reviewed_by: user?.id,
         reviewed_at: new Date().toISOString(),
         review_note: note || null,
-      })
-      .eq("id", l.id);
-    if (error) return toast.error(error.message);
-    toast.success(
-      status === "Approved" ? "Switch approved and applied to published rota" : "Switch rejected",
-    );
-    qc.invalidateQueries({ queryKey: ["leave"] });
+      });
+      toast.success(
+        status === "Approved" ? "Switch approved and applied to published rota" : "Switch rejected",
+      );
+
+      if (l.requested_by) {
+        await api
+          .post("/notifications/upsert", [
+            {
+              user_id: l.requested_by,
+              notif_key: `switch_${status.toLowerCase()}_${l.id}`,
+              is_read: false,
+            },
+          ])
+          .catch(() => {});
+      }
+      const swInfo = parseSwitch(l);
+      if (swInfo?.nurseBName) {
+        const profilesB = await api
+          .get<{ id: string }[]>(`/profiles?full_name=${encodeURIComponent(swInfo.nurseBName)}`)
+          .catch(() => [] as { id: string }[]);
+        const profileBId = profilesB[0]?.id;
+        if (profileBId) {
+          await api
+            .post("/notifications/upsert", [
+              {
+                user_id: profileBId,
+                notif_key: `switch_${status.toLowerCase()}_${l.id}_b`,
+                is_read: false,
+              },
+            ])
+            .catch(() => {});
+        }
+      }
+      qc.invalidateQueries({ queryKey: ["leave"] });
+    } catch {
+      toast.error("Failed to update switch request");
+    }
   }
 
   const counts = {
@@ -843,8 +841,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-min"],
-    queryFn: async () =>
-      (await supabase.from("nurses").select("id, name").order("name")).data ?? [],
+    queryFn: () => api.get<{ id: string; name: string }[]>("/nurses"),
   });
 
   const [type, setType] = useState("Annual");
@@ -860,16 +857,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const { data: datesInPublishedRota = false, isFetching: checkingDates } = useQuery({
     queryKey: ["leave-dates-published", from, to],
     enabled: datesReady,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("id")
-        .eq("status", "published")
-        .gte("shift_date", from)
-        .lte("shift_date", to)
-        .limit(1);
-      return (data?.length ?? 0) > 0;
-    },
+    queryFn: () =>
+      api
+        .get<{ id: string }[]>(`/shift-assignments?status=published&from=${from}&to=${to}&limit=1`)
+        .then((arr) => arr.length > 0),
   });
 
   const allowedTypes = datesInPublishedRota
@@ -882,22 +873,26 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const matchedNurse = nurses.find((n) => n.name === fullName);
-    const { error } = await supabase.from("leave_requests").insert({
-      nurse_id: matchedNurse?.id ?? null,
-      nurse_name: fullName ?? "",
-      requested_by: user?.id,
-      type: effectiveType as "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap",
-      from_date: from,
-      to_date: to,
-      reason: reason || null,
-    });
-    setBusy(false);
-    if (error) return toast.error(error.message);
-    toast.success("Request submitted");
-    logAudit("Submitted leave request", fullName ?? "");
-    qc.invalidateQueries({ queryKey: ["leave"] });
-    onClose();
+    try {
+      const matchedNurse = nurses.find((n) => n.name === fullName);
+      await api.post("/leave-requests", {
+        nurse_id: matchedNurse?.id ?? null,
+        nurse_name: fullName ?? "",
+        requested_by: user?.id,
+        type: effectiveType,
+        from_date: from,
+        to_date: to,
+        reason: reason || null,
+      });
+      toast.success("Request submitted");
+      logAudit("Submitted leave request", fullName ?? "");
+      qc.invalidateQueries({ queryKey: ["leave"] });
+      onClose();
+    } catch {
+      toast.error("Failed to submit request");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const inputCls =
@@ -1022,8 +1017,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-switch"],
-    queryFn: async () =>
-      (await supabase.from("nurses").select("id, name, ward, facility").order("name")).data ?? [],
+    queryFn: () =>
+      api.get<{ id: string; name: string; ward: string | null; facility: string | null }[]>(
+        "/nurses",
+      ),
   });
 
   const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
@@ -1052,26 +1049,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { data: offDutyIds = [] } = useQuery({
     queryKey: ["off-duty-nurses", date, facility],
     enabled: shiftA === "LEAVE" && !!date && facilityNurseIds.length > 0,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("shift_assignments")
-        .select("nurse_id")
-        .eq("shift_date", date)
-        .eq("shift", "OFF")
-        .eq("status", "published")
-        .in("nurse_id", facilityNurseIds);
-      return (data ?? []).map((r) => r.nurse_id as string);
-    },
+    queryFn: () =>
+      api
+        .get<
+          { nurse_id: string }[]
+        >(`/shift-assignments?shift_date=${date}&shift=OFF&status=published&nurse_ids=${facilityNurseIds.join(",")}`)
+        .then((arr) => arr.map((r) => r.nurse_id)),
   });
-  const offDutyIdSet = useMemo(
-    () => new Set(offDutyIds),
-    [offDutyIds],
-  );
+  const offDutyIdSet = useMemo(() => new Set(offDutyIds), [offDutyIds]);
 
   const nurseBList = useMemo(() => {
     if (!nurseAId) return [];
-    const leaveFilter = (n: { id: string }) =>
-      shiftA !== "LEAVE" || offDutyIdSet.has(n.id);
+    const leaveFilter = (n: { id: string }) => shiftA !== "LEAVE" || offDutyIdSet.has(n.id);
     if (switchType === "inter-ward") {
       if (!wardB) return [];
       return facilityNurses.filter(
@@ -1080,9 +1069,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     }
     // Same-ward: if Nurse A has no ward (coverage nurse on leave), any OFF nurse can cover.
     const inWard = (n: (typeof facilityNurses)[number]) =>
-      nurseAWards.length === 0
-        ? true
-        : splitWards(n.ward).some((w) => nurseAWards.includes(w));
+      nurseAWards.length === 0 ? true : splitWards(n.ward).some((w) => nurseAWards.includes(w));
     return facilityNurses.filter((n) => n.id !== nurseAId && inWard(n) && leaveFilter(n));
   }, [nurseAId, switchType, wardB, facilityNurses, nurseAWards, shiftA, offDutyIdSet]);
 
@@ -1091,14 +1078,12 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       setShift("");
       return;
     }
-    const { data } = await supabase
-      .from("shift_assignments")
-      .select("shift")
-      .eq("nurse_id", nurseId)
-      .eq("shift_date", forDate)
-      .eq("status", "published")
-      .maybeSingle();
-    setShift(data?.shift ?? "");
+    const arr = await api
+      .get<
+        { shift: string }[]
+      >(`/shift-assignments?nurse_id=${nurseId}&shift_date=${forDate}&status=published&limit=1`)
+      .catch(() => [] as { shift: string }[]);
+    setShift(arr[0]?.shift ?? "");
   }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -1120,26 +1105,31 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     }
 
     setBusy(true);
-    const nurseB = nurses.find((n) => n.id === nurseBId);
-    const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
-    const flags = switchType === "inter-ward" ? "|INTER_WARD" : "";
-    const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}${flags}|NOTE:${reason.trim()}`;
+    try {
+      const nurseB = nurses.find((n) => n.id === nurseBId);
+      const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
+      const flags = switchType === "inter-ward" ? "|INTER_WARD" : "";
+      const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}${flags}|NOTE:${reason.trim()}`;
 
-    const { error } = await supabase.from("leave_requests").insert({
-      nurse_id: nurseAId,
-      nurse_name: nurseA?.name ?? fullName ?? "",
-      requested_by: user?.id,
-      type: "Swap",
-      from_date: date,
-      to_date: date,
-      reason: reasonEncoded,
-    });
-    setBusy(false);
-    if (error) return toast.error(error.message);
-    toast.success("Shift switch request submitted for approval");
-    logAudit(`Shift switch request submitted: ${nurseA?.name} ↔ ${nurseB?.name}`, date);
-    qc.invalidateQueries({ queryKey: ["leave"] });
-    onClose();
+      await api.post("/leave-requests", {
+        nurse_id: nurseAId,
+        nurse_name: nurseA?.name ?? fullName ?? "",
+        requested_by: user?.id,
+        switch_nurse_b: nurseBId,
+        type: "Swap",
+        from_date: date,
+        to_date: date,
+        reason: reasonEncoded,
+      });
+      toast.success("Shift switch request submitted for approval");
+      logAudit(`Shift switch request submitted: ${nurseA?.name} ↔ ${nurseB?.name}`, date);
+      qc.invalidateQueries({ queryKey: ["leave"] });
+      onClose();
+    } catch {
+      toast.error("Failed to submit shift switch request");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const inputCls =

@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { useState, useId } from "react";
 import { Building2, Plus, Trash2, Loader2, Pencil, Download } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
@@ -53,27 +53,19 @@ function WardsPage() {
   const [editingWard, setEditingWard] = useState<Ward | null>(null);
   const [seeding, setSeeding] = useState(false);
 
-  // Admin, CNO and HR/Admin oversee all facilities; facility-bound roles start on their own.
-  const isMultiFacility =
-    isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const isMultiFacility = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
   const defaultFacility = nurseFacility && !isMultiFacility ? nurseFacility : "";
   const [selectedFacility, setSelectedFacility] = useState(defaultFacility);
 
   const { data: wards = [], isLoading } = useQuery({
     queryKey: ["wards"],
-    queryFn: async () => {
-      const { data, error } = await supabase.from("wards").select("*").order("name");
-      if (error) throw error;
-      return data as Ward[];
-    },
+    queryFn: () => api.get<Ward[]>("/wards"),
   });
 
-  // Wards are filtered by their facility column.
   const visibleWards = selectedFacility
     ? wards.filter((w) => w.facility === selectedFacility)
     : wards;
 
-  // Wards that haven't been seeded yet per facility.
   const missingIkoyiWards = IKOYI_WARD_NAMES.filter(
     (n) => !wards.some((w) => w.name === n && w.facility === "Ikoyi"),
   );
@@ -86,133 +78,34 @@ function WardsPage() {
 
   async function del(w: Ward) {
     if (!confirm(`Remove ward "${w.name}"?`)) return;
-    const { error } = await supabase.from("wards").delete().eq("id", w.id);
-    if (error) return toast.error(error.message);
-    toast.success("Ward removed");
-    logAudit("Removed ward", w.name);
-    qc.invalidateQueries({ queryKey: ["wards"] });
-  }
-
-  // Seed all Ikoyi wards into the DB from the hardcoded defaults.
-  // Uses upsert so it's safe to run multiple times — existing rows are updated,
-  // missing rows are created.
-  async function seedIkoyiWards() {
-    setSeeding(true);
     try {
-      const rows = IKOYI_WARD_NAMES.map((name) => ({
-        name,
-        facility: "Ikoyi",
-        ...IKOYI_WARD_MINIMUMS[name],
-      }));
-
-      // Insert all; on name+facility conflict update the staffing numbers so the DB
-      // always reflects the correct hardcoded values.
-      for (const row of rows) {
-        const existing = wards.find((w) => w.name === row.name && w.facility === "Ikoyi");
-        if (existing) {
-          const { error } = await supabase
-            .from("wards")
-            .update({
-              facility: "Ikoyi",
-              min_morning_nurses: row.min_morning_nurses,
-              min_morning_supervisor: row.min_morning_supervisor,
-              min_morning_na: row.min_morning_na,
-              min_night_nurses: row.min_night_nurses,
-              min_night_supervisor: row.min_night_supervisor,
-              min_night_na: row.min_night_na,
-            })
-            .eq("id", existing.id);
-          if (error) {
-            toast.error(`Failed on "${row.name}": ${error.message}`);
-            return;
-          }
-        } else {
-          const { error } = await supabase.from("wards").insert(row);
-          if (error) {
-            toast.error(`Failed on "${row.name}": ${error.message}`);
-            return;
-          }
-        }
-      }
-
-      toast.success(`All ${rows.length} Ikoyi wards seeded / updated`);
-      logAudit("Seeded Ikoyi ward defaults", IKOYI_WARD_NAMES.join(", "));
+      await api.del(`/wards/${w.id}`);
+      toast.success("Ward removed");
+      logAudit("Removed ward", w.name);
       qc.invalidateQueries({ queryKey: ["wards"] });
     } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSeeding(false);
+      toast.error(e instanceof Error ? e.message : "Failed to remove ward");
     }
   }
 
-  async function seedIkejaWards() {
+  async function seedFacilityWards(
+    facilityName: string,
+    wardNames: readonly string[],
+    wardMinimums: Record<string, object>,
+  ) {
     setSeeding(true);
     try {
-      const rows = IKEJA_WARD_NAMES.map((name) => ({
-        name,
-        facility: "Ikeja",
-        ...IKEJA_WARD_MINIMUMS[name],
-      }));
-      for (const row of rows) {
-        const existing = wards.find((w) => w.name === row.name && w.facility === "Ikeja");
+      for (const name of wardNames) {
+        const row = { name, facility: facilityName, ...wardMinimums[name] };
+        const existing = wards.find((w) => w.name === name && w.facility === facilityName);
         if (existing) {
-          const { error } = await supabase
-            .from("wards")
-            .update({
-              min_morning_nurses: row.min_morning_nurses,
-              min_morning_supervisor: row.min_morning_supervisor,
-              min_morning_na: row.min_morning_na,
-              min_night_nurses: row.min_night_nurses,
-              min_night_supervisor: row.min_night_supervisor,
-              min_night_na: row.min_night_na,
-            })
-            .eq("id", existing.id);
-          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+          await api.patch(`/wards/${existing.id}`, wardMinimums[name]);
         } else {
-          const { error } = await supabase.from("wards").insert(row);
-          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
+          await api.post("/wards", row);
         }
       }
-      toast.success(`All ${rows.length} Ikeja wards seeded / updated`);
-      logAudit("Seeded Ikeja ward defaults", IKEJA_WARD_NAMES.join(", "));
-      qc.invalidateQueries({ queryKey: ["wards"] });
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSeeding(false);
-    }
-  }
-
-  async function seedLigaliWards() {
-    setSeeding(true);
-    try {
-      const rows = LIGALI_WARD_NAMES.map((name) => ({
-        name,
-        facility: "Ligali",
-        ...LIGALI_WARD_MINIMUMS[name],
-      }));
-      for (const row of rows) {
-        const existing = wards.find((w) => w.name === row.name && w.facility === "Ligali");
-        if (existing) {
-          const { error } = await supabase
-            .from("wards")
-            .update({
-              min_morning_nurses: row.min_morning_nurses,
-              min_morning_supervisor: row.min_morning_supervisor,
-              min_morning_na: row.min_morning_na,
-              min_night_nurses: row.min_night_nurses,
-              min_night_supervisor: row.min_night_supervisor,
-              min_night_na: row.min_night_na,
-            })
-            .eq("id", existing.id);
-          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
-        } else {
-          const { error } = await supabase.from("wards").insert(row);
-          if (error) { toast.error(`Failed on "${row.name}": ${error.message}`); return; }
-        }
-      }
-      toast.success(`All ${rows.length} Ligali wards seeded / updated`);
-      logAudit("Seeded Ligali ward defaults", LIGALI_WARD_NAMES.join(", "));
+      toast.success(`All ${wardNames.length} ${facilityName} wards seeded / updated`);
+      logAudit(`Seeded ${facilityName} ward defaults`, wardNames.join(", "));
       qc.invalidateQueries({ queryKey: ["wards"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
@@ -240,7 +133,6 @@ function WardsPage() {
         }
       />
 
-      {/* Facility selector */}
       {!selectedFacility ? (
         <div className="flex flex-col items-center justify-center py-24 gap-6">
           <Building2 className="h-10 w-10 text-muted-foreground" />
@@ -265,93 +157,48 @@ function WardsPage() {
         </div>
       ) : (
         <>
-          {/* Facility tab bar */}
           <div className="flex items-center gap-2 mb-5">
-            {(isMultiFacility ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setSelectedFacility(f)}
-                className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                  selectedFacility === f
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card hover:bg-muted"
-                }`}
-              >
-                {f}
-              </button>
-            ))}
+            {(isMultiFacility ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map(
+              (f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => setSelectedFacility(f)}
+                  className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                    selectedFacility === f
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card hover:bg-muted"
+                  }`}
+                >
+                  {f}
+                </button>
+              ),
+            )}
           </div>
 
-          {/* Seed banners — shown when default wards are missing from DB */}
           {selectedFacility === "Ikoyi" && canManageWards && missingIkoyiWards.length > 0 && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
-              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                  {missingIkoyiWards.length} ward{missingIkoyiWards.length > 1 ? "s" : ""} not yet
-                  created
-                </p>
-                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
-                  {missingIkoyiWards.join(", ")}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={seeding}
-                onClick={seedIkoyiWards}
-                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
-              >
-                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
-                {seeding ? "Syncing…" : "Sync defaults"}
-              </button>
-            </div>
+            <SeedBanner
+              count={missingIkoyiWards.length}
+              names={missingIkoyiWards}
+              seeding={seeding}
+              onSeed={() => seedFacilityWards("Ikoyi", IKOYI_WARD_NAMES, IKOYI_WARD_MINIMUMS)}
+            />
           )}
           {selectedFacility === "Ikeja" && canManageWards && missingIkejaWards.length > 0 && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
-              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                  {missingIkejaWards.length} ward{missingIkejaWards.length > 1 ? "s" : ""} not yet
-                  created
-                </p>
-                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
-                  {missingIkejaWards.join(", ")}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={seeding}
-                onClick={seedIkejaWards}
-                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
-              >
-                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
-                {seeding ? "Syncing…" : "Sync defaults"}
-              </button>
-            </div>
+            <SeedBanner
+              count={missingIkejaWards.length}
+              names={missingIkejaWards}
+              seeding={seeding}
+              onSeed={() => seedFacilityWards("Ikeja", IKEJA_WARD_NAMES, IKEJA_WARD_MINIMUMS)}
+            />
           )}
           {selectedFacility === "Ligali" && canManageWards && missingLigaliWards.length > 0 && (
-            <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
-              <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-              <div className="flex-1">
-                <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-                  {missingLigaliWards.length} ward{missingLigaliWards.length > 1 ? "s" : ""} not
-                  yet created
-                </p>
-                <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">
-                  {missingLigaliWards.join(", ")}
-                </p>
-              </div>
-              <button
-                type="button"
-                disabled={seeding}
-                onClick={seedLigaliWards}
-                className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
-              >
-                {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
-                {seeding ? "Syncing…" : "Sync defaults"}
-              </button>
-            </div>
+            <SeedBanner
+              count={missingLigaliWards.length}
+              names={missingLigaliWards}
+              seeding={seeding}
+              onSeed={() => seedFacilityWards("Ligali", LIGALI_WARD_NAMES, LIGALI_WARD_MINIMUMS)}
+            />
           )}
 
           {isLoading ? (
@@ -401,7 +248,38 @@ function WardsPage() {
   );
 }
 
-// ── Reusable ward card ────────────────────────────────────────────────────────
+function SeedBanner({
+  count,
+  names,
+  seeding,
+  onSeed,
+}: {
+  count: number;
+  names: string[];
+  seeding: boolean;
+  onSeed: () => void;
+}) {
+  return (
+    <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
+      <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
+      <div className="flex-1">
+        <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
+          {count} ward{count > 1 ? "s" : ""} not yet created
+        </p>
+        <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">{names.join(", ")}</p>
+      </div>
+      <button
+        type="button"
+        disabled={seeding}
+        onClick={onSeed}
+        className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
+      >
+        {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
+        {seeding ? "Syncing…" : "Sync defaults"}
+      </button>
+    </div>
+  );
+}
 
 function WardCard({
   ward: w,
@@ -469,8 +347,6 @@ function WardCard({
   );
 }
 
-// ── Add ward modal ────────────────────────────────────────────────────────────
-
 function AddWardModal({
   facility: defaultFacility,
   onClose,
@@ -494,13 +370,17 @@ function AddWardModal({
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.from("wards").insert({ ...form, facility: selectedFac });
-    setBusy(false);
-    if (error) return toast.error(error.message);
-    toast.success("Ward added");
-    logAudit("Added ward", form.name);
-    qc.invalidateQueries({ queryKey: ["wards"] });
-    onClose();
+    try {
+      await api.post("/wards", { ...form, facility: selectedFac });
+      toast.success("Ward added");
+      logAudit("Added ward", form.name);
+      qc.invalidateQueries({ queryKey: ["wards"] });
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to add ward");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const inputCls =
@@ -592,8 +472,6 @@ function AddWardModal({
   );
 }
 
-// ── Edit ward modal ───────────────────────────────────────────────────────────
-
 function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
   const qc = useQueryClient();
   const [form, setForm] = useState({
@@ -610,13 +488,17 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     setBusy(true);
-    const { error } = await supabase.from("wards").update(form).eq("id", ward.id);
-    setBusy(false);
-    if (error) return toast.error(error.message);
-    toast.success("Ward updated");
-    logAudit("Updated ward", form.name);
-    qc.invalidateQueries({ queryKey: ["wards"] });
-    onClose();
+    try {
+      await api.patch(`/wards/${ward.id}`, form);
+      toast.success("Ward updated");
+      logAudit("Updated ward", form.name);
+      qc.invalidateQueries({ queryKey: ["wards"] });
+      onClose();
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : "Failed to update ward");
+    } finally {
+      setBusy(false);
+    }
   }
 
   const inputCls =

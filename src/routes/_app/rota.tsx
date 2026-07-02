@@ -1,7 +1,8 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
+import { logAudit } from "@/lib/audit";
 import {
   AlertTriangle,
   CalendarDays,
@@ -206,26 +207,23 @@ function RotaPage() {
       // Earliest assignment within the past 27 days = start of the active window.
       // Gaps between schedules (days with no assignments) ensure we don't bleed
       // into a previous finished window.
-      let currentQuery = supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .gte("shift_date", lookbackStr)
-        .order("shift_date", { ascending: true })
-        .limit(1);
-      if (activeRole === "nurse") currentQuery = currentQuery.eq("status", "published");
-      const { data: current } = await currentQuery;
-      if (current?.[0]?.shift_date) return current[0].shift_date as string;
+      const statusParam = activeRole === "nurse" ? "&status=published" : "";
+      const current = await api
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}`)
+        .catch(() => []);
+      if (current[0]?.shift_date) return current[0].shift_date;
 
       // No active window — snap forward to the next upcoming one
-      let futureQuery = supabase
-        .from("shift_assignments")
-        .select("shift_date")
-        .gt("shift_date", todayStr)
-        .order("shift_date", { ascending: true })
-        .limit(1);
-      if (activeRole === "nurse") futureQuery = futureQuery.eq("status", "published");
-      const { data: future } = await futureQuery;
-      return (future?.[0]?.shift_date as string) ?? todayStr;
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const future = await api
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}`)
+        .catch(() => []);
+      return future[0]?.shift_date ?? todayStr;
     },
   });
 
@@ -270,13 +268,7 @@ function RotaPage() {
   const { data: nurses = [] } = useQuery<NurseInput[]>({
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("nurses")
-        .select("id, name, role, ward, facility, target_hours")
-        .order("name");
-      return (data ?? []) as NurseInput[];
-    },
+    queryFn: () => api.get<NurseInput[]>("/nurses"),
   });
 
   const { data: leave = [] } = useQuery<LeaveInput[]>({
@@ -286,11 +278,7 @@ function RotaPage() {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
-      const { data } = await supabase
-        .from("leave_requests")
-        .select("nurse_id,from_date,to_date,status")
-        .gte("to_date", cutoff);
-      return (data ?? []) as LeaveInput[];
+      return api.get<LeaveInput[]>(`/leave-requests?to_date_gte=${cutoff}`);
     },
   });
 
@@ -310,29 +298,10 @@ function RotaPage() {
     enabled: nurseIds.length > 0,
     staleTime: 2 * 60 * 1000,
     queryFn: async () => {
-      const BATCH = 30;
-      const batches: string[][] = [];
-      for (let i = 0; i < nurseIds.length; i += BATCH) {
-        batches.push(nurseIds.slice(i, i + BATCH));
-      }
-      const results = await Promise.all(
-        batches.map((batch) => {
-          let q = supabase
-            .from("shift_assignments")
-            .select("id, nurse_id, ward, shift_date, shift, status")
-            .gte("shift_date", ymd(startDate))
-            .lte("shift_date", ymd(endDate))
-            .in("nurse_id", batch);
-          if (activeRole === "nurse") q = q.eq("status", "published");
-          return q;
-        }),
+      const statusParam = activeRole === "nurse" ? "&status=published" : "";
+      return api.get<Assignment[]>(
+        `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}${statusParam}`,
       );
-      const all: Assignment[] = [];
-      for (const { data, error } of results) {
-        if (error) throw error;
-        all.push(...((data ?? []) as Assignment[]));
-      }
-      return all;
     },
   });
 
@@ -343,19 +312,10 @@ function RotaPage() {
   const { data: locumFilled = [] } = useQuery({
     queryKey: ["locum-filled-rota", ymd(startDate), ymd(endDate)],
     staleTime: 2 * 60 * 1000,
-    queryFn: async () => {
-      const { data } = await supabase
-        .from("locum_requests")
-        .select("accepted_by_nurse_id, shift_date, shift")
-        .eq("status", "filled")
-        .gte("shift_date", ymd(startDate))
-        .lte("shift_date", ymd(endDate));
-      return (data ?? []) as {
-        accepted_by_nurse_id: string | null;
-        shift_date: string;
-        shift: string;
-      }[];
-    },
+    queryFn: () =>
+      api.get<{ accepted_by_nurse_id: string | null; shift_date: string; shift: string }[]>(
+        `/locum/requests?status=filled&from=${ymd(startDate)}&to=${ymd(endDate)}`,
+      ),
   });
 
   // ── Derived data ─────────────────────────────────────────────────────────
@@ -453,9 +413,10 @@ function RotaPage() {
   const { data: facilityFilteredWards = [] } = useQuery<WardInput[]>({
     queryKey: ["wards-by-facility", effectiveFacility],
     queryFn: async () => {
-      let q = supabase.from("wards").select("*").order("name");
-      if (effectiveFacility) q = q.eq("facility", effectiveFacility);
-      const rows = ((await q).data ?? []) as WardInput[];
+      const url = effectiveFacility
+        ? `/wards?facility=${encodeURIComponent(effectiveFacility)}`
+        : "/wards";
+      const rows = await api.get<WardInput[]>(url);
       const seen = new Set<string>();
       return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
@@ -464,13 +425,12 @@ function RotaPage() {
   const { data: genWards = [] } = useQuery<WardInput[]>({
     queryKey: ["gen-wards", genForm.facility],
     queryFn: async () => {
-      let q = supabase.from("wards").select("*").order("name");
-      if (genForm.facility) {
-        // Include wards explicitly tagged to this facility AND wards with no facility tag
-        // (older records may not have facility set yet).
-        q = q.or(`facility.eq.${genForm.facility},facility.is.null`);
-      }
-      const rows = ((await q).data ?? []) as WardInput[];
+      // Include wards explicitly tagged to this facility AND wards with no facility tag
+      // (older records may not have facility set yet).
+      const url = genForm.facility
+        ? `/wards?facility_or_null=${encodeURIComponent(genForm.facility)}`
+        : "/wards";
+      const rows = await api.get<WardInput[]>(url);
       const seen = new Set<string>();
       return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
@@ -510,25 +470,18 @@ function RotaPage() {
       // but NONE are draft — i.e. everything is submitted/approved/published.
       // A ward with mixed published+draft (e.g. after post-publish leave approval)
       // is shown so the admin can regenerate it.
-      const [{ data: anyData }, { data: draftData }] = await Promise.all([
-        supabase
-          .from("shift_assignments")
-          .select("ward")
-          .gte("shift_date", base.from)
-          .lte("shift_date", base.to)
-          .in("nurse_id", base.nurseIds)
-          .in("ward", base.wardNames),
-        supabase
-          .from("shift_assignments")
-          .select("ward")
-          .gte("shift_date", base.from)
-          .lte("shift_date", base.to)
-          .in("nurse_id", base.nurseIds)
-          .in("ward", base.wardNames)
-          .eq("status", "draft"),
+      const nurseIdsParam = base.nurseIds.join(",");
+      const wardNamesParam = encodeURIComponent(base.wardNames.join(","));
+      const [anyData, draftData] = await Promise.all([
+        api.get<{ ward: string }[]>(
+          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${base.from}&to=${base.to}&ward_in=${wardNamesParam}`,
+        ),
+        api.get<{ ward: string }[]>(
+          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${base.from}&to=${base.to}&ward_in=${wardNamesParam}&status=draft`,
+        ),
       ]);
-      const withAny = new Set((anyData ?? []).map((a) => a.ward as string));
-      const withDraft = new Set((draftData ?? []).map((a) => a.ward as string));
+      const withAny = new Set(anyData.map((a) => a.ward));
+      const withDraft = new Set(draftData.map((a) => a.ward));
       // Hide only wards that have assignments AND none of them are draft.
       return [...withAny].filter((w) => !withDraft.has(w));
     },
@@ -600,14 +553,12 @@ function RotaPage() {
         .map((n) => n.id)
         .filter(Boolean);
       if (facilityIds.length > 0) {
-        const { data: pending } = await supabase
-          .from("leave_requests")
-          .select("nurse_name, from_date, to_date")
-          .eq("status", "Pending")
-          .in("nurse_id", facilityIds.slice(0, 200))
-          .lte("from_date", ymd(genEnd))
-          .gte("to_date", ymd(genStart));
-        if (pending && pending.length > 0) {
+        const pending = await api
+          .get<
+            { nurse_name: string; from_date: string; to_date: string }[]
+          >(`/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
+          .catch(() => []);
+        if (pending.length > 0) {
           setGenPendingLeaves(
             pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
           );
@@ -649,14 +600,11 @@ function RotaPage() {
     // (Published assignments are preserved by the delete step below; only draft is safe to overwrite.)
     if (isWardRun && wardNurses.length > 0) {
       const wardIds = wardNurses.map((n) => n.id);
-      const { data: inApprovalRows } = await supabase
-        .from("shift_assignments")
-        .select("status")
-        .gte("shift_date", ymd(genStart))
-        .lte("shift_date", ymd(genEnd))
-        .in("nurse_id", wardIds.slice(0, 200))
-        .in("status", ["submitted", "approved_chief", "approved_cno"])
-        .limit(1);
+      const inApprovalRows = await api
+        .get<
+          { status: string }[]
+        >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
+        .catch(() => []);
       if (inApprovalRows?.length) {
         toast.error(
           `"${genForm.ward}" is in the approval process. Return it to draft from the Approvals page before regenerating.`,
@@ -674,47 +622,32 @@ function RotaPage() {
     let includeInterns = !isWardRun;
 
     if (isWardRun) {
-      const [matronsRes, headsRes, internsRes] = await Promise.all([
+      const [matronsRows, headsRows, internsRows] = await Promise.all([
         facilityMatrons.length > 0
-          ? supabase
-              .from("shift_assignments")
-              .select("id")
-              .in(
-                "nurse_id",
-                facilityMatrons.map((n) => n.id),
-              )
-              .gte("shift_date", ymd(genStart))
-              .lte("shift_date", ymd(genEnd))
-              .limit(1)
-          : Promise.resolve({ data: [] as { id: string }[] }),
+          ? api
+              .get<
+                { id: string }[]
+              >(`/shift-assignments?nurse_ids=${facilityMatrons.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .catch(() => [])
+          : Promise.resolve([] as { id: string }[]),
         facilityHeads.length > 0
-          ? supabase
-              .from("shift_assignments")
-              .select("id")
-              .in(
-                "nurse_id",
-                facilityHeads.map((n) => n.id),
-              )
-              .gte("shift_date", ymd(genStart))
-              .lte("shift_date", ymd(genEnd))
-              .limit(1)
-          : Promise.resolve({ data: [] as { id: string }[] }),
+          ? api
+              .get<
+                { id: string }[]
+              >(`/shift-assignments?nurse_ids=${facilityHeads.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .catch(() => [])
+          : Promise.resolve([] as { id: string }[]),
         facilityInterns.length > 0
-          ? supabase
-              .from("shift_assignments")
-              .select("id")
-              .in(
-                "nurse_id",
-                facilityInterns.map((n) => n.id),
-              )
-              .gte("shift_date", ymd(genStart))
-              .lte("shift_date", ymd(genEnd))
-              .limit(1)
-          : Promise.resolve({ data: [] as { id: string }[] }),
+          ? api
+              .get<
+                { id: string }[]
+              >(`/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .catch(() => [])
+          : Promise.resolve([] as { id: string }[]),
       ]);
-      includeMatrons = (matronsRes.data?.length ?? 0) === 0 && facilityMatrons.length > 0;
-      includeHeads = (headsRes.data?.length ?? 0) === 0 && facilityHeads.length > 0;
-      includeInterns = (internsRes.data?.length ?? 0) === 0 && facilityInterns.length > 0;
+      includeMatrons = matronsRows.length === 0 && facilityMatrons.length > 0;
+      includeHeads = headsRows.length === 0 && facilityHeads.length > 0;
+      includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
     }
 
     // Apply intern rotation when generating a full-facility or first ward run.
@@ -751,10 +684,7 @@ function RotaPage() {
         });
       }
 
-      const updates = internsToSchedule.map((n) =>
-        supabase.from("nurses").update({ ward: n.ward }).eq("id", n.id),
-      );
-      await Promise.all(updates);
+      await Promise.all(internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })));
     }
 
     const schedulingNurses = [
@@ -790,15 +720,15 @@ function RotaPage() {
       let periodOffset = 0;
       const facilityIds = facilityNurses.map((n) => n.id);
       if (facilityIds.length > 0) {
-        const { data: epochRow } = await supabase
-          .from("shift_assignments")
-          .select("shift_date")
-          .in("nurse_id", facilityIds.slice(0, 200))
-          .lt("shift_date", ymd(genStart))
-          .order("shift_date", { ascending: true })
-          .limit(1);
-        if (epochRow?.[0]?.shift_date) {
-          const epochDate = new Date(epochRow[0].shift_date + "T00:00:00");
+        const dayBefore = new Date(genStart);
+        dayBefore.setDate(dayBefore.getDate() - 1);
+        const epochRows = await api
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
+          .catch(() => []);
+        if (epochRows[0]?.shift_date) {
+          const epochDate = new Date(epochRows[0].shift_date + "T00:00:00");
           periodOffset = Math.round(
             (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
           );
@@ -840,52 +770,28 @@ function RotaPage() {
       // Head nurse and intern assignments from a prior ward run are preserved.
       const scheduledIds = schedulingNurses.map((n) => n.id);
       for (let i = 0; i < scheduledIds.length; i += 200) {
-        await supabase
-          .from("shift_assignments")
-          .delete()
-          .gte("shift_date", ymd(genStart))
-          .lte("shift_date", ymd(genEnd))
-          .in("nurse_id", scheduledIds.slice(i, i + 200))
-          .neq("status", "published");
+        await api.del(
+          `/shift-assignments?nurse_ids=${scheduledIds.slice(i, i + 200).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&neq_status=published`,
+        );
       }
 
       // Find nurse+date pairs that still have a published row after the delete step.
       // We cannot overwrite published rows, so we exclude them from the insert.
       const publishedKeys = new Set<string>();
-      for (let i = 0; i < scheduledIds.length; i += 200) {
-        const { data: pubRows } = await supabase
-          .from("shift_assignments")
-          .select("nurse_id, shift_date")
-          .gte("shift_date", ymd(genStart))
-          .lte("shift_date", ymd(genEnd))
-          .in("nurse_id", scheduledIds.slice(i, i + 200))
-          .eq("status", "published");
-        (pubRows ?? []).forEach((r: { nurse_id: string; shift_date: string }) =>
-          publishedKeys.add(`${r.nurse_id}|${r.shift_date}`),
-        );
-      }
+      const pubRows = await api
+        .get<
+          { nurse_id: string; shift_date: string }[]
+        >(`/shift-assignments?nurse_ids=${scheduledIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
+        .catch(() => []);
+      pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date}`));
 
       const rows = draft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
         .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
 
-      // Upsert in large batches (500 rows).
-      // Using upsert (onConflict: nurse_id,shift_date) handles any rows that
-      // survived the delete step (e.g. due to RLS) by updating them in place
-      // rather than failing with a duplicate-key violation, which previously
-      // caused partial schedules where only the first 10-11 days had data.
-      // Requires a unique index on (nurse_id, shift_date) — add it once in
-      // Supabase SQL editor:
-      //   CREATE UNIQUE INDEX IF NOT EXISTS shift_assignments_nurse_date_unique
-      //   ON public.shift_assignments (nurse_id, shift_date);
+      // Upsert in batches of 500 rows.
       for (let i = 0; i < rows.length; i += 500) {
-        const { error } = await supabase
-          .from("shift_assignments")
-          .upsert(rows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
-        if (error) {
-          const msg = (error as { message?: string }).message ?? String(error);
-          throw new Error(msg);
-        }
+        await api.post("/shift-assignments/upsert", rows.slice(i, i + 500));
       }
 
       // Gap-fill: give every facility nurse a row for each day.
@@ -897,17 +803,12 @@ function RotaPage() {
         const uncoveredNurses = facilityNurses.filter((n) => !coveredIds.has(n.id));
         if (uncoveredNurses.length > 0) {
           const uncoveredIds = uncoveredNurses.map((n) => n.id);
-          const { data: existingRows } = await supabase
-            .from("shift_assignments")
-            .select("nurse_id, shift_date")
-            .gte("shift_date", ymd(genStart))
-            .lte("shift_date", ymd(genEnd))
-            .in("nurse_id", uncoveredIds);
-          const existingKeys = new Set(
-            (existingRows ?? []).map(
-              (r: { nurse_id: string; shift_date: string }) => `${r.nurse_id}|${r.shift_date}`,
-            ),
-          );
+          const existingRows = await api
+            .get<
+              { nurse_id: string; shift_date: string }[]
+            >(`/shift-assignments?nurse_ids=${uncoveredIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}`)
+            .catch(() => []);
+          const existingKeys = new Set(existingRows.map((r) => `${r.nurse_id}|${r.shift_date}`));
           const gapRows: {
             nurse_id: string;
             ward: string | null;
@@ -940,19 +841,15 @@ function RotaPage() {
             }
           }
           for (let i = 0; i < gapRows.length; i += 500) {
-            await supabase
-              .from("shift_assignments")
-              .upsert(gapRows.slice(i, i + 500), { onConflict: "nurse_id,shift_date" });
+            await api.post("/shift-assignments/upsert", gapRows.slice(i, i + 500));
           }
         }
       }
 
-      await supabase.from("audit_logs").insert({
-        actor_id: user?.id,
-        actor_name: user?.email ?? null,
-        action: "Generated 28-day rota draft",
-        target: `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
-      });
+      await logAudit(
+        "Generated 28-day rota draft",
+        `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
+      );
 
       setExtraShifts(genExtra);
       toast.success(
@@ -986,23 +883,13 @@ function RotaPage() {
       const allIds = nurses.map((n) => n.id);
       const BATCH = 200;
       for (let i = 0; i < allIds.length; i += BATCH) {
-        const { error } = await supabase
-          .from("shift_assignments")
-          .delete()
-          .gte("shift_date", ymd(startDate))
-          .lte("shift_date", ymd(endDate))
-          .eq("status", "draft")
-          .in("nurse_id", allIds.slice(i, i + BATCH));
-        if (error) throw error;
+        await api.del(
+          `/shift-assignments?nurse_ids=${allIds.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
+        );
       }
       setExtraShifts([]);
       toast.success("All draft shifts cleared across all wards and roles");
-      await supabase.from("audit_logs").insert({
-        actor_id: user?.id,
-        actor_name: user?.email ?? null,
-        action: "Cleared all draft shifts",
-        target: `${ymd(startDate)} → ${ymd(endDate)}`,
-      });
+      await logAudit("Cleared all draft shifts", `${ymd(startDate)} → ${ymd(endDate)}`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
       window.location.reload();
@@ -1021,17 +908,16 @@ function RotaPage() {
     const ids = filteredNurses.map((n) => n.id);
     const BATCH = 200;
     for (let i = 0; i < ids.length; i += BATCH) {
-      const { error } = await supabase
-        .from("shift_assignments")
-        .update({ status: "submitted" })
-        .gte("shift_date", ymd(startDate))
-        .lte("shift_date", ymd(endDate))
-        .eq("status", "draft")
-        .in("nurse_id", ids.slice(i, i + BATCH));
-      if (error) {
-        setBusy(false);
-        return toast.error(error.message);
-      }
+      await api
+        .patch(
+          `/shift-assignments?nurse_ids=${ids.slice(i, i + BATCH).join(",")}&shift_date_from=${ymd(startDate)}&shift_date_to=${ymd(endDate)}&status=draft`,
+          { status: "submitted" },
+        )
+        .catch((e: unknown) => {
+          setBusy(false);
+          toast.error(e instanceof Error ? e.message : "Failed to submit");
+          throw e;
+        });
     }
 
     // When a specific ward is selected, also co-submit interns assigned to other
@@ -1060,24 +946,19 @@ function RotaPage() {
         )
         .map((n) => n.id);
       for (let i = 0; i < otherInternIds.length; i += BATCH) {
-        await supabase
-          .from("shift_assignments")
-          .update({ status: "submitted" })
-          .gte("shift_date", ymd(startDate))
-          .lte("shift_date", ymd(endDate))
-          .eq("status", "draft")
-          .in("nurse_id", otherInternIds.slice(i, i + BATCH));
+        await api.patch(
+          `/shift-assignments?nurse_ids=${otherInternIds.slice(i, i + BATCH).join(",")}&shift_date_from=${ymd(startDate)}&shift_date_to=${ymd(endDate)}&status=draft`,
+          { status: "submitted" },
+        );
       }
     }
 
     setBusy(false);
     const wardLabel = selectedWard || effectiveFacility || "all wards";
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action: "Submitted rota for approval",
-      target: `${ymd(startDate)} → ${ymd(endDate)} (${wardLabel})`,
-    });
+    await logAudit(
+      "Submitted rota for approval",
+      `${ymd(startDate)} → ${ymd(endDate)} (${wardLabel})`,
+    );
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -1090,21 +971,20 @@ function RotaPage() {
       ? SHIFT_CYCLE[(SHIFT_CYCLE.indexOf(existing.shift) + 1) % SHIFT_CYCLE.length]
       : "M";
     if (existing) {
-      const { error } = await supabase
-        .from("shift_assignments")
-        .update({ shift: next })
-        .eq("id", existing.id);
-      if (error) return toast.error(error.message);
+      await api
+        .patch(`/shift-assignments/${existing.id}`, { shift: next })
+        .catch((e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to update"));
     } else {
-      const { error } = await supabase.from("shift_assignments").insert({
-        nurse_id: nurseId,
-        ward,
-        shift_date: dateStr,
-        shift: next,
-        status: "draft",
-        created_by: user?.id ?? null,
-      });
-      if (error) return toast.error(error.message);
+      await api
+        .post("/shift-assignments", {
+          nurse_id: nurseId,
+          ward,
+          shift_date: dateStr,
+          shift: next,
+          status: "draft",
+          created_by: user?.id ?? null,
+        })
+        .catch((e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to add"));
     }
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -1114,17 +994,14 @@ function RotaPage() {
     if (isWindowLocked || a.status === "published" || b.status === "published") return;
     if (a.shift_date !== b.shift_date)
       return toast.error("You can only swap shifts on the same day");
-    const [{ error: e1 }, { error: e2 }] = await Promise.all([
-      supabase.from("shift_assignments").update({ shift: b.shift }).eq("id", a.id),
-      supabase.from("shift_assignments").update({ shift: a.shift }).eq("id", b.id),
-    ]);
-    if (e1 || e2) return toast.error((e1 ?? e2)!.message);
-    await supabase.from("audit_logs").insert({
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-      action: "Swapped shifts",
-      target: a.shift_date,
+    await Promise.all([
+      api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
+      api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
+    ]).catch((e: unknown) => {
+      toast.error(e instanceof Error ? e.message : "Swap failed");
+      throw e;
     });
+    await logAudit("Swapped shifts", a.shift_date);
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 

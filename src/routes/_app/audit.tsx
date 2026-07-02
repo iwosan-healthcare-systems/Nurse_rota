@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
 import { ShieldCheck } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDistanceToNow } from "date-fns";
@@ -35,15 +35,7 @@ function AuditPage() {
 function AuditContent() {
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ["audit"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("audit_logs")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(200);
-      if (error) throw error;
-      return data as Log[];
-    },
+    queryFn: () => api.get<Log[]>("/audit-logs"),
   });
 
   return (
