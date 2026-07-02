@@ -862,11 +862,13 @@ function RotaPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // Refresh assignments, nurse ward assignments (intern rotation), and re-detect
-      // the schedule window so the rota view snaps to the generated period automatically.
+      // Refresh assignments and nurse ward assignments (intern rotation).
+      // Jump the schedule-window directly to the generated period instead of
+      // re-running the auto-detect query (which can land on stale data from
+      // another period and return an empty grid).
       qc.invalidateQueries({ queryKey: ["nurses"] });
       qc.invalidateQueries({ queryKey: ["assignments"] });
-      qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
+      qc.setQueryData(["schedule-window-start", activeRole], genForm.startDate);
       setStartOffset(0);
       setBusy(false);
     }
