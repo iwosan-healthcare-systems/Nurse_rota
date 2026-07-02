@@ -74,6 +74,7 @@ function formatWards(wards: string[]): string | null {
 type Nurse = {
   id: string;
   name: string;
+  employee_id: string | null;
   role: string;
   facility: string | null;
   ward: string | null;
@@ -196,7 +197,7 @@ function StaffPage() {
       nurses.filter((n) => {
         if (
           search &&
-          !`${n.name} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""} ${n.email ?? ""}`
+          !`${n.name} ${n.employee_id ?? ""} ${n.role} ${n.facility ?? ""} ${n.ward ?? ""} ${n.email ?? ""}`
             .toLowerCase()
             .includes(search.toLowerCase())
         )
@@ -276,7 +277,7 @@ function StaffPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full h-9 pl-9 pr-3 rounded-md bg-muted/60 text-sm outline-none focus:ring-2 focus:ring-ring"
-            placeholder="Search by name…"
+            placeholder="Search by name or employee ID…"
           />
         </div>
 
@@ -357,7 +358,7 @@ function StaffPage() {
           title="No nurses yet"
           description={
             canManageStaff
-              ? "Add your first nurse manually or upload an Excel file with name, role and ward columns."
+              ? "Add your first nurse manually or upload an Excel file with Name, Employee ID, Role and Ward columns."
               : "Ask an administrator to add staff."
           }
           action={
@@ -388,6 +389,9 @@ function StaffPage() {
               <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
                   <th className="text-left font-semibold px-4 py-3">Name</th>
+                  <th className="text-left font-semibold px-4 py-3 hidden md:table-cell">
+                    Emp. ID
+                  </th>
                   <th className="text-left font-semibold px-4 py-3">Role</th>
                   <th className="text-left font-semibold px-4 py-3 hidden sm:table-cell">
                     Facility
@@ -417,6 +421,13 @@ function StaffPage() {
                         </div>
                         <span className="truncate">{n.name}</span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                      {n.employee_id ? (
+                        <span className="font-mono text-xs">{n.employee_id}</span>
+                      ) : (
+                        <span className="text-xs italic opacity-40">—</span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground">{n.role}</td>
                     <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
@@ -658,6 +669,7 @@ function AddNurseModal({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("Nurse");
   const [facility, setFacility] = useState("");
@@ -676,6 +688,7 @@ function AddNurseModal({
     try {
       await api.post("/nurses", {
         name,
+        employee_id: employeeId || null,
         email: email || null,
         role,
         facility: facility || null,
@@ -703,6 +716,16 @@ function AddNurseModal({
             placeholder="Enter full name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className={inputCls}
+          />
+        </Field>
+        <Field id="nurse-emp-id" label="Employee ID" hint="Optional — e.g. EMP001">
+          <input
+            id="nurse-emp-id"
+            type="text"
+            placeholder="e.g. EMP001"
+            value={employeeId}
+            onChange={(e) => setEmployeeId(e.target.value)}
             className={inputCls}
           />
         </Field>
@@ -792,6 +815,7 @@ function EditNurseModal({
 }) {
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
+  const [employeeId, setEmployeeId] = useState(nurse.employee_id ?? "");
   const [email, setEmail] = useState(nurse.email ?? "");
   const [role, setRole] = useState(nurse.role);
   const [facility, setFacility] = useState(nurse.facility ?? "");
@@ -810,6 +834,7 @@ function EditNurseModal({
     try {
       await api.patch(`/nurses/${nurse.id}`, {
         name,
+        employee_id: employeeId || null,
         email: email || null,
         role,
         facility: facility || null,
@@ -837,6 +862,16 @@ function EditNurseModal({
             placeholder="Enter full name"
             value={name}
             onChange={(e) => setName(e.target.value)}
+            className={inputCls}
+          />
+        </Field>
+        <Field id="edit-emp-id" label="Employee ID" hint="Optional — e.g. EMP001">
+          <input
+            id="edit-emp-id"
+            type="text"
+            placeholder="e.g. EMP001"
+            value={employeeId}
+            onChange={(e) => setEmployeeId(e.target.value)}
             className={inputCls}
           />
         </Field>
@@ -919,9 +954,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
-  const [rows, setRows] = useState<{ name: string; role: string; ward: string; email: string }[]>(
-    [],
-  );
+  const [rows, setRows] = useState<
+    { name: string; employee_id: string; role: string; ward: string; email: string }[]
+  >([]);
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -941,6 +976,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
           };
           return {
             name: get("name", "full name", "nurse"),
+            employee_id: get("employee id", "emp id", "employee number", "emp no", "staff id"),
             role: get("role", "position") || "Nurse",
             ward: get("ward", "department", "unit"),
             email: get("email", "email address"),
@@ -964,6 +1000,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         "/nurses/bulk",
         rows.map((r) => ({
           name: r.name,
+          employee_id: r.employee_id || null,
           email: r.email || null,
           role: r.role,
           facility,
@@ -1003,6 +1040,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
         <p className="text-sm text-muted-foreground">
           Upload an <code className="text-foreground">.xlsx</code> or{" "}
           <code className="text-foreground">.csv</code> with headers: <strong>Name</strong>,{" "}
+          <strong>Employee ID</strong> <span className="text-xs">(optional)</span>,{" "}
           <strong>Role</strong>, <strong>Ward</strong>, <strong>Email</strong>{" "}
           <span className="text-xs">(optional)</span>.
         </p>
@@ -1039,6 +1077,7 @@ function UploadModal({ onClose }: { onClose: () => void }) {
                 <thead className="bg-muted/30 text-[10px] uppercase text-muted-foreground">
                   <tr>
                     <th className="text-left px-3 py-1.5">Name</th>
+                    <th className="text-left px-3 py-1.5">Emp. ID</th>
                     <th className="text-left px-3 py-1.5">Role</th>
                     <th className="text-left px-3 py-1.5">Ward</th>
                     <th className="text-left px-3 py-1.5">Email</th>
@@ -1048,6 +1087,9 @@ function UploadModal({ onClose }: { onClose: () => void }) {
                   {rows.slice(0, 50).map((r, i) => (
                     <tr key={i} className="border-t">
                       <td className="px-3 py-1.5">{r.name}</td>
+                      <td className="px-3 py-1.5 font-mono text-xs text-muted-foreground">
+                        {r.employee_id || "—"}
+                      </td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.role}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.ward || "—"}</td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.email || "—"}</td>

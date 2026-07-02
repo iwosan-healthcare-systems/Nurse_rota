@@ -26,7 +26,7 @@ jobs:
           target: "/root/nurse-api-uat"
           strip_components: 1
 
-      - name: Install API dependencies and restart PM2 (UAT)
+      - name: Install API dependencies, migrate DB, and restart PM2 (UAT)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -37,6 +37,10 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             cd /root/nurse-api-uat
             npm install --production
+            for f in migrations/*.sql; do
+              echo "Running migration: $f"
+              PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -f "$f"
+            done
             pm2 restart nurse-api-uat || pm2 start server.js --name nurse-api-uat
             pm2 save
 
@@ -83,7 +87,7 @@ jobs:
           target: "/root/nurse-api"
           strip_components: 1
 
-      - name: Install API dependencies and restart PM2 (Production)
+      - name: Install API dependencies, migrate DB, and restart PM2 (Production)
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -94,5 +98,9 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             cd /root/nurse-api
             npm install --production
+            for f in migrations/*.sql; do
+              echo "Running migration: $f"
+              PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -f "$f"
+            done
             pm2 restart nurse-api || pm2 start server.js --name nurse-api
             pm2 save

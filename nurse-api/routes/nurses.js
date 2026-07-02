@@ -34,13 +34,13 @@ router.get('/:id', wrap(async (req, res) => {
 }));
 
 router.post('/', wrap(async (req, res) => {
-  const { name, email, role, facility, ward } = req.body;
+  const { name, email, role, facility, ward, employee_id } = req.body;
   if (!name) return res.status(400).json({ error: 'Name is required' });
 
   const { rows } = await pool.query(
-    `INSERT INTO nurses (name, email, role, facility, ward)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [name, email || null, role || 'nurse', facility || null, ward || null]
+    `INSERT INTO nurses (name, email, role, facility, ward, employee_id)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [name, email || null, role || 'nurse', facility || null, ward || null, employee_id || null]
   );
   res.status(201).json(rows[0]);
 }));
@@ -57,9 +57,9 @@ router.post('/bulk', wrap(async (req, res) => {
     for (const n of nurses) {
       if (!n.name) continue;
       const { rows } = await client.query(
-        `INSERT INTO nurses (name, email, role, facility, ward)
-         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-        [n.name, n.email || null, n.role || 'nurse', n.facility || null, n.ward || null]
+        `INSERT INTO nurses (name, email, role, facility, ward, employee_id)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [n.name, n.email || null, n.role || 'nurse', n.facility || null, n.ward || null, n.employee_id || null]
       );
       results.push(rows[0]);
     }
@@ -96,7 +96,7 @@ router.patch('/bulk-target-hours', wrap(async (req, res) => {
 }));
 
 router.patch('/:id', wrap(async (req, res) => {
-  const allowed = ['name', 'email', 'role', 'facility', 'ward', 'hours_this_month', 'target_hours', 'certifications'];
+  const allowed = ['name', 'email', 'role', 'facility', 'ward', 'employee_id', 'hours_this_month', 'target_hours', 'certifications'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
 
