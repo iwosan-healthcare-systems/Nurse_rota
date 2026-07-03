@@ -1,34 +1,42 @@
-const router = require('express').Router();
-const pool = require('../db');
-const { requireRole } = require('../middleware/auth');
-const wrap = fn => (req, res, next) => fn(req, res, next).catch(next);
+const router = require("express").Router();
+const pool = require("../db");
+const { requireRole } = require("../middleware/auth");
+const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-router.post('/increment-nurse-hours', wrap(async (req, res) => {
-  const { p_nurse_id, p_hours } = req.body;
-  if (!p_nurse_id || p_hours == null) return res.status(400).json({ error: 'p_nurse_id and p_hours required' });
-  const hours = parseFloat(p_hours);
-  if (!isFinite(hours) || hours <= 0 || hours > 24)
-    return res.status(400).json({ error: 'p_hours must be a positive number no greater than 24' });
+router.post(
+  "/increment-nurse-hours",
+  wrap(async (req, res) => {
+    const { p_nurse_id, p_hours } = req.body;
+    if (!p_nurse_id || p_hours == null)
+      return res.status(400).json({ error: "p_nurse_id and p_hours required" });
+    const hours = parseFloat(p_hours);
+    if (!isFinite(hours) || hours <= 0 || hours > 24)
+      return res
+        .status(400)
+        .json({ error: "p_hours must be a positive number no greater than 24" });
 
-  // Admins/CNO can increment any nurse's hours; nurses can only increment their own
-  const userRoles = req.user?.roles || [];
-  const isAdmin = userRoles.some(r => ['admin', 'cno'].includes(r));
-  if (!isAdmin) {
-    const { rows: nurseRows } = await pool.query(
-      'SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1',
-      [req.user.userId]
-    );
-    if (!nurseRows[0] || nurseRows[0].id !== p_nurse_id) {
-      return res.status(403).json({ error: 'Forbidden' });
+    // Admins/CNO can increment any nurse's hours; nurses can only increment their own
+    const userRoles = req.user?.roles || [];
+    const isAdmin = userRoles.some((r) => ["admin", "cno"].includes(r));
+    if (!isAdmin) {
+      const { rows: nurseRows } = await pool.query(
+        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        [req.user.userId],
+      );
+      if (!nurseRows[0] || nurseRows[0].id !== p_nurse_id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
     }
-  }
 
-  await pool.query('SELECT increment_nurse_hours($1, $2)', [p_nurse_id, hours]);
-  res.json({ success: true });
-}));
+    await pool.query("SELECT increment_nurse_hours($1, $2)", [p_nurse_id, hours]);
+    res.json({ success: true });
+  }),
+);
 
-router.post('/auto-end-overdue-shifts', wrap(async (req, res) => {
-  const result = await pool.query(`
+router.post(
+  "/auto-end-overdue-shifts",
+  wrap(async (req, res) => {
+    const result = await pool.query(`
     UPDATE shift_logs
     SET ended_at = expected_end_at,
         hours_logged = EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600
@@ -36,17 +44,20 @@ router.post('/auto-end-overdue-shifts', wrap(async (req, res) => {
     RETURNING id, nurse_id, hours_logged, is_locum
   `);
 
-  for (const row of result.rows) {
-    if (!row.is_locum && row.hours_logged) {
-      await pool.query('SELECT increment_nurse_hours($1, $2)', [row.nurse_id, row.hours_logged]);
+    for (const row of result.rows) {
+      if (!row.is_locum && row.hours_logged) {
+        await pool.query("SELECT increment_nurse_hours($1, $2)", [row.nurse_id, row.hours_logged]);
+      }
     }
-  }
 
-  res.json({ ended: result.rowCount });
-}));
+    res.json({ ended: result.rowCount });
+  }),
+);
 
-router.post('/auto-close-period', wrap(async (req, res) => {
-  const { rows } = await pool.query(`
+router.post(
+  "/auto-close-period",
+  wrap(async (req, res) => {
+    const { rows } = await pool.query(`
     SELECT MIN(shift_date) as period_start, MAX(shift_date) as period_end
     FROM shift_assignments
     WHERE status = 'published'
@@ -54,9 +65,11 @@ router.post('/auto-close-period', wrap(async (req, res) => {
     AND shift_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
   `);
 
-  if (!rows[0]?.period_start) return res.json({ closed: false, period_start: null, period_end: null });
+    if (!rows[0]?.period_start)
+      return res.json({ closed: false, period_start: null, period_end: null });
 
-  res.json({ closed: true, period_start: rows[0].period_start, period_end: rows[0].period_end });
-}));
+    res.json({ closed: true, period_start: rows[0].period_start, period_end: rows[0].period_end });
+  }),
+);
 
 module.exports = router;

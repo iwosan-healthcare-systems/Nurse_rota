@@ -28,7 +28,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Edit Rota (manual cell changes)",
     roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-  { key: "auto_generate", label: "Run Auto-Schedule", roles: ["admin", "cno", "chief_matron"] },
+  { key: "auto_generate", label: "Run Auto-Schedule", roles: ["admin", "head_nurse"] },
   {
     key: "manage_staff",
     label: "Manage Staff (create / edit)",

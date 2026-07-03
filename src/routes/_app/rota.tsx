@@ -1039,7 +1039,10 @@ function RotaPage() {
   async function cycleCell(nurseId: string, dateStr: string, ward: string | null) {
     if (!canEdit) return;
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
-    if (isWindowLocked || existing?.status === "published") return;
+    // Per-cell lock: only prevent editing cells that have already been submitted/approved/published.
+    // Do not block on isWindowLocked — that would prevent editing draft cells in wards whose
+    // schedule is still draft, just because another ward in the view has been submitted.
+    if (existing && existing.status !== "draft") return;
     const next = existing
       ? SHIFT_CYCLE[(SHIFT_CYCLE.indexOf(existing.shift) + 1) % SHIFT_CYCLE.length]
       : "M";
@@ -1064,7 +1067,8 @@ function RotaPage() {
 
   async function swapCells(a: Assignment, b: Assignment) {
     if (!canEdit) return;
-    if (isWindowLocked || a.status === "published" || b.status === "published") return;
+    // Only swap cells that are both still in draft status.
+    if (a.status !== "draft" || b.status !== "draft") return;
     if (a.shift_date !== b.shift_date)
       return toast.error("You can only swap shifts on the same day");
     await Promise.all([
@@ -1445,10 +1449,10 @@ function RotaPage() {
                         >
                           <button
                             type="button"
-                            draggable={!!cell && canEdit && !isWindowLocked}
+                            draggable={!!cell && canEdit && cell.status === "draft"}
                             onClick={() => cycleCell(n.id, dateStr, n.ward)}
                             onDragStart={(e) => {
-                              if (!cell || !canEdit || isWindowLocked) return;
+                              if (!cell || !canEdit || cell.status !== "draft") return;
                               // Write to ref immediately — visible to all handlers this frame
                               draggingRef.current = cell;
                               setDragging(cell);
@@ -1460,7 +1464,6 @@ function RotaPage() {
                               setDragging(null);
                             }}
                             onDragOver={(e) => {
-                              if (isWindowLocked) return;
                               // Use ref — guaranteed current even before React re-renders
                               const src = draggingRef.current;
                               if (src && cell && src.id !== cell.id && src.shift_date === dateStr) {
@@ -1470,7 +1473,6 @@ function RotaPage() {
                             }}
                             onDrop={(e) => {
                               e.preventDefault();
-                              if (isWindowLocked) return;
                               const src = draggingRef.current;
                               if (src && cell && src.id !== cell.id) {
                                 swapCells(src, cell);
@@ -1485,7 +1487,7 @@ function RotaPage() {
                                   ? "bg-black text-white border-black"
                                   : shiftStyles[cell.shift]
                                 : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
-                              isDragOver && !isWindowLocked && "ring-2 ring-primary scale-105",
+                              isDragOver && cell?.status === "draft" && "ring-2 ring-primary scale-105",
                               dragging && dragging.id === cell?.id && "opacity-40",
                               isWindowLocked
                                 ? "cursor-not-allowed opacity-80"
