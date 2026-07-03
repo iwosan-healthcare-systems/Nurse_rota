@@ -458,7 +458,10 @@ function RotaPage() {
   // Wards that already have assignments in the date window FOR THIS FACILITY ONLY.
   // Filtering by both nurse_id (facility) and ward name prevents same-named wards
   // in other facilities (e.g. "IP Ward" in Ikoyi vs Ligali) from blocking each other.
-  const { data: scheduledWardNames = [], isFetching: isFetchingScheduledWards } = useQuery<string[]>({
+  const {
+    data: wardScheduleData = { fullyLocked: [], hasDraft: [] },
+    isFetching: isFetchingScheduledWards,
+  } = useQuery<{ fullyLocked: string[]; hasDraft: string[] }>({
     queryKey: [
       "gen-scheduled-wards",
       genForm.facility,
@@ -467,34 +470,31 @@ function RotaPage() {
       facilityWardNames,
     ],
     queryFn: async () => {
-      if (facilityNurseIds.length === 0 || facilityWardNames.length === 0) return [];
+      if (facilityNurseIds.length === 0 || facilityWardNames.length === 0)
+        return { fullyLocked: [], hasDraft: [] };
       const genEndDate = new Date(genForm.startDate + "T00:00:00");
       genEndDate.setDate(genEndDate.getDate() + 27);
-      const base = {
-        from: genForm.startDate,
-        to: ymd(genEndDate),
-        nurseIds: facilityNurseIds,
-        wardNames: facilityWardNames,
-      };
-      // Two passes: wards with ANY assignment, and wards with at least one DRAFT.
-      // A ward is "fully locked" (hide from dropdown) only when it has assignments
-      // but NONE are draft — i.e. everything is submitted/approved/published.
-      // A ward with mixed published+draft (e.g. after post-publish leave approval)
-      // is shown so the admin can regenerate it.
-      const nurseIdsParam = base.nurseIds.join(",");
-      const wardNamesParam = encodeURIComponent(base.wardNames.join(","));
+      const nurseIdsParam = facilityNurseIds.join(",");
+      const wardNamesParam = encodeURIComponent(facilityWardNames.join(","));
+      const from = genForm.startDate;
+      const to = ymd(genEndDate);
       const [anyData, draftData] = await Promise.all([
         api.get<{ ward: string }[]>(
-          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${base.from}&to=${base.to}&ward_in=${wardNamesParam}`,
+          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${from}&to=${to}&ward_in=${wardNamesParam}`,
         ),
         api.get<{ ward: string }[]>(
-          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${base.from}&to=${base.to}&ward_in=${wardNamesParam}&status=draft`,
+          `/shift-assignments?nurse_ids=${nurseIdsParam}&from=${from}&to=${to}&ward_in=${wardNamesParam}&status=draft`,
         ),
       ]);
       const withAny = new Set(anyData.map((a) => a.ward));
       const withDraft = new Set(draftData.map((a) => a.ward));
-      // Hide only wards that have assignments AND none of them are draft.
-      return [...withAny].filter((w) => !withDraft.has(w));
+      return {
+        // Fully locked = has assignments but none are draft (all approved/published).
+        // These are completely hidden from the dropdown.
+        fullyLocked: [...withAny].filter((w) => !withDraft.has(w)),
+        // Has draft = at least one draft assignment exists; shown as disabled option.
+        hasDraft: [...withDraft],
+      };
     },
     enabled:
       !!genForm.startDate &&
@@ -502,19 +502,25 @@ function RotaPage() {
       facilityNurseIds.length > 0 &&
       facilityWardNames.length > 0,
   });
+  const scheduledWardNames = wardScheduleData.fullyLocked;
+  const draftScheduledWards = wardScheduleData.hasDraft;
 
   // Wards available for generation = those without fully-locked existing assignments.
+  // Wards with draft schedules remain in the list but are shown as disabled options.
   const availableGenWards = useMemo(
     () => genWards.filter((w) => !scheduledWardNames.includes(w.name)),
     [genWards, scheduledWardNames],
   );
 
-  // If the currently selected ward gets excluded (e.g. start date changed), clear it.
+  // If the currently selected ward gets excluded (date changed or schedule exists), clear it.
   useEffect(() => {
-    if (genForm.ward && scheduledWardNames.includes(genForm.ward)) {
+    if (
+      genForm.ward &&
+      (scheduledWardNames.includes(genForm.ward) || draftScheduledWards.includes(genForm.ward))
+    ) {
       setGenForm((f) => ({ ...f, ward: "" }));
     }
-  }, [scheduledWardNames, genForm.ward]);
+  }, [scheduledWardNames, draftScheduledWards, genForm.ward]);
 
   // Derive the dominant lock status for the FILTERED view only.
   // If the user has filtered to a specific ward, only that ward's assignments
@@ -720,9 +726,14 @@ function RotaPage() {
         });
       }
 
-      await Promise.all(
-        internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
-      );
+      try {
+        await Promise.all(
+          internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
+        );
+      } catch (e: unknown) {
+        toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
+        return;
+      }
     }
 
     const schedulingNurses = [
@@ -1614,9 +1625,17 @@ function RotaPage() {
                 <option value="">
                   {isFetchingScheduledWards ? "Loading wards…" : "Select ward…"}
                 </option>
-                {availableGenWards.map((w) => (
-                  <option key={w.name}>{w.name}</option>
-                ))}
+                {availableGenWards.map((w) =>
+                  draftScheduledWards.includes(w.name) ? (
+                    <option key={w.name} value={w.name} disabled>
+                      {w.name} (schedule exists)
+                    </option>
+                  ) : (
+                    <option key={w.name} value={w.name}>
+                      {w.name}
+                    </option>
+                  ),
+                )}
               </select>
             </div>
 
