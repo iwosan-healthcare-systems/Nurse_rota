@@ -748,9 +748,15 @@ function RotaPage() {
 
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
-        // Period 0 → nextBase 0 (ER first), period 1 → nextBase 1 (GOPD first), …
-        const periodNum = Math.floor(periodOffset / DAYS);
-        const nextBase = periodNum % facilityWardNames.length;
+        // Derive next rotation base from the first intern's CURRENT ward in the DB.
+        // This avoids the epoch-date precision problem: if the earliest DB assignment
+        // isn't exactly day-0 of period 1, periodOffset / DAYS rounds to 0 and every
+        // period gets the same ward assignment.  Using the actual stored ward is
+        // always correct — after each period's PATCH, the profile reflects where the
+        // intern just was, so the next rotation is unambiguously one step forward.
+        const firstCurrentWard = parseWards(sortedInterns[0]?.ward ?? null)[0] ?? null;
+        const currentIdx = firstCurrentWard !== null ? facilityWardNames.indexOf(firstCurrentWard) : -1;
+        const nextBase = (currentIdx + 1 + facilityWardNames.length) % facilityWardNames.length;
         internsToSchedule = sortedInterns.map((n, idx) => ({
           ...n,
           ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
