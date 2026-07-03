@@ -194,7 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canManageStaff: cap("manage_staff", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canManageWards: cap("manage_wards", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canEditRota: cap("edit_rota", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
-    canAutoGenerate: cap("auto_generate", ["admin", "cno", "chief_matron"]),
+    canAutoGenerate: cap("auto_generate", ["admin", "head_nurse"]),
     canSubmitApproval: cap("submit_approval", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canApproveChiefMatron: cap("approve_chief_matron", ["admin", "chief_matron"]),
     canApproveCno: cap("approve_cno", ["admin", "cno"]),
