@@ -458,7 +458,7 @@ function RotaPage() {
   // Wards that already have assignments in the date window FOR THIS FACILITY ONLY.
   // Filtering by both nurse_id (facility) and ward name prevents same-named wards
   // in other facilities (e.g. "IP Ward" in Ikoyi vs Ligali) from blocking each other.
-  const { data: scheduledWardNames = [] } = useQuery<string[]>({
+  const { data: scheduledWardNames = [], isFetching: isFetchingScheduledWards } = useQuery<string[]>({
     queryKey: [
       "gen-scheduled-wards",
       genForm.facility,
@@ -1608,10 +1608,12 @@ function RotaPage() {
                 title="Ward"
                 value={genForm.ward}
                 onChange={(e) => setGenForm((f) => ({ ...f, ward: e.target.value }))}
-                disabled={!genForm.facility}
+                disabled={!genForm.facility || isFetchingScheduledWards}
                 className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
               >
-                <option value="">Select ward…</option>
+                <option value="">
+                  {isFetchingScheduledWards ? "Loading wards…" : "Select ward…"}
+                </option>
                 {availableGenWards.map((w) => (
                   <option key={w.name}>{w.name}</option>
                 ))}
@@ -1697,7 +1699,13 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={!genForm.facility || !genForm.ward || !genForm.startDate || busy}
+              disabled={
+                !genForm.facility ||
+                !genForm.ward ||
+                !genForm.startDate ||
+                busy ||
+                isFetchingScheduledWards
+              }
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />
