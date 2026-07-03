@@ -83,7 +83,7 @@ type OffNurse = {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-GB", {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     weekday: "short",
     day: "numeric",
     month: "short",

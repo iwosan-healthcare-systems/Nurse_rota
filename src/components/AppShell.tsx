@@ -267,7 +267,7 @@ export function AppShell() {
 }
 
 function fmtDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-GB", {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -281,8 +281,8 @@ function clusterDates(rawDates: string[]): string[][] {
   let cur: string[] = [sorted[0]];
   for (let i = 1; i < sorted.length; i++) {
     const diff = Math.round(
-      (new Date(sorted[i] + "T00:00:00").getTime() -
-        new Date(sorted[i - 1] + "T00:00:00").getTime()) /
+      (new Date(sorted[i].slice(0, 10) + "T00:00:00").getTime() -
+        new Date(sorted[i - 1].slice(0, 10) + "T00:00:00").getTime()) /
         86400000,
     );
     if (diff > 14) {
@@ -361,7 +361,7 @@ function RotaReminderBell({
       const periodStart = latest[0];
       const periodEnd = latest[latest.length - 1];
 
-      const nextStartDt = new Date(periodEnd + "T00:00:00");
+      const nextStartDt = new Date(periodEnd.slice(0, 10) + "T00:00:00");
       nextStartDt.setDate(nextStartDt.getDate() + 1);
       const nextPeriodStart = ymd(nextStartDt);
 

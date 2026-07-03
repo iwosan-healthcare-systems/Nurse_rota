@@ -379,7 +379,7 @@ function NurseDashboard() {
           ) : (
             <div className="space-y-2">
               {upcomingAssignments.map((a) => {
-                const dt = new Date(a.shift_date + "T00:00:00");
+                const dt = new Date(a.shift_date.slice(0, 10) + "T00:00:00");
                 return (
                   <div key={a.shift_date} className="flex items-center justify-between text-sm">
                     <div className="flex items-center gap-2">

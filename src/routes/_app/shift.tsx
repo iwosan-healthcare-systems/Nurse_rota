@@ -270,7 +270,7 @@ function ShiftPage() {
         .catch(() => []);
 
       const periodStart = winRow[0]?.shift_date ?? lb;
-      const periodEnd = new Date(periodStart + "T00:00:00");
+      const periodEnd = new Date(periodStart.slice(0, 10) + "T00:00:00");
       periodEnd.setDate(periodEnd.getDate() + 27);
       const pe = `${periodEnd.getFullYear()}-${String(periodEnd.getMonth() + 1).padStart(2, "0")}-${String(periodEnd.getDate()).padStart(2, "0")}`;
 

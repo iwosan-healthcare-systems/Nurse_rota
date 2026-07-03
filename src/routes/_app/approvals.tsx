@@ -138,7 +138,7 @@ function winKey(win: RotaWindow): string {
 }
 
 function fmtDate(d: string) {
-  return new Date(d + "T00:00:00").toLocaleDateString("en-GB", {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -146,7 +146,7 @@ function fmtDate(d: string) {
 }
 
 function scheduleEndDate(startDate: string): string {
-  const d = new Date(startDate + "T00:00:00");
+  const d = new Date(startDate.slice(0, 10) + "T00:00:00");
   d.setDate(d.getDate() + 27);
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -155,8 +155,8 @@ function scheduleEndDate(startDate: string): string {
 
 function dateRange(start: string, end: string): string[] {
   const out: string[] = [];
-  const cur = new Date(start + "T00:00:00");
-  const endDt = new Date(end + "T00:00:00");
+  const cur = new Date(start.slice(0, 10) + "T00:00:00");
+  const endDt = new Date(end.slice(0, 10) + "T00:00:00");
   while (cur <= endDt) {
     const y = cur.getFullYear();
     const m = String(cur.getMonth() + 1).padStart(2, "0");

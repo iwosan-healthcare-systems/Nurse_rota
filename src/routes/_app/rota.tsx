@@ -66,7 +66,6 @@ export const Route = createFileRoute("/_app/rota")({
 });
 
 const DAYS = 28;
-const SHIFT_CYCLE: ShiftCode[] = ["M", "N", "NC", "MWC", "OFF", "LEAVE"];
 const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"];
 
 const shiftStyles: Record<ShiftCode, string> = {
@@ -193,6 +192,10 @@ function RotaPage() {
   // Drag — ref for event handlers (synchronous), state only for visual ring
   const draggingRef = useRef<Assignment | null>(null);
   const [dragging, setDragging] = useState<Assignment | null>(null);
+
+  // Shift picker popover — opened by clicking a draft cell
+  type ShiftPicker = { nurseId: string; dateStr: string; ward: string | null; existingId: string | null; x: number; y: number; above: boolean };
+  const [shiftPicker, setShiftPicker] = useState<ShiftPicker | null>(null);
 
   // ── Auto-detect the active schedule window start ──────────────────────────
   // Strategy: a 28-day window started at most 27 days ago still contains today.
@@ -781,7 +784,11 @@ function RotaPage() {
           >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
           .catch(() => []);
         if (epochRows[0]?.shift_date) {
-          const epochDate = new Date(epochRows[0].shift_date + "T00:00:00");
+          // Slice to 10 chars — the DB can return a full ISO timestamp
+          // ("2024-01-15T00:00:00+00:00") and appending "T00:00:00" to that
+          // produces an unparseable string → Invalid Date → periodOffset = NaN
+          // → group[NaN] = undefined → TypeError inside scheduleCoverageNurses.
+          const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
           periodOffset = Math.round(
             (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
           );
@@ -1036,19 +1043,39 @@ function RotaPage() {
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
-  async function cycleCell(nurseId: string, dateStr: string, ward: string | null) {
+  function openShiftPicker(
+    e: React.MouseEvent<HTMLButtonElement>,
+    nurseId: string,
+    dateStr: string,
+    ward: string | null,
+  ) {
     if (!canEdit) return;
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
-    // Per-cell lock: only prevent editing cells that have already been submitted/approved/published.
-    // Do not block on isWindowLocked — that would prevent editing draft cells in wards whose
-    // schedule is still draft, just because another ward in the view has been submitted.
     if (existing && existing.status !== "draft") return;
-    const next = existing
-      ? SHIFT_CYCLE[(SHIFT_CYCLE.indexOf(existing.shift) + 1) % SHIFT_CYCLE.length]
-      : "M";
-    if (existing) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    // Picker is ~220px wide, 40px tall. Clamp so it stays inside the viewport.
+    const pickerW = 220;
+    const x = Math.min(rect.left, window.innerWidth - pickerW - 8);
+    const spaceBelow = window.innerHeight - rect.bottom;
+    const above = spaceBelow < 60;
+    setShiftPicker({
+      nurseId,
+      dateStr,
+      ward,
+      existingId: existing?.id ?? null,
+      x,
+      y: above ? rect.top - 44 : rect.bottom + 4,
+      above,
+    });
+  }
+
+  async function applyShift(shift: ShiftCode) {
+    if (!shiftPicker) return;
+    const { nurseId, dateStr, ward, existingId } = shiftPicker;
+    setShiftPicker(null);
+    if (existingId) {
       await api
-        .patch(`/shift-assignments/${existing.id}`, { shift: next })
+        .patch(`/shift-assignments/${existingId}`, { shift })
         .catch((e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to update"));
     } else {
       await api
@@ -1056,7 +1083,7 @@ function RotaPage() {
           nurse_id: nurseId,
           ward,
           shift_date: dateStr,
-          shift: next,
+          shift,
           status: "draft",
           created_by: user?.id ?? null,
         })
@@ -1098,8 +1125,8 @@ function RotaPage() {
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        {/* Period nav — only shown once a schedule exists */}
-        {hasSchedule && (
+        {/* Period nav — shown once the window is determined, even on empty next period */}
+        {!windowLoading && (
           <div className="inline-flex rounded-md border bg-card">
             <button
               type="button"
@@ -1450,7 +1477,7 @@ function RotaPage() {
                           <button
                             type="button"
                             draggable={!!cell && canEdit && cell.status === "draft"}
-                            onClick={() => cycleCell(n.id, dateStr, n.ward)}
+                            onClick={(e) => openShiftPicker(e, n.id, dateStr, n.ward)}
                             onDragStart={(e) => {
                               if (!cell || !canEdit || cell.status !== "draft") return;
                               // Write to ref immediately — visible to all handlers this frame
@@ -1555,6 +1582,31 @@ function RotaPage() {
             </span>
           </div>
         </div>
+      )}
+
+      {/* Shift picker — appears when a draft cell is clicked */}
+      {shiftPicker && (
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setShiftPicker(null)} />
+          <div
+            className="fixed z-50 flex gap-1 rounded-lg border bg-card p-1.5 shadow-lg"
+            style={{ left: shiftPicker.x, top: shiftPicker.y }}
+          >
+            {(["M", "N", "NC", "MWC", "OFF"] as ShiftCode[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => applyShift(s)}
+                className={cn(
+                  "min-w-[38px] rounded border px-2 py-1 text-[11px] font-bold transition hover:opacity-75",
+                  shiftStyles[s],
+                )}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
+        </>
       )}
 
       {/* Auto-generate dialog */}
