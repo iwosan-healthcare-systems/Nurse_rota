@@ -569,7 +569,7 @@ function ApprovalsPage() {
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const wardLabel =
         win.ward === null
-          ? " — Matron / Coverage Nurses / Nurse Intern"
+          ? " — Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day"
           : ` — ${win.ward}`;
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
@@ -637,7 +637,7 @@ function ApprovalsPage() {
       const pdfFacilityLabel = win.facility ? ` · ${win.facility}` : "";
       const pdfWardLabel =
         win.ward === null
-          ? " — Matron / Coverage Nurses / Nurse Intern"
+          ? " — Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day"
           : ` — ${win.ward}`;
       const html = `<!DOCTYPE html>
 <html><head>
@@ -733,7 +733,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Header */}
         <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage / Interns"}</p>
+            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage / Interns / Porter-Day / NA-Day"}</p>
             {win.facility && (
               <p className="text-xs font-medium text-primary/80 mt-0.5">{win.facility}</p>
             )}

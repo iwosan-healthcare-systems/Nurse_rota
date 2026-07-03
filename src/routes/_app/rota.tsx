@@ -29,6 +29,7 @@ import {
   isGlobalHead,
   isMatron,
   isPorterType,
+  isNADayType,
   SHIFT_TIMES,
   type ShiftCode,
   type NurseInput,
@@ -587,16 +588,18 @@ function RotaPage() {
     const facilityMatrons = facilityNurses.filter((n) => isMatron(n.role));
     const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
     const facilityPorters = facilityNurses.filter((n) => isPorterType(n.role));
+    const facilityNADay = facilityNurses.filter((n) => isNADayType(n.role));
 
     // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards).
-    // Matrons and porters are excluded here and handled separately since they are
+    // Matrons, porters, and NA-Day are excluded here and handled separately since they are
     // facility-wide (ward = null) and would otherwise be filtered out of ward runs.
     let wardNurses = facilityNurses.filter(
       (n) =>
         !isGlobalHead(n.role) &&
         !isMatron(n.role) &&
         !isInternType(n.role) &&
-        !isPorterType(n.role),
+        !isPorterType(n.role) &&
+        !isNADayType(n.role),
     );
     if (isWardRun) {
       wardNurses = wardNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
@@ -636,9 +639,10 @@ function RotaPage() {
     let includeHeads = !isWardRun;
     let includeInterns = !isWardRun;
     let includePorters = !isWardRun;
+    let includeNADay = !isWardRun;
 
     if (isWardRun) {
-      const [matronsRows, headsRows, internsRows, portersRows] = await Promise.all([
+      const [matronsRows, headsRows, internsRows, portersRows, naDayRows] = await Promise.all([
         facilityMatrons.length > 0
           ? api
               .get<
@@ -667,11 +671,19 @@ function RotaPage() {
               >(`/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
+        facilityNADay.length > 0
+          ? api
+              .get<
+                { id: string }[]
+              >(`/shift-assignments?nurse_ids=${facilityNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .catch(() => [])
+          : Promise.resolve([] as { id: string }[]),
       ]);
       includeMatrons = matronsRows.length === 0 && facilityMatrons.length > 0;
       includeHeads = headsRows.length === 0 && facilityHeads.length > 0;
       includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
       includePorters = portersRows.length === 0 && facilityPorters.length > 0;
+      includeNADay = naDayRows.length === 0 && facilityNADay.length > 0;
     }
 
     // Apply intern rotation when generating a full-facility or first ward run.
@@ -719,13 +731,16 @@ function RotaPage() {
       ...(includeHeads ? facilityHeads : []),
       ...(includeInterns ? internsToSchedule : []),
       ...(includePorters ? facilityPorters : []),
+      ...(includeNADay ? facilityNADay : []),
     ];
 
+    const facilityOnlyFirst =
+      includeMatrons || includeHeads || includeInterns || includePorters || includeNADay;
     const statusNote =
-      isWardRun && !includeMatrons && !includeHeads && !includeInterns
-        ? " (Matron / Coverage Nurses / Nurse Intern kept from previous run)"
-        : isWardRun && (includeMatrons || includeHeads || includeInterns)
-          ? " (incl. Matron / Coverage Nurses / Nurse Intern — first run)"
+      isWardRun && !facilityOnlyFirst
+        ? " (Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day kept from previous run)"
+        : isWardRun && facilityOnlyFirst
+          ? " (incl. Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day — first run)"
           : "";
 
     setGenOpen(false);

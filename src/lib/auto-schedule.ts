@@ -630,10 +630,16 @@ function scheduleCoverageNurses(
     satDate.setDate(satDate.getDate() + d);
     if (satDate.getDay() !== 6) continue; // process each Saturday only
 
-    // Exclude nurses whose NC block or post-NC rest covers Saturday (d) or Sunday (d+1).
+    // Exclude nurses whose NC block or post-NC rest covers Saturday (d) or Sunday (d+1),
+    // AND nurses whose NC block starts on Monday (d+2) or Tuesday (d+3) — assigning MWC
+    // to such a nurse would cause NC (highest-priority check) to override the forced M/OFF
+    // assignments that immediately follow MWC, creating 6+ consecutive shift blocks.
     const excluded = new Set<number>();
     for (const [nurseIdx, startD] of ncStartDay) {
       if ((d >= startD && d < startD + 8) || (d + 1 >= startD && d + 1 < startD + 8)) {
+        excluded.add(nurseIdx);
+      }
+      if (startD >= d + 2 && startD <= d + 3) {
         excluded.add(nurseIdx);
       }
     }
@@ -669,31 +675,31 @@ function scheduleCoverageNurses(
 
     // Which phase the nurse is in on Friday determines both whether a pre-MWC
     // rest day is needed and what phase follows after the post-MWC OFFs:
-    //   pos 0-3  (M block)       : MWC merges into M; 4 OFFs after; resume N (pos 8).
-    //   pos 4-5  (early 1st OFF) : Fri naturally OFF; 2 OFFs (Mon-Tue) after → N Wed.
+    //   pos 0-3  (M block)       : MWC merges into M; 4 OFFs after (Mon-Thu); resume N Fri.
+    //   pos 4-5  (early 1st OFF) : Fri naturally OFF; 3 OFFs (Mon-Wed) after → N Thu.
     //   pos 6-7  (deep 1st OFF)  : 3+ OFFs already precede; add M M Mon/Tue after MWC;
     //                              4 OFFs after M M; resume N.
     //                              pattern: OFF OFF OFF MWC MWC M M OFF OFF OFF OFF → N …
-    //   pos 8-11 (N block)       : force Fri OFF for rest; 2 OFFs (Mon-Tue) after → M Wed.
-    //   pos 12-15 (2nd OFF)      : N already done; Fri naturally OFF; 2 OFFs (Mon-Tue) → M Wed.
+    //   pos 8-11 (N block)       : force Fri OFF; 3 OFFs (Mon-Wed) after → M Thu.
+    //   pos 12-15 (2nd OFF)      : N already done; Fri naturally OFF; 3 OFFs (Mon-Wed) → M Thu.
     const mBlockOnFriday = fridayCyclePos < 4;
     const deepFirstOff = fridayCyclePos >= 6 && fridayCyclePos < 8;
     const cycleOffset = fridayCyclePos < 8 ? 8 : 0; // before N-phase done → N; else → M
-    const resumeAt = mBlockOnFriday ? d + 6 : deepFirstOff ? d + 8 : d + 4;
+    const resumeAt = mBlockOnFriday ? d + 6 : deepFirstOff ? d + 8 : d + 5;
     if (!mwcNurseResumeDays.has(mwcNurse)) mwcNurseResumeDays.set(mwcNurse, []);
     mwcNurseResumeDays.get(mwcNurse)!.push({ resumeAt, cycleOffset });
 
     // Forced OFFs (and forced M for deep-1st-OFF case) around MWC:
     //   M-block (pos 0-3)       : no pre-MWC Fri OFF; 4 OFFs (Mon-Thu) after → N Fri
-    //   1st OFF early (pos 4-5) : Fri naturally OFF; 2 OFFs (Mon-Tue) after → N Wed
+    //   1st OFF early (pos 4-5) : Fri naturally OFF; 3 OFFs (Mon-Wed) after → N Thu
     //   1st OFF deep (pos 6-7)  : Fri naturally OFF; M Mon/Tue; 4 OFFs (Wed-Sat) → N Sun
-    //   N block (pos 8-11)      : force Fri OFF; 2 OFFs (Mon-Tue) after → M Wed
-    //   2nd OFF (pos 12-15)     : Fri naturally OFF; 2 OFFs (Mon-Tue) after → M Wed
+    //   N block (pos 8-11)      : force Fri OFF; 3 OFFs (Mon-Wed) after → M Thu
+    //   2nd OFF (pos 12-15)     : Fri naturally OFF; 3 OFFs (Mon-Wed) after → M Thu
     const forcedOffDays = mBlockOnFriday
       ? [d + 2, d + 3, d + 4, d + 5]
       : deepFirstOff
         ? [d + 4, d + 5, d + 6, d + 7]
-        : [d - 1, d + 2, d + 3];
+        : [d - 1, d + 2, d + 3, d + 4];
     for (const off of forcedOffDays) {
       if (off < 0 || off >= days) continue;
       const offDate = new Date(startDate);
@@ -1001,6 +1007,13 @@ export function generateSchedule(opts: {
       periodOffset + naDaySeed,
     );
 
+    // NA-Day nurses assigned to this ward in their profile still count toward
+    // the ward's morning NA minimum even though they're scheduled facility-wide
+    // (ward=null). Include them in enforceMinima so their M shifts are counted.
+    const naDayForWard = nurses.filter(
+      (n) => isNADayType(n.role) && parseWards(n.ward)[0] === ward.name,
+    );
+
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
     // no nurses here), we skip enforcement — it would always report violations
@@ -1008,7 +1021,7 @@ export function generateSchedule(opts: {
     if (wardNurses.length > 0) {
       const { violations: wardViolations, extraPromos } = enforceMinima(
         out,
-        wardNurses,
+        [...wardNurses, ...naDayForWard],
         ward,
         days,
         opts.startDate,
