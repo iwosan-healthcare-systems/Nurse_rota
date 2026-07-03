@@ -695,10 +695,40 @@ function RotaPage() {
       includeNADay = naDayRows.length === 0 && facilityNADay.length > 0;
     }
 
+    // ── Period offset (epoch) ────────────────────────────────────────────────
+    // Compute how many days have elapsed since the facility's very first scheduled
+    // day. This is used both for cycle-phase continuity in generateSchedule AND for
+    // the intern rotation base index so the rotation is deterministic by period
+    // number rather than depending on the ward currently stored in the nurse's DB
+    // profile (which may be stale).
+    let periodOffset = 0;
+    {
+      const facilityIds = facilityNurses.map((n) => n.id);
+      if (facilityIds.length > 0) {
+        const dayBefore = new Date(genStart);
+        dayBefore.setDate(dayBefore.getDate() - 1);
+        const epochRows = await api
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
+          .catch(() => []);
+        if (epochRows[0]?.shift_date) {
+          // Slice to 10 chars — the DB can return a full ISO timestamp and
+          // appending "T00:00:00" to that produces an unparseable string →
+          // Invalid Date → periodOffset = NaN → crash inside scheduleCoverageNurses.
+          const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
+          periodOffset = Math.round(
+            (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
+          );
+        }
+      }
+    }
+
     // Apply intern rotation when generating a full-facility or first ward run.
     // Sort interns by name for determinism, then distribute one per ward so each
-    // intern gets a unique ward. The base index advances by 1 each generation,
-    // giving a true round-robin rotation across 28-day periods.
+    // intern gets a unique ward. The base index is derived from the period number
+    // (periodOffset ÷ DAYS) so rotation is deterministic and immune to stale ward
+    // data in the nurses query.
     let internsToSchedule = facilityInterns;
     if (includeInterns && genForm.rotateInterns) {
       // Use the same ward list as the generate dialog dropdown: wards that nurses
@@ -709,11 +739,9 @@ function RotaPage() {
 
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
-        const firstWard = parseWards(sortedInterns[0]?.ward ?? null)[0] ?? null;
-        const curBase = firstWard
-          ? Math.max(0, facilityWardNames.indexOf(firstWard))
-          : facilityWardNames.length - 1;
-        const nextBase = (curBase + 1) % facilityWardNames.length;
+        // Period 0 → nextBase 0 (ER first), period 1 → nextBase 1 (GOPD first), …
+        const periodNum = Math.round(periodOffset / DAYS);
+        const nextBase = periodNum % facilityWardNames.length;
         internsToSchedule = sortedInterns.map((n, idx) => ({
           ...n,
           ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
@@ -771,29 +799,8 @@ function RotaPage() {
           (!w.facility || w.facility === genForm.facility),
       );
 
-      // Find the earliest ever-scheduled day for this facility so the cycle
-      // phases continue seamlessly across 28-day periods.
-      let periodOffset = 0;
-      const facilityIds = facilityNurses.map((n) => n.id);
-      if (facilityIds.length > 0) {
-        const dayBefore = new Date(genStart);
-        dayBefore.setDate(dayBefore.getDate() - 1);
-        const epochRows = await api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
-          .catch(() => []);
-        if (epochRows[0]?.shift_date) {
-          // Slice to 10 chars — the DB can return a full ISO timestamp
-          // ("2024-01-15T00:00:00+00:00") and appending "T00:00:00" to that
-          // produces an unparseable string → Invalid Date → periodOffset = NaN
-          // → group[NaN] = undefined → TypeError inside scheduleCoverageNurses.
-          const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
-          periodOffset = Math.round(
-            (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
-          );
-        }
-      }
+      // periodOffset was computed before the rotation block above and is
+      // already in scope — no need to re-query the epoch here.
 
       const {
         assignments: draft,
