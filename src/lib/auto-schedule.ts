@@ -598,18 +598,30 @@ function scheduleCoverageNurses(
   }
 
   // Assign ONE nurse per NC slot, rotating each period.
-  // Dedup so no nurse ever receives two NC blocks in the same period.
-  const ncStartDay = new Map<number, number>(); // nurseIdx → NC start day
+  // First pass: prefer nurses with no NC block yet this period (dedup).
+  // Fallback: if all candidates already have NC, allow a second assignment so
+  // every NC slot is covered — the nurse doing two NC blocks is the least-recently
+  // used candidate to spread the extra load fairly.
+  const ncStartDays = new Map<number, number[]>(); // nurseIdx → all NC start days
   const ncAssigned = new Set<number>();
   for (const slot of [...slotCandidates.keys()].sort((a, b) => a - b)) {
     const candidates = slotCandidates.get(slot)!;
+    let covered = false;
     for (let attempt = 0; attempt < candidates.length; attempt++) {
       const candidate = candidates[(periodsElapsed + seed + attempt) % candidates.length];
       if (!ncAssigned.has(candidate)) {
-        ncStartDay.set(candidate, slot);
+        if (!ncStartDays.has(candidate)) ncStartDays.set(candidate, []);
+        ncStartDays.get(candidate)!.push(slot);
         ncAssigned.add(candidate);
+        covered = true;
         break;
       }
+    }
+    // All candidates already have NC — allow a second block so the slot isn't empty.
+    if (!covered && candidates.length > 0) {
+      const candidate = candidates[(periodsElapsed + seed) % candidates.length];
+      if (!ncStartDays.has(candidate)) ncStartDays.set(candidate, []);
+      ncStartDays.get(candidate)!.push(slot);
     }
   }
 
@@ -635,12 +647,14 @@ function scheduleCoverageNurses(
     // to such a nurse would cause NC (highest-priority check) to override the forced M/OFF
     // assignments that immediately follow MWC, creating 6+ consecutive shift blocks.
     const excluded = new Set<number>();
-    for (const [nurseIdx, startD] of ncStartDay) {
-      if ((d >= startD && d < startD + 8) || (d + 1 >= startD && d + 1 < startD + 8)) {
-        excluded.add(nurseIdx);
-      }
-      if (startD >= d + 2 && startD <= d + 3) {
-        excluded.add(nurseIdx);
+    for (const [nurseIdx, starts] of ncStartDays) {
+      for (const startD of starts) {
+        if ((d >= startD && d < startD + 8) || (d + 1 >= startD && d + 1 < startD + 8)) {
+          excluded.add(nurseIdx);
+        }
+        if (startD >= d + 2 && startD <= d + 3) {
+          excluded.add(nurseIdx);
+        }
       }
     }
 
@@ -665,7 +679,9 @@ function scheduleCoverageNurses(
     // Compute the effective cycle position on the Friday before MWC.
     // If the nurse already had NC this period their cycle restarted from M at (ncS+8),
     // so use that effective position rather than the staggered base cycle.
-    const ncS = ncStartDay.get(mwcNurse);
+    const nurseNcStarts = ncStartDays.get(mwcNurse) ?? [];
+    const pastStarts = nurseNcStarts.filter((s) => s <= d - 1);
+    const ncS = pastStarts.length > 0 ? Math.max(...pastStarts) : undefined;
     const fridayCyclePos =
       d === 0
         ? CL - 4 // no prior Friday: treat as 2nd OFF block (pos 12)
@@ -734,10 +750,16 @@ function scheduleCoverageNurses(
         continue;
       }
 
-      const ncStart = ncStartDay.get(i);
-      const inNcBlock = ncStart !== undefined && d >= ncStart && d < ncStart + 4;
-      const inPostNcOff = ncStart !== undefined && d >= ncStart + 4 && d < ncStart + 8;
-      const afterNcOff = ncStart !== undefined && d >= ncStart + 8;
+      // Find the most recently started NC block at or before day d.
+      // A nurse may have multiple NC blocks if all candidates were exhausted for a slot.
+      const nurseNcStarts = ncStartDays.get(i) ?? [];
+      const pastNcStarts = nurseNcStarts.filter((s) => s <= d);
+      const relevantNcStart =
+        pastNcStarts.length > 0 ? Math.max(...pastNcStarts) : undefined;
+      const inNcBlock = relevantNcStart !== undefined && d < relevantNcStart + 4;
+      const inPostNcOff =
+        relevantNcStart !== undefined && !inNcBlock && d < relevantNcStart + 8;
+      const afterNcOff = relevantNcStart !== undefined && !inNcBlock && !inPostNcOff;
 
       let shift: ShiftCode;
       if (inNcBlock) {
@@ -766,7 +788,7 @@ function scheduleCoverageNurses(
           for (const entry of ncMwcEntries) {
             // Only apply MWC resume if it falls after the NC+rest period; a MWC that
             // happened before or during NC was overridden by the NC block and is stale.
-            if (d >= entry.resumeAt && entry.resumeAt > ncStart! + 8) {
+            if (d >= entry.resumeAt && entry.resumeAt > relevantNcStart! + 8) {
               mwcResumeAt = entry.resumeAt;
               mwcCycleOffset = entry.cycleOffset;
             }
@@ -775,7 +797,7 @@ function scheduleCoverageNurses(
         shift =
           mwcResumeAt !== undefined
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
-            : NURSE_CYCLE[(d - (ncStart! + 8)) % CL];
+            : NURSE_CYCLE[(d - (relevantNcStart! + 8)) % CL];
       } else {
         // Compute base shift: post-MWC resumed cycle or the regular staggered cycle.
         // cycleOffset 8 → resume N (M-block MWC); cycleOffset 0 → resume M (other).

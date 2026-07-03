@@ -112,7 +112,7 @@ router.post('/upsert', requireRole('admin', 'head_nurse'), wrap(async (req, res)
   }
 }));
 
-router.patch('/:id', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
+router.patch('/:id', requireRole('admin', 'cno', 'chief_matron', 'head_nurse', 'hr_admin'), wrap(async (req, res) => {
   const allowed = ['shift', 'ward', 'status', 'shift_date'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
@@ -131,7 +131,7 @@ router.patch('/:id', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(as
 }));
 
 // Batch update by filter
-router.patch('/', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
+router.patch('/', requireRole('admin', 'cno', 'chief_matron', 'head_nurse', 'hr_admin'), wrap(async (req, res) => {
   const { nurse_ids, shift_date_from, shift_date_to, ward, status: filterStatus, neq_status, shift: filterShift } = req.query;
   const { shift, status, ward: newWard } = req.body;
 
@@ -216,7 +216,7 @@ router.delete('/', requireRole('admin', 'head_nurse'), wrap(async (req, res) => 
   res.json({ success: true, deleted: result.rowCount });
 }));
 
-router.delete('/:id', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
+router.delete('/:id', requireRole('admin', 'cno', 'chief_matron', 'head_nurse', 'hr_admin'), wrap(async (req, res) => {
   await pool.query('DELETE FROM shift_assignments WHERE id = $1', [req.params.id]);
   res.json({ success: true });
 }));
