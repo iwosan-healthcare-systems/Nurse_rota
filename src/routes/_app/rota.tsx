@@ -1069,8 +1069,6 @@ function RotaPage() {
     if (!canEdit) return;
     // Only swap cells that are both still in draft status.
     if (a.status !== "draft" || b.status !== "draft") return;
-    if (a.shift_date !== b.shift_date)
-      return toast.error("You can only swap shifts on the same day");
     await Promise.all([
       api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
       api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
@@ -1078,7 +1076,9 @@ function RotaPage() {
       toast.error(e instanceof Error ? e.message : "Swap failed");
       throw e;
     });
-    await logAudit("Swapped shifts", a.shift_date);
+    const dateNote =
+      a.shift_date === b.shift_date ? a.shift_date : `${a.shift_date} ↔ ${b.shift_date}`;
+    await logAudit("Swapped shifts", dateNote);
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
@@ -1436,9 +1436,9 @@ function RotaPage() {
                       // Visual-only: uses state (safe to lag one render behind)
                       const isDragOver =
                         dragging &&
-                        dragging.shift_date === dateStr &&
                         cell &&
-                        dragging.id !== cell.id;
+                        dragging.id !== cell.id &&
+                        cell.status === "draft";
                       return (
                         <td
                           key={dateStr}
@@ -1464,9 +1464,10 @@ function RotaPage() {
                               setDragging(null);
                             }}
                             onDragOver={(e) => {
-                              // Use ref — guaranteed current even before React re-renders
+                              // Use ref — guaranteed current even before React re-renders.
+                              // Allow dropping on any OTHER draft cell (any date, any nurse row).
                               const src = draggingRef.current;
-                              if (src && cell && src.id !== cell.id && src.shift_date === dateStr) {
+                              if (src && cell && src.id !== cell.id && cell.status === "draft") {
                                 e.preventDefault();
                                 e.dataTransfer.dropEffect = "move";
                               }
