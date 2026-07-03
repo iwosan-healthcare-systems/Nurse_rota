@@ -96,8 +96,13 @@ router.patch('/bulk-target-hours', requireRole('admin', 'hr_admin'), wrap(async 
   res.json({ success: true });
 }));
 
-router.patch('/:id', requireRole('admin', 'hr_admin'), wrap(async (req, res) => {
-  const allowed = ['name', 'email', 'role', 'facility', 'ward', 'employee_id', 'hours_this_month', 'target_hours', 'certifications'];
+router.patch('/:id', requireRole('admin', 'hr_admin', 'head_nurse'), wrap(async (req, res) => {
+  const userRoles = req.user?.roles || [];
+  const isHR = userRoles.some(r => ['admin', 'hr_admin'].includes(r));
+  // head_nurse can only update the ward field (used for intern rotation during schedule generation)
+  const allowed = isHR
+    ? ['name', 'email', 'role', 'facility', 'ward', 'employee_id', 'hours_this_month', 'target_hours', 'certifications']
+    : ['ward'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
 
