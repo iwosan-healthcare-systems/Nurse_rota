@@ -9,7 +9,7 @@ router.get('/:key', wrap(async (req, res) => {
   res.json(rows[0]);
 }));
 
-router.put('/:key', requireRole('admin', 'cno'), wrap(async (req, res) => {
+router.put('/:key', requireRole('admin'), wrap(async (req, res) => {
   const { value } = req.body;
   if (value === undefined) return res.status(400).json({ error: 'value is required' });
 

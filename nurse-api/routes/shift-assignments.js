@@ -73,7 +73,7 @@ router.get('/', wrap(async (req, res) => {
   res.json(rows);
 }));
 
-router.post('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.post('/', requireRole('admin', 'head_nurse'), wrap(async (req, res) => {
   const { nurse_id, shift, shift_date, ward, status, created_by } = req.body;
   if (!nurse_id || !shift || !shift_date) return res.status(400).json({ error: 'nurse_id, shift, shift_date required' });
 
@@ -86,7 +86,7 @@ router.post('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, r
 }));
 
 // Batch upsert (onConflict: nurse_id, shift_date)
-router.post('/upsert', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.post('/upsert', requireRole('admin', 'head_nurse'), wrap(async (req, res) => {
   const rows = req.body;
   if (!Array.isArray(rows) || !rows.length) return res.status(400).json({ error: 'Array of assignments required' });
 
@@ -112,7 +112,7 @@ router.post('/upsert', requireRole('admin', 'cno', 'chief_matron'), wrap(async (
   }
 }));
 
-router.patch('/:id', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.patch('/:id', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
   const allowed = ['shift', 'ward', 'status', 'shift_date'];
   const fields = Object.keys(req.body).filter(k => allowed.includes(k));
   if (!fields.length) return res.status(400).json({ error: 'No valid fields to update' });
@@ -131,7 +131,7 @@ router.patch('/:id', requireRole('admin', 'cno', 'chief_matron'), wrap(async (re
 }));
 
 // Batch update by filter
-router.patch('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.patch('/', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
   const { nurse_ids, shift_date_from, shift_date_to, ward, status: filterStatus, neq_status, shift: filterShift } = req.query;
   const { shift, status, ward: newWard } = req.body;
 
@@ -184,7 +184,7 @@ router.patch('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, 
 }));
 
 // Bulk delete by filter (must come before /:id to avoid routing conflict)
-router.delete('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.delete('/', requireRole('admin', 'head_nurse'), wrap(async (req, res) => {
   const conditions = [];
   const params = [];
 
@@ -216,7 +216,7 @@ router.delete('/', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req,
   res.json({ success: true, deleted: result.rowCount });
 }));
 
-router.delete('/:id', requireRole('admin', 'cno', 'chief_matron'), wrap(async (req, res) => {
+router.delete('/:id', requireRole('admin', 'head_nurse', 'chief_matron'), wrap(async (req, res) => {
   await pool.query('DELETE FROM shift_assignments WHERE id = $1', [req.params.id]);
   res.json({ success: true });
 }));
