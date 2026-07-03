@@ -201,8 +201,10 @@ function RotaPage() {
   // Strategy: a 28-day window started at most 27 days ago still contains today.
   // Search backwards 27 days for the earliest assignment — that is the window start.
   // If none found in that range, fall forward to the next upcoming window.
+  // Scoped to the effective facility (via nurse IDs) so admin users switching between
+  // facilities with different schedule start dates see the correct period anchor.
   const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
-    queryKey: ["schedule-window-start", activeRole],
+    queryKey: ["schedule-window-start", activeRole, effectiveFacility],
     staleTime: 10 * 60 * 1000,
     queryFn: async () => {
       const today = new Date();
@@ -213,6 +215,15 @@ function RotaPage() {
       lookback.setDate(lookback.getDate() - 27);
       const lookbackStr = ymd(lookback);
 
+      // When a specific facility is selected, scope the anchor to that facility's
+      // nurses only — prevents Ikeja's schedule start from bleeding into Ligali's view.
+      const cachedNurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
+      const facilityIds = effectiveFacility
+        ? cachedNurses.filter((n) => n.facility === effectiveFacility).map((n) => n.id)
+        : [];
+      const nurseFilter =
+        facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
+
       // Earliest assignment within the past 27 days = start of the active window.
       // Gaps between schedules (days with no assignments) ensure we don't bleed
       // into a previous finished window.
@@ -220,7 +231,7 @@ function RotaPage() {
       const current = await api
         .get<
           { shift_date: string }[]
-        >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}`)
+        >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`)
         .catch(() => []);
       if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
 
@@ -230,7 +241,7 @@ function RotaPage() {
       const future = await api
         .get<
           { shift_date: string }[]
-        >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}`)
+        >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`)
         .catch(() => []);
       return (future[0]?.shift_date ?? todayStr).slice(0, 10);
     },
@@ -378,7 +389,8 @@ function RotaPage() {
       (a) =>
         facilityInternIds.has(a.nurse_id) &&
         a.shift_date >= genForm.startDate &&
-        a.shift_date <= genEndStr,
+        a.shift_date <= genEndStr &&
+        a.status !== "draft",
     );
   }, [assignments, nurses, genForm.facility, genForm.startDate]);
 
@@ -658,6 +670,7 @@ function RotaPage() {
     let includeInterns = !isWardRun;
     let includePorters = !isWardRun;
     let includeNADay = !isWardRun;
+    let internsHaveSubmittedAssignments = false;
 
     if (isWardRun) {
       const [matronsRows, headsRows, internsRows, portersRows, naDayRows] = await Promise.all([
@@ -678,10 +691,10 @@ function RotaPage() {
         facilityInterns.length > 0
           ? api
               .get<
-                { id: string }[]
+                { id: string; status: string }[]
               >(`/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
               .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
+          : Promise.resolve([] as { id: string; status: string }[]),
         facilityPorters.length > 0
           ? api
               .get<
@@ -702,6 +715,7 @@ function RotaPage() {
       includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
       includePorters = portersRows.length === 0 && facilityPorters.length > 0;
       includeNADay = naDayRows.length === 0 && facilityNADay.length > 0;
+      internsHaveSubmittedAssignments = internsRows.some((r) => r.status !== "draft");
     }
 
     // ── Period offset (epoch) ────────────────────────────────────────────────
@@ -733,30 +747,32 @@ function RotaPage() {
       }
     }
 
-    // Apply intern rotation when generating a full-facility or first ward run.
-    // Sort interns by name for determinism, then distribute one per ward so each
-    // intern gets a unique ward. The base index is derived from the period number
-    // (periodOffset ÷ DAYS) so rotation is deterministic and immune to stale ward
-    // data in the nurses query.
+    // Rotate intern ward profiles for this period.
+    // Runs whenever rotateInterns is checked AND interns don't yet have submitted/approved
+    // assignments for this period — meaning draft-only or no assignments is fine.
+    // This is intentionally DECOUPLED from includeInterns (which controls scheduling):
+    // the PATCH must run even on re-generation attempts where interns already have draft
+    // assignments from a previous failed run, otherwise the ward profiles never update.
     let internsToSchedule = facilityInterns;
-    if (includeInterns && genForm.rotateInterns) {
-      // Use the same ward list as the generate dialog dropdown: wards that nurses
-      // in this facility are actually assigned to. This guarantees every ward
-      // (including IP Ward) is in the rotation pool and no cross-facility wards
-      // are accidentally included.
+    const shouldRotateInternWards =
+      genForm.rotateInterns && facilityInterns.length > 0 && !internsHaveSubmittedAssignments;
+    if (shouldRotateInternWards) {
       const facilityWardNames = genWards.map((w) => w.name);
 
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
-        // Derive next rotation base from the first intern's CURRENT ward in the DB.
-        // This avoids the epoch-date precision problem: if the earliest DB assignment
-        // isn't exactly day-0 of period 1, periodOffset / DAYS rounds to 0 and every
-        // period gets the same ward assignment.  Using the actual stored ward is
-        // always correct — after each period's PATCH, the profile reflects where the
-        // intern just was, so the next rotation is unambiguously one step forward.
+        // Primary: step one forward from the first intern's profile ward (most accurate
+        // when the previous period's PATCH succeeded and profiles are fresh).
+        // Fallback: use Math.round(periodOffset / DAYS) when profiles are null/unrecognised
+        // — this gives the correct period number even if the epoch is a day off.
         const firstCurrentWard = parseWards(sortedInterns[0]?.ward ?? null)[0] ?? null;
         const currentIdx = firstCurrentWard !== null ? facilityWardNames.indexOf(firstCurrentWard) : -1;
-        const nextBase = (currentIdx + 1 + facilityWardNames.length) % facilityWardNames.length;
+        let nextBase: number;
+        if (currentIdx >= 0) {
+          nextBase = (currentIdx + 1) % facilityWardNames.length;
+        } else {
+          nextBase = Math.round(periodOffset / DAYS) % facilityWardNames.length;
+        }
         internsToSchedule = sortedInterns.map((n, idx) => ({
           ...n,
           ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
@@ -944,7 +960,7 @@ function RotaPage() {
       //    Generating a future period (startOffset=1) must not shift the anchor forward —
       //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
       if (startOffset === 0) {
-        qc.setQueryData(["schedule-window-start", activeRole], genForm.startDate);
+        qc.setQueryData(["schedule-window-start", activeRole, genForm.facility], genForm.startDate);
       }
 
       // 2. Pre-load the assignments cache for the exact period that was generated.

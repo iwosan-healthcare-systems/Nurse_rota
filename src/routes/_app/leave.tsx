@@ -194,7 +194,7 @@ function LeavePage() {
           if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
           if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
           toast.success(
-            `Leave approved — rota updated. CNO action required: ${parts.join("; ")} need shift cover.`,
+            `Leave approved — rota updated. Chief Matron: arrange cover for ${parts.join("; ")}.`,
             { duration: 8000 },
           );
           logAudit(
@@ -501,6 +501,7 @@ function LeaveTable({
   canApprove: boolean;
   onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
 }) {
+  const { user } = useAuth();
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
     status: "Approved" | "Rejected";
@@ -563,32 +564,38 @@ function LeaveTable({
                   </td>
                   {canApprove && (
                     <td className="px-4 py-3">
-                      <div className="flex gap-1 justify-end">
-                        <button
-                          type="button"
-                          aria-label="Approve leave request"
-                          onClick={() => {
-                            setReviewing({ row: l, status: "Approved" });
-                            setReviewNote("");
-                          }}
-                          disabled={l.status !== "Pending"}
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
-                        >
-                          <Check className="h-4 w-4" />
-                        </button>
-                        <button
-                          type="button"
-                          aria-label="Reject leave request"
-                          onClick={() => {
-                            setReviewing({ row: l, status: "Rejected" });
-                            setReviewNote("");
-                          }}
-                          disabled={l.status !== "Pending"}
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                        >
-                          <X className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {l.requested_by === user?.id ? (
+                        <p className="text-xs text-muted-foreground text-right italic">
+                          Own request
+                        </p>
+                      ) : (
+                        <div className="flex gap-1 justify-end">
+                          <button
+                            type="button"
+                            aria-label="Approve leave request"
+                            onClick={() => {
+                              setReviewing({ row: l, status: "Approved" });
+                              setReviewNote("");
+                            }}
+                            disabled={l.status !== "Pending"}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                          >
+                            <Check className="h-4 w-4" />
+                          </button>
+                          <button
+                            type="button"
+                            aria-label="Reject leave request"
+                            onClick={() => {
+                              setReviewing({ row: l, status: "Rejected" });
+                              setReviewNote("");
+                            }}
+                            disabled={l.status !== "Pending"}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                          >
+                            <X className="h-4 w-4" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -837,7 +844,7 @@ function SwitchTable({
 // ── New leave request modal ──────────────────────────────────────────────────
 
 function NewLeaveModal({ onClose }: { onClose: () => void }) {
-  const { user, fullName } = useAuth();
+  const { user, fullName, nurseId } = useAuth();
   const qc = useQueryClient();
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-min"],
@@ -850,16 +857,22 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
 
+  // Resolve the nurse's own ID: prefer the one from auth context, fall back to name match.
+  const resolvedNurseId = nurseId ?? nurses.find((n) => n.name === fullName)?.id ?? null;
+
   const datesReady = !!from && !!to;
 
-  // Check if the selected date range overlaps a published rota.
-  // Only runs once both dates are filled in.
+  // Check if the selected date range overlaps THIS nurse's own published assignments.
+  // Scoped to the requesting nurse so nurses in unpublished wards are not incorrectly
+  // restricted when another ward happens to have a published rota in the same period.
   const { data: datesInPublishedRota = false, isFetching: checkingDates } = useQuery({
-    queryKey: ["leave-dates-published", from, to],
-    enabled: datesReady,
+    queryKey: ["leave-dates-published", from, to, resolvedNurseId],
+    enabled: datesReady && !!resolvedNurseId,
     queryFn: () =>
       api
-        .get<{ id: string }[]>(`/shift-assignments?status=published&from=${from}&to=${to}&limit=1`)
+        .get<{ id: string }[]>(
+          `/shift-assignments?nurse_id=${resolvedNurseId}&status=published&from=${from}&to=${to}&limit=1`,
+        )
         .then((arr) => arr.length > 0),
   });
 
@@ -1096,7 +1109,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     if (!reason.trim()) return toast.error("Please provide a reason for this shift switch");
 
     // 24-hour rule: the shift must start more than 24 hours from now.
-    const shiftStart = new Date(`${date}T08:00:00`);
+    // Use the actual shift start time: Morning = 08:00, Night = 17:00.
+    const effectiveShift = shiftA === "LEAVE" ? coverShift : shiftA;
+    const shiftHour = effectiveShift === "N" ? 17 : 8;
+    const shiftStart = new Date(`${date}T${String(shiftHour).padStart(2, "0")}:00:00`);
     const hoursUntil = (shiftStart.getTime() - Date.now()) / 3_600_000;
     if (hoursUntil < 24) {
       return toast.error(

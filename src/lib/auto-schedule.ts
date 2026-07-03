@@ -453,6 +453,7 @@ function enforceMinima(
   ward: WardInput,
   days: number,
   startDate: Date,
+  facility?: string | null,
 ): { violations: SafetyViolation[]; extraPromos: Map<string, number> } {
   const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
   const violations: SafetyViolation[] = [];
@@ -464,7 +465,11 @@ function enforceMinima(
     min_night_supervisor: ward.min_night_supervisor,
     min_night_na: ward.min_night_na,
   };
-  const overrideKey = ward.facility ? `${ward.facility}|${ward.name}` : null;
+  // Use ward's stored facility first; fall back to the generation-time facility so
+  // day-of-week overrides (Ligali OT Saturday, Ikeja GOPD Wed/Fri) are always applied
+  // even when the ward row has no facility tag in the database.
+  const effectiveFacility = ward.facility ?? facility ?? null;
+  const overrideKey = effectiveFacility ? `${effectiveFacility}|${ward.name}` : null;
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
@@ -1047,6 +1052,7 @@ export function generateSchedule(opts: {
         ward,
         days,
         opts.startDate,
+        opts.facility,
       );
       allViolations.push(...wardViolations);
       for (const [id, count] of extraPromos) {
