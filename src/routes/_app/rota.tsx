@@ -362,16 +362,25 @@ function RotaPage() {
 
   const extraShiftIds = useMemo(() => new Set(extraShifts.map((e) => e.nurseId)), [extraShifts]);
 
-  // True once any intern has been scheduled for this period (first ward run done).
-  // Used to lock the rotate-interns checkbox and protect intern assignments in Clear.
+  // True once interns have been scheduled for the period BEING GENERATED (first ward run done).
+  // Scoped to the generated period's date range so viewing period 1 doesn't lock the
+  // checkbox when the user is actually generating period 2.
   const internsAreScheduled = useMemo(() => {
     const facilityInternIds = new Set(
       nurses
         .filter((n) => isInternType(n.role) && n.facility === genForm.facility)
         .map((n) => n.id),
     );
-    return assignments.some((a) => facilityInternIds.has(a.nurse_id));
-  }, [assignments, nurses, genForm.facility]);
+    const genEndObj = new Date(genForm.startDate + "T00:00:00");
+    genEndObj.setDate(genEndObj.getDate() + DAYS - 1);
+    const genEndStr = ymd(genEndObj);
+    return assignments.some(
+      (a) =>
+        facilityInternIds.has(a.nurse_id) &&
+        a.shift_date >= genForm.startDate &&
+        a.shift_date <= genEndStr,
+    );
+  }, [assignments, nurses, genForm.facility, genForm.startDate]);
 
   // Unique role values scoped to the selected facility (for the role filter dropdown).
   const availableRoles = useMemo(() => {
@@ -740,7 +749,7 @@ function RotaPage() {
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
         // Period 0 → nextBase 0 (ER first), period 1 → nextBase 1 (GOPD first), …
-        const periodNum = Math.round(periodOffset / DAYS);
+        const periodNum = Math.floor(periodOffset / DAYS);
         const nextBase = periodNum % facilityWardNames.length;
         internsToSchedule = sortedInterns.map((n, idx) => ({
           ...n,
@@ -950,7 +959,6 @@ function RotaPage() {
 
       // 3. Refresh nurse list (intern ward reassignments).
       qc.invalidateQueries({ queryKey: ["nurses"] });
-      setStartOffset(0);
       setBusy(false);
     }
   }
