@@ -1073,21 +1073,34 @@ function RotaPage() {
     if (!shiftPicker) return;
     const { nurseId, dateStr, ward, existingId } = shiftPicker;
     setShiftPicker(null);
+
     if (existingId) {
-      await api
-        .patch(`/shift-assignments/${existingId}`, { shift })
-        .catch((e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to update"));
+      // Optimistic: update the cache immediately so the cell reflects the change at once.
+      qc.setQueriesData<Assignment[]>({ queryKey: ["assignments"] }, (old) =>
+        old?.map((a) => (a.id === existingId ? { ...a, shift } : a)),
+      );
+      try {
+        await api.patch(`/shift-assignments/${existingId}`, { shift });
+      } catch (e: unknown) {
+        qc.invalidateQueries({ queryKey: ["assignments"] }); // rollback
+        toast.error(e instanceof Error ? e.message : "Failed to update");
+        return;
+      }
     } else {
-      await api
-        .post("/shift-assignments", {
+      // New assignment — no ID yet, so post first then refresh.
+      try {
+        await api.post("/shift-assignments", {
           nurse_id: nurseId,
           ward,
           shift_date: dateStr,
           shift,
           status: "draft",
           created_by: user?.id ?? null,
-        })
-        .catch((e: unknown) => toast.error(e instanceof Error ? e.message : "Failed to add"));
+        });
+      } catch (e: unknown) {
+        toast.error(e instanceof Error ? e.message : "Failed to add");
+        return;
+      }
     }
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
@@ -1096,16 +1109,29 @@ function RotaPage() {
     if (!canEdit) return;
     // Only swap cells that are both still in draft status.
     if (a.status !== "draft" || b.status !== "draft") return;
-    await Promise.all([
-      api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
-      api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
-    ]).catch((e: unknown) => {
+
+    // Optimistic: swap both shifts in the cache immediately.
+    qc.setQueriesData<Assignment[]>({ queryKey: ["assignments"] }, (old) =>
+      old?.map((x) => {
+        if (x.id === a.id) return { ...x, shift: b.shift };
+        if (x.id === b.id) return { ...x, shift: a.shift };
+        return x;
+      }),
+    );
+
+    try {
+      await Promise.all([
+        api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
+        api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
+      ]);
+      const dateNote =
+        a.shift_date === b.shift_date ? a.shift_date : `${a.shift_date} ↔ ${b.shift_date}`;
+      await logAudit("Swapped shifts", dateNote);
+    } catch (e: unknown) {
+      qc.invalidateQueries({ queryKey: ["assignments"] }); // rollback
       toast.error(e instanceof Error ? e.message : "Swap failed");
-      throw e;
-    });
-    const dateNote =
-      a.shift_date === b.shift_date ? a.shift_date : `${a.shift_date} ↔ ${b.shift_date}`;
-    await logAudit("Swapped shifts", dateNote);
+      return;
+    }
     qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
