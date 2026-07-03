@@ -918,8 +918,12 @@ function RotaPage() {
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // 1. Snap the view window to the generated period immediately.
-      qc.setQueryData(["schedule-window-start", activeRole], genForm.startDate);
+      // 1. Only snap the anchor when generating the CURRENT period (startOffset=0).
+      //    Generating a future period (startOffset=1) must not shift the anchor forward —
+      //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
+      if (startOffset === 0) {
+        qc.setQueryData(["schedule-window-start", activeRole], genForm.startDate);
+      }
 
       // 2. Pre-load the assignments cache for the exact period that was generated.
       //    This runs before setBusy(false), so by the time the UI unblocks the data
