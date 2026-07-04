@@ -26,6 +26,8 @@ import {
   Info,
   CheckCircle2,
   Stethoscope,
+  Lock,
+  ClipboardCheck,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -418,6 +420,70 @@ function RotaReminderBell({
     nurseId && staffNotif ? `staff_notif_v2_${nurseId}_${staffNotif.periodStart}` : null;
   const staffState = getNotifState(staffKey, allNotifs);
 
+  // ── Rota workflow: stage-specific action notifications ───────────────────
+  // Shown per-role once the first rota has ever been published:
+  //   head_nurse  → generate reminder (leave closed, no rota yet) OR publish reminder
+  //   chief_matron → 1st approval reminder (rota submitted)
+  //   cno         → 2nd approval reminder (approved_chief)
+  //   admin       → most urgent pending action across all roles
+  const canSeeWorkflow =
+    activeRole === "admin" ||
+    activeRole === "cno" ||
+    activeRole === "chief_matron" ||
+    activeRole === "head_nurse";
+
+  const { data: workflowStatus } = useQuery<{
+    firstRotaPublished: boolean;
+    nextPeriodStart?: string;
+    leaveClosureDate?: string;
+    publishDeadline?: string;
+    leaveIsClosed?: boolean;
+    nextRotaStage?: string;
+  }>({
+    queryKey: ["workflow-status"],
+    enabled: canSeeWorkflow && !!userId,
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get("/rpc/workflow-status"),
+  });
+
+  // Derive the single most-actionable workflow notification for this role.
+  const workflowItem = (() => {
+    if (!workflowStatus?.firstRotaPublished) return null;
+    const { nextPeriodStart, leaveIsClosed, nextRotaStage, publishDeadline } = workflowStatus;
+    if (!nextPeriodStart) return null;
+
+    const isHeadOrAdmin = activeRole === "head_nurse" || activeRole === "admin";
+    const isMatronOrAdmin = activeRole === "chief_matron" || activeRole === "admin";
+    const isCnoOrAdmin = activeRole === "cno" || activeRole === "admin";
+
+    // For admin, evaluate all stages and return the most urgent one.
+    // Highest urgency first so admin sees the blocking step.
+    if (isHeadOrAdmin && nextRotaStage === "approved_cno") {
+      const overdue = !!publishDeadline && today >= publishDeadline;
+      return {
+        kind: "publish" as const,
+        key: `workflow_pub_${nextPeriodStart}`,
+        nextPeriodStart,
+        publishDeadline,
+        overdue,
+      };
+    }
+    if (isCnoOrAdmin && nextRotaStage === "approved_chief") {
+      return { kind: "approve2" as const, key: `workflow_2nd_${nextPeriodStart}`, nextPeriodStart };
+    }
+    if (isMatronOrAdmin && nextRotaStage === "submitted") {
+      return { kind: "approve1" as const, key: `workflow_1st_${nextPeriodStart}`, nextPeriodStart };
+    }
+    if (isHeadOrAdmin && leaveIsClosed && (nextRotaStage === "none" || nextRotaStage === "draft")) {
+      return { kind: "generate" as const, key: `workflow_gen_${nextPeriodStart}`, nextPeriodStart };
+    }
+    return null;
+  })();
+
+  const workflowKey = workflowItem?.key ?? null;
+  const workflowState = getNotifState(workflowKey, allNotifs);
+  const showWorkflow = !!workflowItem;
+
   // ── Locum: pending-action counts ─────────────────────────────────────────
   const { data: locumCount = 0 } = useQuery({
     queryKey: ["locum-bell", userId, activeRole, nurseId],
@@ -464,11 +530,18 @@ function RotaReminderBell({
 
   const mgmtUnread = showMgmt && mgmtState === "unread";
   const staffUnread = showStaff && staffState === "unread";
-  const unreadCount = (mgmtUnread ? 1 : 0) + (staffUnread ? 1 : 0) + (showLocum ? 1 : 0);
+  const workflowUnread = showWorkflow && workflowState === "unread";
+  const unreadCount =
+    (mgmtUnread ? 1 : 0) +
+    (staffUnread ? 1 : 0) +
+    (showLocum ? 1 : 0) +
+    (workflowUnread ? 1 : 0);
 
   const allNotifItems = [
     ...(showLocum ? [{ kind: "locum" as const }] : []),
     ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
+    // Workflow notifications appear before the generic deadline reminder
+    ...(showWorkflow && workflowItem ? [{ kind: "workflow" as const }] : []),
     ...(showMgmt && mgmtNotif ? [{ kind: "mgmt" as const }] : []),
   ];
   const notifItems = showAllNotifs ? allNotifItems : allNotifItems.slice(0, 3);
@@ -485,7 +558,9 @@ function RotaReminderBell({
       return today >= d.toISOString().slice(0, 10);
     })();
 
-  const hasCritical = mgmtOverdue;
+  const workflowOverdue =
+    showWorkflow && workflowItem?.kind === "publish" && !!(workflowItem as { overdue?: boolean }).overdue;
+  const hasCritical = mgmtOverdue || workflowOverdue;
 
   function markNotif(key: string | null, isRead: boolean) {
     if (!key || !userId) return;
@@ -684,6 +759,110 @@ function RotaReminderBell({
                         Nurses need 2 weeks to apply for leave before the next rota is published.
                       </p>
                     </div>
+                  ) : kind === "workflow" && workflowItem ? (
+                    (() => {
+                      const wKind = workflowItem.kind;
+                      const isPub = wKind === "publish";
+                      const isOverdue = isPub && (workflowItem as { overdue?: boolean }).overdue;
+                      const isApprove = wKind === "approve1" || wKind === "approve2";
+
+                      const title =
+                        wKind === "generate"
+                          ? "Generate Next Rota"
+                          : wKind === "approve1"
+                            ? "1st Approval Required"
+                            : wKind === "approve2"
+                              ? "2nd Approval Required"
+                              : isOverdue
+                                ? "Publish Rota — Overdue"
+                                : "Publish Rota Now";
+
+                      const bodyText =
+                        wKind === "generate"
+                          ? `Leave window is closed. Generate the rota for the period starting ${fmtDate(workflowItem.nextPeriodStart)}.`
+                          : wKind === "approve1"
+                            ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} has been submitted and is awaiting your first approval.`
+                            : wKind === "approve2"
+                              ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} has passed first approval and requires your final sign-off.`
+                              : isOverdue
+                                ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is fully approved — publish it now (deadline has passed).`
+                                : `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is fully approved — publish it 14 days before the period starts.`;
+
+                      const pageHint =
+                        wKind === "generate"
+                          ? "Open the Rota page and generate the schedule."
+                          : wKind === "approve1" || wKind === "approve2"
+                            ? "Open the Approvals page to review and approve."
+                            : "Open the Approvals page and publish the rota.";
+
+                      return (
+                        <div
+                          key="workflow"
+                          className={cn(
+                            "rounded-lg border p-3 space-y-2 transition-opacity",
+                            workflowState === "read" && "opacity-60",
+                            isOverdue
+                              ? "border-destructive/40 bg-destructive/5"
+                              : isApprove || isPub
+                                ? "border-amber-400/40 bg-amber-50 dark:bg-amber-950/20"
+                                : "border-blue-400/40 bg-blue-50 dark:bg-blue-950/20",
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              {isOverdue || isApprove || isPub ? (
+                                isApprove ? (
+                                  <ClipboardCheck
+                                    className="h-4 w-4 shrink-0 text-amber-500"
+                                  />
+                                ) : (
+                                  <AlertCircle
+                                    className={cn(
+                                      "h-4 w-4 shrink-0",
+                                      isOverdue ? "text-destructive" : "text-amber-500",
+                                    )}
+                                  />
+                                )
+                              ) : (
+                                <Lock className="h-4 w-4 shrink-0 text-blue-500" />
+                              )}
+                              <p
+                                className={cn(
+                                  "text-xs font-semibold",
+                                  isOverdue
+                                    ? "text-destructive"
+                                    : isApprove || isPub
+                                      ? "text-amber-700 dark:text-amber-400"
+                                      : "text-blue-700 dark:text-blue-400",
+                                )}
+                              >
+                                {title}
+                              </p>
+                              {workflowState === "unread" && (
+                                <span
+                                  className={cn(
+                                    "h-1.5 w-1.5 rounded-full shrink-0",
+                                    isOverdue ? "bg-destructive" : "bg-amber-500",
+                                  )}
+                                />
+                              )}
+                            </div>
+                            {workflowState !== null && (
+                              <button
+                                type="button"
+                                title={workflowState === "unread" ? "Mark as read" : "Mark as unread"}
+                                onClick={() => markNotif(workflowKey, workflowState === "unread")}
+                                className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                              >
+                                {workflowState === "unread" ? "Mark read" : "Mark unread"}
+                              </button>
+                            )}
+                          </div>
+                          <p className="text-xs">{bodyText}</p>
+                          <p className="text-xs text-muted-foreground">{pageHint}</p>
+                        </div>
+                      );
+                    })()
                   ) : null,
                 )}
               </div>

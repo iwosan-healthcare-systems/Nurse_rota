@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useMemo, useState } from "react";
-import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2 } from "lucide-react";
+import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -61,6 +61,23 @@ const statusStyle: Record<string, string> = {
 type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
 type ActiveTab = "leave" | "switches";
 
+type WorkflowStatus = {
+  firstRotaPublished: boolean;
+  nextPeriodStart?: string;
+  leaveClosureDate?: string;
+  publishDeadline?: string;
+  leaveIsClosed?: boolean;
+  nextRotaStage?: string;
+};
+
+function fmtDateLeave(d: string) {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 function LeavePage() {
   const {
     user,
@@ -75,6 +92,12 @@ function LeavePage() {
   const [showSwitch, setShowSwitch] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [activeTab, setActiveTab] = useState<ActiveTab>("leave");
+
+  const { data: workflowStatus } = useQuery<WorkflowStatus>({
+    queryKey: ["workflow-status"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
+  });
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id, nurseId],
@@ -382,6 +405,22 @@ function LeavePage() {
           </div>
         }
       />
+
+      {/* Leave closure banner */}
+      {workflowStatus?.firstRotaPublished && workflowStatus.leaveIsClosed && (
+        <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+          <Lock className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Leave window is closed</p>
+            <p className="mt-0.5 text-amber-700 dark:text-amber-400">
+              The schedule period starting{" "}
+              <strong>{fmtDateLeave(workflowStatus.nextPeriodStart!)}</strong> begins soon. Only{" "}
+              <strong>Sick</strong> and <strong>Emergency</strong> leave requests can be submitted
+              until then.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex border-b mb-4">
@@ -876,9 +915,19 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         .then((arr) => arr.length > 0),
   });
 
-  const allowedTypes = datesInPublishedRota
-    ? ["Sick", "Emergency"]
-    : ["Sick", "Annual", "Emergency", "Public Holiday"];
+  // Check the leave closure window — shared cache with LeavePage so no extra network call.
+  const { data: workflowStatus } = useQuery<WorkflowStatus>({
+    queryKey: ["workflow-status"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
+  });
+  const leaveWindowClosed = workflowStatus?.firstRotaPublished && workflowStatus.leaveIsClosed;
+
+  // Restrict types: dates-in-published-rota takes highest priority, then closure window.
+  const allowedTypes =
+    datesInPublishedRota || leaveWindowClosed
+      ? ["Sick", "Emergency"]
+      : ["Sick", "Annual", "Emergency", "Public Holiday"];
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
@@ -953,6 +1002,17 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
           <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
             These dates fall within a <strong>published schedule</strong>. Only{" "}
             <strong>Sick</strong> and <strong>Emergency</strong> leave can be requested.
+          </div>
+        )}
+
+        {!datesInPublishedRota && leaveWindowClosed && (
+          <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
+            <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              Leave window is closed — the next schedule starts{" "}
+              <strong>{fmtDateLeave(workflowStatus!.nextPeriodStart!)}</strong>. Only{" "}
+              <strong>Sick</strong> and <strong>Emergency</strong> leave can be requested.
+            </span>
           </div>
         )}
 
