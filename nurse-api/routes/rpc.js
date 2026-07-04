@@ -54,6 +54,78 @@ router.post(
   }),
 );
 
+// ── Rota workflow status ──────────────────────────────────────────────────
+// Returns the current stage of the next-period workflow so the frontend can
+// show role-specific action notifications and enforce leave closure.
+//
+// Timeline (all relative to next period start date):
+//   T-21  : leave_closure_date  — non-exempt leave requests blocked
+//   T-19/20: generate window     — head nurse notified to generate rota
+//   T-14  : publish_deadline    — rota must be published by this date
+//
+// nextRotaStage: 'none' | 'draft' | 'submitted' | 'approved_chief' | 'approved_cno' | 'published'
+router.get(
+  "/workflow-status",
+  wrap(async (req, res) => {
+    // Find the last published shift date across all facilities.
+    const { rows: pubRows } = await pool.query(`
+      SELECT MAX(shift_date::date) AS last_date
+      FROM shift_assignments
+      WHERE status = 'published'
+    `);
+
+    const lastDate = pubRows[0]?.last_date;
+    if (!lastDate) {
+      return res.json({ firstRotaPublished: false });
+    }
+
+    // Compute the next period start and key milestone dates in Postgres so we
+    // never have to worry about JS Date timezone/DST edge cases.
+    const { rows: dateRows } = await pool.query(`
+      SELECT
+        ($1::date + 1)::text                                 AS next_period_start,
+        ($1::date + 1 - INTERVAL '21 days')::date::text     AS leave_closure_date,
+        ($1::date + 1 - INTERVAL '14 days')::date::text     AS publish_deadline
+    `, [lastDate]);
+
+    const { next_period_start: nextPeriodStart, leave_closure_date: leaveClosureDate, publish_deadline: publishDeadline } = dateRows[0];
+    const today = new Date().toISOString().slice(0, 10);
+
+    // Closure only applies when the next period is still in the future.
+    // If nextPeriodStart is today or in the past the schedule is overdue —
+    // don't block leave in that case (no current cycle to protect).
+    const leaveIsClosed = nextPeriodStart > today && today >= leaveClosureDate;
+
+    // Determine the highest approval stage reached for the next period.
+    // Ordering ensures we return the most-advanced status present.
+    const { rows: stageRows } = await pool.query(`
+      SELECT status FROM shift_assignments
+      WHERE shift_date >= $1
+      ORDER BY
+        CASE status
+          WHEN 'published'      THEN 1
+          WHEN 'approved_cno'   THEN 2
+          WHEN 'approved_chief' THEN 3
+          WHEN 'submitted'      THEN 4
+          WHEN 'draft'          THEN 5
+          ELSE 6
+        END
+      LIMIT 1
+    `, [nextPeriodStart]);
+
+    const nextRotaStage = stageRows[0]?.status ?? 'none';
+
+    res.json({
+      firstRotaPublished: true,
+      nextPeriodStart,
+      leaveClosureDate,
+      publishDeadline,
+      leaveIsClosed,
+      nextRotaStage,
+    });
+  }),
+);
+
 router.post(
   "/auto-close-period",
   wrap(async (req, res) => {

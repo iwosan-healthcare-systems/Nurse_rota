@@ -74,6 +74,10 @@ router.get(
   }),
 );
 
+// Leave types exempt from the 21-day pre-period closure window.
+// Sick and Emergency can always be submitted; Swap is a shift switch (not leave).
+const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap"];
+
 router.post(
   "/",
   wrap(async (req, res) => {
@@ -81,6 +85,29 @@ router.post(
       req.body;
     if (!nurse_name || !type || !from_date || !to_date)
       return res.status(400).json({ error: "Missing required fields" });
+
+    // ── Leave closure window enforcement ──────────────────────────────────
+    // Once the first rota has been published, all non-exempt leave types are
+    // blocked for 21 days leading up to the next schedule period start date.
+    if (!EXEMPT_LEAVE_TYPES.includes(type)) {
+      const { rows: pubRows } = await pool.query(`
+        SELECT
+          (MAX(shift_date::date) + 1)::text                             AS next_start,
+          (MAX(shift_date::date) + 1 - INTERVAL '21 days')::date::text AS closure_date
+        FROM shift_assignments
+        WHERE status = 'published'
+      `);
+      const nextStart = pubRows[0]?.next_start;
+      const closureDate = pubRows[0]?.closure_date;
+      const today = new Date().toISOString().slice(0, 10);
+      // Only enforce when the next period is still in the future
+      if (nextStart && closureDate && nextStart > today && today >= closureDate) {
+        return res.status(422).json({
+          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick and Emergency leave can be submitted now.`,
+          code: "LEAVE_WINDOW_CLOSED",
+        });
+      }
+    }
 
     const { rows } = await pool.query(
       `INSERT INTO leave_requests (nurse_id, nurse_name, type, from_date, to_date, reason, requested_by, switch_nurse_b)
