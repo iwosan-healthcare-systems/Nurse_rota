@@ -3,8 +3,7 @@
 // Universal 16-day cycle for ALL roles (strict, no override): 4M → 4OFF → 4N → 4OFF
 //   Offsets are snapped to 4-day block boundaries so every nurse always starts
 //   at the beginning of a block (never mid-block).
-//   enforceMinima promotes available OFF nurses to fill safety shortfalls;
-//   violations are reported only when the gap cannot be fully resolved.
+//   enforceMinima reports safety violations only — it does not modify any assignments.
 //
 // Coverage nurses follow a bespoke per-period pattern:
 //   NC block  : 4 consecutive NC shifts, phase-aligned to the nurse's natural N block
@@ -284,25 +283,6 @@ export const IKEJA_WARD_MINIMUMS: Record<string, WardMins> = {
 
 export const IKEJA_WARD_NAMES = Object.keys(IKEJA_WARD_MINIMUMS);
 
-const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"] as const;
-type DayName = (typeof DAY_NAMES)[number];
-
-// Day-of-week overrides keyed by "Facility|WardName". These are not stored in
-// the DB — they are applied by enforceMinima at generation time only.
-// A value of 99 for nurse/NA counts acts as "all available" (promoteOff will
-// promote every remaining OFF nurse before reaching 99).
-const DAY_OVERRIDES: Record<string, Partial<Record<DayName, Partial<WardMins>>>> = {
-  // Ligali OT: every available OT nurse must work the morning shift on Saturday.
-  "Ligali|Operation Theatre": {
-    Sat: { min_morning_nurses: 99, min_morning_na: 99 },
-  },
-  // Ikeja GOPD: minimum 7 nurses + 3 NA on Wednesdays and Fridays.
-  "Ikeja|GOPD": {
-    Wed: { min_morning_nurses: 7, min_morning_na: 3 },
-    Fri: { min_morning_nurses: 7, min_morning_na: 3 },
-  },
-};
-
 function ymd(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
@@ -442,13 +422,8 @@ function scheduleGroup(
 }
 
 /**
- * Enforce ward minimum staffing for every day in the window.
- *
- * When a shift-type is below its minimum, available OFF nurses of the correct
- * role are promoted to M or N (respecting the post-night rest rule) until the
- * minimum is reached.  A SafetyViolation is recorded only when there are
- * genuinely not enough nurses to fill the gap — i.e. the shortfall could not be
- * fully resolved by promoting available staff.
+ * Check ward minimum staffing for every day in the window and report violations.
+ * Does not modify any assignments — report only.
  */
 function enforceMinima(
   out: DraftAssignment[],
@@ -456,109 +431,45 @@ function enforceMinima(
   ward: WardInput,
   days: number,
   startDate: Date,
-  facility?: string | null,
 ): { violations: SafetyViolation[]; extraPromos: Map<string, number> } {
+  const nurseIds = new Set(wardNurses.map((n) => n.id));
   const nurseById = new Map(wardNurses.map((n) => [n.id, n]));
   const violations: SafetyViolation[] = [];
-  const extraPromos = new Map<string, number>();
-  const baseMins: WardMins = {
-    min_morning_nurses: ward.min_morning_nurses,
-    min_morning_supervisor: ward.min_morning_supervisor,
-    min_morning_na: ward.min_morning_na,
-    min_night_nurses: ward.min_night_nurses,
-    min_night_supervisor: ward.min_night_supervisor,
-    min_night_na: ward.min_night_na,
-  };
-  // Use ward's stored facility first; fall back to the generation-time facility so
-  // day-of-week overrides (Ligali OT Saturday, Ikeja GOPD Wed/Fri) are always applied
-  // even when the ward row has no facility tag in the database.
-  const effectiveFacility = ward.facility ?? facility ?? null;
-  const overrideKey = effectiveFacility ? `${effectiveFacility}|${ward.name}` : null;
-
-  // Build a fast date-indexed lookup per nurse so rest-rule checks are O(1).
-  // These are direct object references into `out` — mutations here update `out`.
-  const byNurseDate = new Map<string, Map<string, DraftAssignment>>();
-  for (const a of out) {
-    if (!nurseById.has(a.nurse_id)) continue;
-    let m = byNurseDate.get(a.nurse_id);
-    if (!m) { m = new Map(); byNurseDate.set(a.nurse_id, m); }
-    m.set(a.shift_date, a);
-  }
 
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
-    const prevDate = new Date(date); prevDate.setDate(prevDate.getDate() - 1);
-    const prevStr = d > 0 ? ymd(prevDate) : null;
-    const nextDate = new Date(date); nextDate.setDate(nextDate.getDate() + 1);
-    const nextStr = d < days - 1 ? ymd(nextDate) : null;
-    const dayName = DAY_NAMES[date.getDay()];
-    const dayOverride = overrideKey ? DAY_OVERRIDES[overrideKey]?.[dayName] : undefined;
-    const mins: WardMins = dayOverride ? { ...baseMins, ...dayOverride } : baseMins;
 
-    // dayAssignments elements are live references into `out`.  Mutating a.shift here
-    // is immediately reflected in subsequent count() calls within the same day.
-    const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseById.has(a.nurse_id));
+    const dayAssignments = out.filter((a) => a.shift_date === dateStr && nurseIds.has(a.nurse_id));
 
     const count = (shift: ShiftCode, roleTest: (r: string) => boolean) =>
       dayAssignments.filter(
         (a) => a.shift === shift && roleTest(nurseById.get(a.nurse_id)?.role ?? ""),
       ).length;
 
-    // Promote OFF nurses of the matching role to targetShift to cover a shortfall.
-    // Respects rest rules: no M immediately after N; no N when M follows next day.
-    // Reports a violation only for the residual shortfall that could not be resolved.
-    const promoteOff = (
-      targetShift: "M" | "N",
+    const check = (
+      shift: "M" | "N",
       required: number,
       roleTest: (r: string) => boolean,
-      roleName: "nurse" | "supervisor" | "na",
+      role: "nurse" | "supervisor" | "na",
     ) => {
       if (required <= 0) return;
-      const actual = count(targetShift, roleTest);
-      const shortfall = required - actual;
-      if (shortfall <= 0) return;
-
-      const candidates = dayAssignments
-        .filter((a) => a.shift === "OFF" && roleTest(nurseById.get(a.nurse_id)?.role ?? ""))
-        .filter((a) => {
-          const nd = byNurseDate.get(a.nurse_id);
-          if (targetShift === "M" && prevStr) {
-            return nd?.get(prevStr)?.shift !== "N"; // no M right after N
-          }
-          if (targetShift === "N" && nextStr) {
-            return nd?.get(nextStr)?.shift !== "M"; // no N if M required tomorrow
-          }
-          return true;
-        });
-
-      let promoted = 0;
-      for (const c of candidates) {
-        if (promoted >= shortfall) break;
-        c.shift = targetShift;
-        extraPromos.set(c.nurse_id, (extraPromos.get(c.nurse_id) ?? 0) + 1);
-        promoted++;
-      }
-
-      const finalActual = actual + promoted;
-      if (finalActual < required) {
-        violations.push({
-          ward: ward.name, date: dateStr, shift: targetShift, role: roleName,
-          required, actual: finalActual,
-        });
+      const actual = count(shift, roleTest);
+      if (actual < required) {
+        violations.push({ ward: ward.name, date: dateStr, shift, role, required, actual });
       }
     };
 
-    promoteOff("M", mins.min_morning_supervisor, isWardSupervisor, "supervisor");
-    promoteOff("M", mins.min_morning_nurses, isNurseOrIntern, "nurse");
-    promoteOff("M", mins.min_morning_na, isNAType, "na");
-    promoteOff("N", mins.min_night_supervisor, isWardSupervisor, "supervisor");
-    promoteOff("N", mins.min_night_nurses, isNurseOrIntern, "nurse");
-    promoteOff("N", mins.min_night_na, isNAType, "na");
+    check("M", ward.min_morning_supervisor, isWardSupervisor, "supervisor");
+    check("M", ward.min_morning_nurses, isNurseOrIntern, "nurse");
+    check("M", ward.min_morning_na, isNAType, "na");
+    check("N", ward.min_night_supervisor, isWardSupervisor, "supervisor");
+    check("N", ward.min_night_nurses, isNurseOrIntern, "nurse");
+    check("N", ward.min_night_na, isNAType, "na");
   }
 
-  return { violations, extraPromos };
+  return { violations, extraPromos: new Map() };
 }
 
 export function nextInternWard(currentWard: string | null, wardNames: string[]): string | null {
@@ -1105,7 +1016,6 @@ export function generateSchedule(opts: {
         ward,
         days,
         opts.startDate,
-        opts.facility,
       );
       allViolations.push(...wardViolations);
       for (const [id, count] of extraPromos) {
