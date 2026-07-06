@@ -25,7 +25,12 @@ router.get(
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     const { rows } = await pool.query(
-      `SELECT * FROM audit_logs ${where} ORDER BY created_at DESC LIMIT 500`,
+      `SELECT al.*,
+              COALESCE(al.actor_name, p.full_name) AS actor_name
+       FROM audit_logs al
+       LEFT JOIN profiles p ON p.id = al.actor_id
+       ${where}
+       ORDER BY al.created_at DESC LIMIT 500`,
       params,
     );
     res.json(rows);
