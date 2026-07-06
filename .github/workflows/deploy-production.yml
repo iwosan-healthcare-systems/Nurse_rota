@@ -37,11 +37,22 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             cd /root/nurse-api-uat
             npm install --production
-            for f in migrations/*.sql; do
-              echo "Running migration: $f"
-              PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -f "$f"
+            PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -c \
+              "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
+            for f in $(ls migrations/*.sql 2>/dev/null | sort); do
+              name=$(basename "$f")
+              applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -tAc \
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
+              if [ "$applied" = "0" ]; then
+                echo "Applying migration: $name"
+                PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -f "$f"
+                PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -c \
+                  "INSERT INTO schema_migrations (name) VALUES ('$name');"
+              else
+                echo "Skipping already-applied migration: $name"
+              fi
             done
-            pm2 restart nurse-api-uat || pm2 start server.js --name nurse-api-uat
+            pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat
             pm2 save
 
   deploy-production:
@@ -98,9 +109,20 @@ jobs:
             source "$NVM_DIR/nvm.sh"
             cd /root/nurse-api
             npm install --production
-            for f in migrations/*.sql; do
-              echo "Running migration: $f"
-              PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -f "$f"
+            PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -c \
+              "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
+            for f in $(ls migrations/*.sql 2>/dev/null | sort); do
+              name=$(basename "$f")
+              applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -tAc \
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
+              if [ "$applied" = "0" ]; then
+                echo "Applying migration: $name"
+                PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -f "$f"
+                PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -c \
+                  "INSERT INTO schema_migrations (name) VALUES ('$name');"
+              else
+                echo "Skipping already-applied migration: $name"
+              fi
             done
-            pm2 restart nurse-api || pm2 start server.js --name nurse-api
+            pm2 reload nurse-api || pm2 start server.js --name nurse-api
             pm2 save
