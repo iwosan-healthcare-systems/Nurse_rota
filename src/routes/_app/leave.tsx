@@ -107,19 +107,24 @@ function LeavePage() {
         return api.get<LeaveRow[]>("/leave-requests");
       }
 
-      // Two separate queries — nurse A sees their own requests; nurse B sees switch requests
-      // where they are the target (switch_nurse_b = nurseId).
-      const [ownRows, switchRows] = await Promise.all([
+      // Three queries:
+      // 1. Own submissions (self-submitted leave).
+      // 2. Switches where this nurse is Nurse B (target).
+      // 3. Switches where this nurse is Nurse A (subject) — submitted by a matron on their behalf.
+      const [ownRows, nurseBSwitchRows, nurseASwitchRows] = await Promise.all([
         api.get<LeaveRow[]>(`/leave-requests?requested_by=${user!.id}`),
         nurseId
           ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`)
+          : Promise.resolve([] as LeaveRow[]),
+        nurseId
+          ? api.get<LeaveRow[]>(`/leave-requests?nurse_id=${nurseId}&type=Swap`)
           : Promise.resolve([] as LeaveRow[]),
       ]);
 
       // Merge and deduplicate
       const seen = new Set<string>();
       const merged: LeaveRow[] = [];
-      for (const row of [...ownRows, ...switchRows]) {
+      for (const row of [...ownRows, ...nurseBSwitchRows, ...nurseASwitchRows]) {
         if (!seen.has(row.id)) {
           seen.add(row.id);
           merged.push(row);
@@ -337,18 +342,38 @@ function LeavePage() {
         status === "Approved" ? "Switch approved and applied to published rota" : "Switch rejected",
       );
 
+      // Notify the initiator (matron/CNO who submitted the request).
       if (l.requested_by) {
         await api
           .post("/notifications/upsert", [
             {
               user_id: l.requested_by,
-              notif_key: `switch_${status.toLowerCase()}_${l.id}`,
+              notif_key: `switch_${status.toLowerCase()}_${l.id}_initiator`,
               is_read: false,
             },
           ])
           .catch(() => {});
       }
       const swInfo = parseSwitch(l);
+      // Notify Nurse A by profile lookup (they are the subject, not necessarily the submitter).
+      if (l.nurse_name) {
+        const profilesA = await api
+          .get<{ id: string }[]>(`/profiles?full_name=${encodeURIComponent(l.nurse_name)}`)
+          .catch(() => [] as { id: string }[]);
+        const profileAId = profilesA[0]?.id;
+        if (profileAId) {
+          await api
+            .post("/notifications/upsert", [
+              {
+                user_id: profileAId,
+                notif_key: `switch_${status.toLowerCase()}_${l.id}`,
+                is_read: false,
+              },
+            ])
+            .catch(() => {});
+        }
+      }
+      // Notify Nurse B.
       if (swInfo?.nurseBName) {
         const profilesB = await api
           .get<{ id: string }[]>(`/profiles?full_name=${encodeURIComponent(swInfo.nurseBName)}`)
@@ -599,7 +624,9 @@ function LeaveTable({
                   {canApprove && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
                   <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
                   <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                    {l.from_date} → {l.to_date}
+                    {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
+                      ? fmtDateLeave(l.from_date)
+                      : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
                   </td>
                   <td className="px-4 py-3">
                     <span
@@ -764,7 +791,7 @@ function SwitchTable({
                     <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
                     <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                      {sw?.date ?? l.from_date}
+                      {fmtDateLeave(sw?.date ?? l.from_date)}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
                       {sw ? (
