@@ -1105,7 +1105,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-switch"],
     queryFn: () =>
-      api.get<{ id: string; name: string; ward: string | null; facility: string | null }[]>(
+      api.get<{ id: string; name: string; ward: string | null; facility: string | null; role: string }[]>(
         "/nurses",
       ),
   });
@@ -1130,12 +1130,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
   const facilityNurseIds = useMemo(() => facilityNurses.map((n) => n.id), [facilityNurses]);
 
-  // When Nurse A is on leave, we only want to show Nurse B candidates who are OFF
-  // that day (the only nurses available to cover). Fetch published OFF assignments for
-  // the selected date scoped to this facility.
-  const { data: offDutyIds = [] } = useQuery({
+  // Fetch nurses who have an OFF published shift on the selected date in this facility.
+  // Always required for Nurse B eligibility — only off-duty nurses can be selected.
+  const { data: offDutyIds = [], isLoading: loadingOffDuty } = useQuery({
     queryKey: ["off-duty-nurses", date, facility],
-    enabled: shiftA === "LEAVE" && !!date && facilityNurseIds.length > 0,
+    enabled: !!date && facilityNurseIds.length > 0,
     queryFn: () =>
       api
         .get<
@@ -1146,19 +1145,22 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const offDutyIdSet = useMemo(() => new Set(offDutyIds), [offDutyIds]);
 
   const nurseBList = useMemo(() => {
-    if (!nurseAId) return [];
-    const leaveFilter = (n: { id: string }) => shiftA !== "LEAVE" || offDutyIdSet.has(n.id);
+    if (!nurseAId || !date) return [];
+    const nurseARole = nurseA?.role ?? "";
+    // Nurse B must share the same job role as Nurse A and be off duty on the date.
+    const eligible = (n: (typeof facilityNurses)[number]) =>
+      n.id !== nurseAId &&
+      (!nurseARole || n.role === nurseARole) &&
+      offDutyIdSet.has(n.id);
     if (switchType === "inter-ward") {
       if (!wardB) return [];
-      return facilityNurses.filter(
-        (n) => n.id !== nurseAId && splitWards(n.ward).includes(wardB) && leaveFilter(n),
-      );
+      return facilityNurses.filter((n) => eligible(n) && splitWards(n.ward).includes(wardB));
     }
-    // Same-ward: if Nurse A has no ward (coverage nurse on leave), any OFF nurse can cover.
+    // Same-ward: if Nurse A has no ward (coverage nurse), any same-role OFF nurse in the facility can cover.
     const inWard = (n: (typeof facilityNurses)[number]) =>
       nurseAWards.length === 0 ? true : splitWards(n.ward).some((w) => nurseAWards.includes(w));
-    return facilityNurses.filter((n) => n.id !== nurseAId && inWard(n) && leaveFilter(n));
-  }, [nurseAId, switchType, wardB, facilityNurses, nurseAWards, shiftA, offDutyIdSet]);
+    return facilityNurses.filter((n) => eligible(n) && inWard(n));
+  }, [nurseAId, date, switchType, wardB, facilityNurses, nurseA, nurseAWards, offDutyIdSet]);
 
   async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
     if (!nurseId || !forDate) {
@@ -1414,7 +1416,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-b"
             required
-            disabled={switchType === "inter-ward" ? !wardB : !nurseAId}
+            disabled={loadingOffDuty || (switchType === "inter-ward" ? !wardB : !nurseAId) || !date}
             value={nurseBId}
             onChange={(e) => {
               setNurseBId(e.target.value);
@@ -1424,13 +1426,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             className={inputCls}
           >
             <option value="">
-              {switchType === "inter-ward"
-                ? wardB
-                  ? "Select nurse…"
-                  : "Select Ward B first…"
-                : nurseAId
-                  ? "Select nurse…"
-                  : "Select Nurse A first…"}
+              {loadingOffDuty
+                ? "Loading available nurses…"
+                : switchType === "inter-ward"
+                  ? wardB
+                    ? "Select nurse…"
+                    : "Select Ward B first…"
+                  : nurseAId
+                    ? "Select nurse…"
+                    : "Select Nurse A first…"}
             </option>
             {nurseBList.map((n) => (
               <option key={n.id} value={n.id}>
@@ -1438,11 +1442,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               </option>
             ))}
           </select>
-          {nurseAId && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
+          {nurseAId && date && !loadingOffDuty && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
             <p className="mt-1 text-xs text-muted-foreground">
               {switchType === "inter-ward"
-                ? "No nurses found in the selected ward."
-                : "No other nurses found in the same ward."}
+                ? `No off-duty ${nurseA?.role ?? "nurse"} found in the selected ward on this date.`
+                : `No off-duty ${nurseA?.role ?? "nurse"} found in the same ward on this date.`}
             </p>
           )}
           {shiftB && (

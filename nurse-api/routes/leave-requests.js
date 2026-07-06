@@ -109,6 +109,27 @@ router.post(
       }
     }
 
+    // Block duplicate/overlapping requests for the same nurse (Pending or Approved only).
+    // Swap-type shift switches are exempt — a nurse may legitimately have multiple switch rows.
+    if (type !== "Swap" && nurse_name) {
+      const overlapParams = [nurse_name, from_date, to_date];
+      const idClause = nurse_id ? ` AND (nurse_id = $4 OR nurse_name = $1)` : ` AND nurse_name = $1`;
+      if (nurse_id) overlapParams.push(nurse_id);
+      const { rows: existing } = await pool.query(
+        `SELECT id FROM leave_requests
+          WHERE status IN ('Pending', 'Approved')
+            AND from_date <= $3 AND to_date >= $2
+            ${idClause}
+          LIMIT 1`,
+        overlapParams,
+      );
+      if (existing.length > 0) {
+        return res.status(409).json({
+          error: "A leave request already exists for those dates. Cancel or update the existing request first.",
+        });
+      }
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO leave_requests (nurse_id, nurse_name, type, from_date, to_date, reason, requested_by, switch_nurse_b)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
