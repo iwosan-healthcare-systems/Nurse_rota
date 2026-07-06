@@ -348,6 +348,10 @@ function isNurseOrIntern(role: string) {
   return !isNAType(role) && !isHeadOrSupervisor(role);
 }
 
+function isMorningOnlyWard(ward: WardInput): boolean {
+  return ward.min_night_nurses === 0 && ward.min_night_supervisor === 0 && ward.min_night_na === 0;
+}
+
 function stableGroupOffset(group: NurseInput[]): number {
   if (group.length === 0) return 0;
   let h = 5381;
@@ -957,9 +961,13 @@ export function generateSchedule(opts: {
     const naRegularSeed = stableGroupOffset(naRegular) * 4;
     const naDaySeed = stableGroupOffset(naDay) * 4;
 
+    // Morning-only wards use 4M→4OFF cycle for all ward nurses so they never
+    // get night shifts scheduled.  Full-cycle wards use the standard 4M→4OFF→4N→4OFF.
+    const wardCycle = isMorningOnlyWard(ward) ? DAY_ONLY_CYCLE : NURSE_CYCLE;
+
     scheduleGroup(
       supervisors,
-      NURSE_CYCLE,
+      wardCycle,
       days,
       opts.startDate,
       leave,
@@ -969,7 +977,7 @@ export function generateSchedule(opts: {
     );
     scheduleGroup(
       regulars,
-      NURSE_CYCLE,
+      wardCycle,
       days,
       opts.startDate,
       leave,
@@ -979,7 +987,7 @@ export function generateSchedule(opts: {
     );
     scheduleGroup(
       naRegular,
-      NURSE_CYCLE,
+      wardCycle,
       days,
       opts.startDate,
       leave,
