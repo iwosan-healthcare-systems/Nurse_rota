@@ -28,6 +28,8 @@ import {
   Stethoscope,
   Lock,
   ClipboardCheck,
+  CalendarX,
+  ArrowRightLeft,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -316,6 +318,14 @@ function upsertNotif(userId: string, notifKey: string, isRead: boolean, refetch:
     .catch(() => {});
 }
 
+function upsertManyNotifs(userId: string, keys: string[], isRead: boolean, refetch: () => void) {
+  if (!keys.length) return;
+  api
+    .post("/notifications/upsert", keys.map((k) => ({ user_id: userId, notif_key: k, is_read: isRead })))
+    .then(() => refetch())
+    .catch(() => {});
+}
+
 function RotaReminderBell({
   activeRole,
   nurseId,
@@ -523,6 +533,27 @@ function RotaReminderBell({
         (r.notif_key.startsWith("locum_filled_") || r.notif_key.startsWith("locum_declined_")),
     ).length ?? 0;
 
+  // Unread leave/switch outcome notifications (shown to the requesting staff member)
+  const leaveUpdateKeys =
+    allNotifs
+      ?.filter(
+        (r) =>
+          !r.is_read &&
+          (r.notif_key.startsWith("leave_approved_") ||
+            r.notif_key.startsWith("leave_rejected_") ||
+            r.notif_key.startsWith("switch_approved_") ||
+            r.notif_key.startsWith("switch_rejected_")),
+      )
+      .map((r) => r.notif_key) ?? [];
+  const leaveUnread = leaveUpdateKeys.length;
+
+  // Unread cover-needed notifications (shown to the matron who approved sick/emergency leave)
+  const coverNeededKeys =
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("leave_cover_needed_"))
+      .map((r) => r.notif_key) ?? [];
+  const coverUnread = coverNeededKeys.length;
+
   // ── Computed alert counts ─────────────────────────────────────────────────
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
@@ -535,9 +566,13 @@ function RotaReminderBell({
     (mgmtUnread ? 1 : 0) +
     (staffUnread ? 1 : 0) +
     (showLocum ? 1 : 0) +
-    (workflowUnread ? 1 : 0);
+    (workflowUnread ? 1 : 0) +
+    (leaveUnread > 0 ? 1 : 0) +
+    (coverUnread > 0 ? 1 : 0);
 
   const allNotifItems = [
+    ...(coverUnread > 0 ? [{ kind: "cover_needed" as const }] : []),
+    ...(leaveUnread > 0 ? [{ kind: "leave_updates" as const }] : []),
     ...(showLocum ? [{ kind: "locum" as const }] : []),
     ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
     // Workflow notifications appear before the generic deadline reminder
@@ -565,6 +600,11 @@ function RotaReminderBell({
   function markNotif(key: string | null, isRead: boolean) {
     if (!key || !userId) return;
     upsertNotif(userId, key, isRead, refetchNotifs);
+  }
+
+  function markManyNotifs(keys: string[], isRead: boolean) {
+    if (!userId) return;
+    upsertManyNotifs(userId, keys, isRead, refetchNotifs);
   }
 
   return (
@@ -612,7 +652,65 @@ function RotaReminderBell({
             ) : (
               <div className="space-y-3">
                 {notifItems.map(({ kind }) =>
-                  kind === "locum" ? (
+                  kind === "cover_needed" ? (
+                    <div
+                      key="cover_needed"
+                      className="rounded-lg border border-amber-400/40 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <ArrowRightLeft className="h-4 w-4 shrink-0 text-amber-600" />
+                          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
+                            Shift Cover Needed
+                          </p>
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => markManyNotifs(coverNeededKeys, true)}
+                          className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                      <p className="text-xs">
+                        {coverUnread} sick/emergency leave{coverUnread !== 1 ? "s" : ""} approved
+                        — consider arranging shift cover.
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Open the Shift Switches tab on Leave &amp; Requests to arrange cover.
+                      </p>
+                    </div>
+                  ) : kind === "leave_updates" ? (
+                    <div
+                      key="leave_updates"
+                      className="rounded-lg border border-blue-400/40 bg-blue-50 dark:bg-blue-950/20 p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <CalendarX className="h-4 w-4 shrink-0 text-blue-600" />
+                          <p className="text-xs font-semibold text-blue-700 dark:text-blue-400">
+                            Leave / Switch Update
+                          </p>
+                          <span className="h-1.5 w-1.5 rounded-full bg-blue-500 shrink-0" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => markManyNotifs(leaveUpdateKeys, true)}
+                          className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                      <p className="text-xs">
+                        {leaveUnread} of your leave or shift switch request
+                        {leaveUnread !== 1 ? "s have" : " has"} been reviewed.
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Open Leave &amp; Requests to see the outcome.
+                      </p>
+                    </div>
+                  ) : kind === "locum" ? (
                     <div
                       key="locum"
                       className="rounded-lg border border-violet-400/40 bg-violet-50 dark:bg-violet-950/20 p-3 space-y-2"

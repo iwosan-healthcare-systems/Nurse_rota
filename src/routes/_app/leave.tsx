@@ -231,6 +231,14 @@ function LeavePage() {
               ])
               .catch(() => {});
           }
+          // Notify the approver to consider arranging shift cover.
+          if (user?.id && (l.type === "Sick" || l.type === "Emergency")) {
+            await api
+              .post("/notifications/upsert", [
+                { user_id: user.id, notif_key: `leave_cover_needed_${l.id}`, is_read: false },
+              ])
+              .catch(() => {});
+          }
           qc.invalidateQueries({ queryKey: ["leave"] });
           qc.invalidateQueries({ queryKey: ["assignments"] });
           return;
@@ -254,6 +262,13 @@ function LeavePage() {
               notif_key: `leave_${status.toLowerCase()}_${l.id}`,
               is_read: false,
             },
+          ])
+          .catch(() => {});
+      }
+      if (status === "Approved" && user?.id && (l.type === "Sick" || l.type === "Emergency")) {
+        await api
+          .post("/notifications/upsert", [
+            { user_id: user.id, notif_key: `leave_cover_needed_${l.id}`, is_read: false },
           ])
           .catch(() => {});
       }
