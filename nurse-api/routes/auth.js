@@ -199,6 +199,39 @@ router.patch(
   }),
 );
 
+router.patch(
+  "/admin/users/:id/profile",
+  requireAuth,
+  requireRole("admin", "cno"),
+  wrap(async (req, res) => {
+    const { full_name, email } = req.body;
+    if (!full_name?.trim()) return res.status(400).json({ error: "full_name is required" });
+    if (!email?.trim()) return res.status(400).json({ error: "email is required" });
+
+    const { rows: current } = await pool.query("SELECT full_name FROM profiles WHERE id = $1", [
+      req.params.id,
+    ]);
+    if (!current[0]) return res.status(404).json({ error: "User not found" });
+
+    const oldName = current[0].full_name;
+
+    await pool.query(
+      "UPDATE profiles SET full_name = $1, email = lower($2), updated_at = NOW() WHERE id = $3",
+      [full_name.trim(), email.trim(), req.params.id],
+    );
+
+    if (oldName) {
+      await pool.query("UPDATE nurses SET name = $1, email = lower($2) WHERE name = $3", [
+        full_name.trim(),
+        email.trim().toLowerCase(),
+        oldName,
+      ]);
+    }
+
+    res.json({ success: true });
+  }),
+);
+
 router.post(
   "/admin/bulk-create-users",
   requireAuth,

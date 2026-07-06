@@ -24,6 +24,7 @@ import {
   Copy,
   ShieldAlert,
   KeyRound,
+  Pencil,
 } from "lucide-react";
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { Modal } from "./staff";
@@ -41,7 +42,16 @@ export const Route = createFileRoute("/_app/users")({
   component: UsersPage,
 });
 
-const ALL_ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"];
+const ALL_ROLES: AppRole[] = [
+  "admin",
+  "cno",
+  "chief_matron",
+  "head_nurse",
+  "hr_admin",
+  "nurse",
+  "porter",
+  "nursing_assistant",
+];
 
 const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   admin: "bg-red-100 text-red-700 border-red-200",
@@ -78,6 +88,7 @@ function UsersPage() {
   const [filterStatus, setFilterStatus] = useState<"" | "active" | "inactive">("");
   const [filterRole, setFilterRole] = useState<AppRole | "">("");
   const [resetPasswordTarget, setResetPasswordTarget] = useState<UserRow | null>(null);
+  const [editTarget, setEditTarget] = useState<UserRow | null>(null);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
@@ -174,21 +185,17 @@ function UsersPage() {
     }
   }
 
-  const filtered = users
-    .filter((u) => {
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        if (
-          !u.full_name?.toLowerCase().includes(q) &&
-          !u.email?.toLowerCase().includes(q)
-        )
-          return false;
-      }
-      if (filterStatus === "active" && !u.is_active) return false;
-      if (filterStatus === "inactive" && u.is_active) return false;
-      if (filterRole && !u.roles.includes(filterRole)) return false;
-      return true;
-    });
+  const filtered = users.filter((u) => {
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      if (!u.full_name?.toLowerCase().includes(q) && !u.email?.toLowerCase().includes(q))
+        return false;
+    }
+    if (filterStatus === "active" && !u.is_active) return false;
+    if (filterStatus === "inactive" && u.is_active) return false;
+    if (filterRole && !u.roles.includes(filterRole)) return false;
+    return true;
+  });
 
   const activeFilters = [filterStatus, filterRole].filter(Boolean).length;
   const clearFilters = () => {
@@ -260,7 +267,9 @@ function UsersPage() {
         >
           <option value="">All roles</option>
           {ALL_ROLES.map((r) => (
-            <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+            <option key={r} value={r}>
+              {ROLE_LABELS[r]}
+            </option>
           ))}
         </select>
         {(activeFilters > 0 || search) && (
@@ -319,6 +328,7 @@ function UsersPage() {
                       onDeactivate={deactivateUser}
                       onReactivate={reactivateUser}
                       onResetPassword={(u) => setResetPasswordTarget(u)}
+                      onEdit={(u) => setEditTarget(u)}
                     />
                   ))
                 )}
@@ -359,6 +369,18 @@ function UsersPage() {
           onClose={() => setResetPasswordTarget(null)}
         />
       )}
+
+      {editTarget && (
+        <EditProfileModal
+          user={editTarget}
+          onClose={() => setEditTarget(null)}
+          onSaved={() => {
+            qc.invalidateQueries({ queryKey: ["user-profiles"] });
+            qc.invalidateQueries({ queryKey: ["nurses"] });
+            setEditTarget(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -387,7 +409,10 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
       });
       await api.post("/user-roles", { user_id: userId, role: form.role });
       toast.success(`User created — ${form.email} can log in immediately`);
-      void logAudit("Created user login", `${form.fullName || form.email} (${form.email}) — ${ROLE_LABELS[form.role as AppRole] ?? form.role}`);
+      void logAudit(
+        "Created user login",
+        `${form.fullName || form.email} (${form.email}) — ${ROLE_LABELS[form.role as AppRole] ?? form.role}`,
+      );
       onCreated();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to create user");
@@ -526,7 +551,10 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
       setResult(res);
       if (res.created.length > 0) {
         toast.success(`${res.created.length} login${res.created.length !== 1 ? "s" : ""} created`);
-        void logAudit("Bulk-generated logins", `${res.created.length} created, ${res.skipped.length} skipped`);
+        void logAudit(
+          "Bulk-generated logins",
+          `${res.created.length} created, ${res.skipped.length} skipped`,
+        );
       }
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate logins");
@@ -823,6 +851,104 @@ function ResetPasswordModal({
   );
 }
 
+function EditProfileModal({
+  user,
+  onClose,
+  onSaved,
+}: {
+  user: UserRow;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [fullName, setFullName] = useState(user.full_name ?? "");
+  const [email, setEmail] = useState(user.email ?? "");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.SyntheticEvent) {
+    e.preventDefault();
+    if (!fullName.trim()) {
+      toast.error("Name is required");
+      return;
+    }
+    if (!email.trim()) {
+      toast.error("Email is required");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.patch(`/auth/admin/users/${user.id}/profile`, {
+        full_name: fullName.trim(),
+        email: email.trim(),
+      });
+      toast.success("Profile updated");
+      void logAudit(
+        "Edited user profile",
+        `${user.full_name ?? user.email} → ${fullName.trim()} (${email.trim()})`,
+      );
+      onSaved();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to update profile");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const inputCls =
+    "w-full h-10 rounded-md border bg-background px-3 text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <Modal title="Edit Profile" onClose={onClose}>
+      <form onSubmit={submit} className="space-y-4">
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Full Name
+          </label>
+          <input
+            className={inputCls}
+            value={fullName}
+            onChange={(e) => setFullName(e.target.value)}
+            placeholder="Full name"
+            required
+          />
+        </div>
+        <div className="space-y-1.5">
+          <label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            Email
+          </label>
+          <input
+            type="email"
+            className={inputCls}
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="email@example.com"
+            required
+          />
+        </div>
+        <p className="text-xs text-muted-foreground">
+          If this user has a nurse record, their name and email there will be updated too.
+        </p>
+        <div className="flex gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="flex-1 h-10 rounded-md border bg-background text-sm font-medium hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 inline-flex items-center justify-center gap-2"
+          >
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pencil className="h-4 w-4" />}
+            Save changes
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 function formatRelativeTime(iso: string | null): string {
   if (!iso) return "Never";
   const diff = Date.now() - new Date(iso).getTime();
@@ -844,6 +970,7 @@ function UserRowItem({
   onDeactivate,
   onReactivate,
   onResetPassword,
+  onEdit,
 }: {
   user: UserRow;
   onAdd: (id: string, role: AppRole) => void;
@@ -852,6 +979,7 @@ function UserRowItem({
   onDeactivate: (user: UserRow) => void;
   onReactivate: (user: UserRow) => void;
   onResetPassword: (user: UserRow) => void;
+  onEdit: (user: UserRow) => void;
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
   const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
@@ -922,7 +1050,10 @@ function UserRowItem({
               type="button"
               disabled={!adding}
               onClick={() => {
-                if (adding) { onAdd(user.id, adding); setAdding(""); }
+                if (adding) {
+                  onAdd(user.id, adding);
+                  setAdding("");
+                }
               }}
               className="h-7 px-2 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-0.5 disabled:opacity-40"
             >
@@ -948,6 +1079,14 @@ function UserRowItem({
       {/* Actions */}
       <td className="px-4 py-3">
         <div className="flex items-center gap-1 justify-end">
+          <button
+            type="button"
+            onClick={() => onEdit(user)}
+            title="Edit profile"
+            className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-primary/40 hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
           {user.is_active ? (
             <>
               <button
