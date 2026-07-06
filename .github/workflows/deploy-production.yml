@@ -3,13 +3,13 @@ name: Deploy
 on:
   push:
     branches:
-      - main
-      - production
+      - develop
+      - master
 
 jobs:
   deploy-uat-api:
-    name: Deploy UAT API (main)
-    if: github.ref == 'refs/heads/main'
+    name: Deploy UAT API (develop)
+    if: github.ref == 'refs/heads/develop'
     runs-on: ubuntu-latest
 
     steps:
@@ -45,8 +45,8 @@ jobs:
             pm2 save
 
   deploy-production:
-    name: Deploy Production
-    if: github.ref == 'refs/heads/production'
+    name: Deploy Production (master)
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
 
     steps:

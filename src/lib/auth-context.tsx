@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, getToken, clearToken } from "@/lib/api";
+import { toast } from "sonner";
 
 export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse" | "porter" | "nursing_assistant";
 
@@ -124,6 +125,60 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener("capabilities-changed", handler);
     return () => window.removeEventListener("capabilities-changed", handler);
   }, []);
+
+  // Auto-logout after 1 hour of inactivity. Warns at 55 minutes.
+  useEffect(() => {
+    if (!user) return;
+
+    const IDLE_MS = 60 * 60 * 1000;  // 1 hour
+    const WARN_MS = 55 * 60 * 1000;  // warn at 55 min
+
+    function doLogout() {
+      toast.dismiss("idle-warn");
+      sessionStorage.removeItem(selectedRoleStorageKey(user!.id));
+      clearToken();
+      setUser(null);
+      setRoles([]);
+      setActiveRole(null);
+      setMustChangePassword(false);
+      toast.info("You have been logged out due to inactivity.");
+    }
+
+    function doWarn() {
+      toast.warning("You will be logged out in 5 minutes due to inactivity. Move the mouse or press a key to stay logged in.", {
+        id: "idle-warn",
+        duration: 5 * 60 * 1000,
+      });
+    }
+
+    let logoutTimer = setTimeout(doLogout, IDLE_MS);
+    let warnTimer = setTimeout(doWarn, WARN_MS);
+    let throttle: ReturnType<typeof setTimeout> | null = null;
+
+    function onActivity() {
+      // Reset timers at most once every 10 seconds to avoid overhead from mousemove
+      if (throttle) return;
+      throttle = setTimeout(() => {
+        throttle = null;
+        clearTimeout(logoutTimer);
+        clearTimeout(warnTimer);
+        toast.dismiss("idle-warn");
+        warnTimer = setTimeout(doWarn, WARN_MS);
+        logoutTimer = setTimeout(doLogout, IDLE_MS);
+      }, 10_000);
+    }
+
+    const EVENTS = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"] as const;
+    EVENTS.forEach((e) => window.addEventListener(e, onActivity, { passive: true }));
+
+    return () => {
+      clearTimeout(logoutTimer);
+      clearTimeout(warnTimer);
+      if (throttle) clearTimeout(throttle);
+      EVENTS.forEach((e) => window.removeEventListener(e, onActivity));
+      toast.dismiss("idle-warn");
+    };
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyUser(me: ApiUser) {
     setUser(me);
