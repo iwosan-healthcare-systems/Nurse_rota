@@ -256,7 +256,9 @@ function StaffPage() {
     [nurses, search, filterRole, filterFacility, filterWard, filterStatus, profileInfo],
   );
 
-  const activeFilters = [filterRole, filterFacility, filterWard, filterStatus].filter(Boolean).length;
+  const activeFilters = [filterRole, filterFacility, filterWard, filterStatus].filter(
+    Boolean,
+  ).length;
   const clearFilters = () => {
     setFilterRole("");
     setFilterFacility("");
