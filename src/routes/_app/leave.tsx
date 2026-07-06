@@ -99,22 +99,25 @@ function LeavePage() {
     queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
   });
 
+  // Any approval role (leave OR shift-switch) gets the full list — they need to see all requests.
+  const canSeeAll = canApproveLeave || canApproveShiftSwitch;
+
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: canApproveLeave ? ["leave"] : ["leave", "mine", user?.id, nurseId],
+    queryKey: canSeeAll ? ["leave"] : ["leave", "mine", user?.id, nurseId],
     refetchInterval: 30 * 1000,
     queryFn: async () => {
-      if (canApproveLeave) {
+      if (canSeeAll) {
         return api.get<LeaveRow[]>("/leave-requests");
       }
 
-      // Three queries:
+      // Three queries for non-approvers:
       // 1. Own submissions (self-submitted leave).
       // 2. Switches where this nurse is Nurse B (target).
       // 3. Switches where this nurse is Nurse A (subject) — submitted by a matron on their behalf.
       const [ownRows, nurseBSwitchRows, nurseASwitchRows] = await Promise.all([
         api.get<LeaveRow[]>(`/leave-requests?requested_by=${user!.id}`),
         nurseId
-          ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`)
+          ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`).catch(() => [] as LeaveRow[])
           : Promise.resolve([] as LeaveRow[]),
         nurseId
           ? api.get<LeaveRow[]>(`/leave-requests?nurse_id=${nurseId}&type=Swap`)
