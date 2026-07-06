@@ -1005,7 +1005,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                         className="border-t hover:bg-muted/30"
                       >
                         <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{log.shift_date}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{fmtDate(log.shift_date)}</td>
                         <td className="px-4 py-3">
                           <span
                             className={`text-xs px-2 py-0.5 rounded-full font-semibold ${log.shift_type === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
@@ -1309,7 +1309,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                             <p className="font-medium">
                               {nurses.find((n) => n.id === s.nurse_id)?.name ?? "Unknown"}
                             </p>
-                            <p className="text-xs text-muted-foreground">{s.from_date}</p>
+                            <p className="text-xs text-muted-foreground">{fmtDate(s.from_date)}</p>
                           </div>
                           <span
                             className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
@@ -1349,10 +1349,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {l.from_date}
+                          {fmtDate(l.from_date)}
                         </td>
                         <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {l.to_date}
+                          {fmtDate(l.to_date)}
                         </td>
                         <td className="px-4 py-3">
                           <span

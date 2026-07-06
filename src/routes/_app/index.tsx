@@ -99,12 +99,25 @@ type ShiftLog = {
 
 type LeaveRequest = {
   id: string;
+  nurse_name: string;
   type: string;
   from_date: string;
   to_date: string;
   status: string;
   created_at: string;
 };
+
+function fmtD(d: string): string {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function fmtDateRange(from: string, to: string): string {
+  return from.slice(0, 10) === to.slice(0, 10) ? fmtD(from) : `${fmtD(from)} – ${fmtD(to)}`;
+}
 
 // ── Shared stat card ──────────────────────────────────────────────────────────
 
@@ -442,7 +455,7 @@ function NurseDashboard() {
                   <div className="min-w-0">
                     <p className="font-medium truncate">{l.type}</p>
                     <p className="text-xs text-muted-foreground">
-                      {l.from_date} → {l.to_date}
+                      {fmtDateRange(l.from_date, l.to_date)}
                     </p>
                   </div>
                   <span
@@ -480,7 +493,7 @@ function ManagementDashboard() {
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
-    queryFn: () => api.get<Record<string, unknown>[]>("/leave-requests"),
+    queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
   const nurses = facilityFilter
@@ -585,7 +598,7 @@ function ManagementDashboard() {
                   <div className="min-w-0">
                     <p className="text-sm font-medium truncate">{l.nurse_name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {l.type} · {l.from_date} → {l.to_date}
+                      {l.type} · {fmtDateRange(l.from_date, l.to_date)}
                     </p>
                   </div>
                   <Clock className="h-4 w-4 text-amber-500 shrink-0" />

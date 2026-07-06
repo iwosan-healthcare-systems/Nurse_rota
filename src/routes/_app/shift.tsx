@@ -22,6 +22,14 @@ import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { verifyLocationAndCaptureIp } from "@/lib/geo-fence";
 
+function fmtDate(d: string) {
+  return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export const Route = createFileRoute("/_app/shift")({
   head: () => ({
     meta: [{ title: "Shift — Nurses Rota" }],
@@ -800,7 +808,7 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
               </span>
               <div>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium">{log.shift_date}</p>
+                  <p className="font-medium">{fmtDate(log.shift_date)}</p>
                   {log.is_leave && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-full">
                       Leave (credited)
