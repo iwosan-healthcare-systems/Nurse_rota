@@ -24,7 +24,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
-  nextInternWard,
   isInternType,
   isGlobalHead,
   isMatron,
@@ -758,11 +757,10 @@ function RotaPage() {
     }
 
     // Rotate intern ward profiles for this period.
-    // Runs whenever rotateInterns is checked AND interns don't yet have submitted/approved
-    // assignments for this period — meaning draft-only or no assignments is fine.
-    // This is intentionally DECOUPLED from includeInterns (which controls scheduling):
-    // the PATCH must run even on re-generation attempts where interns already have draft
-    // assignments from a previous failed run, otherwise the ward profiles never update.
+    // Uses the epoch-based period number as the sole rotation signal so the result
+    // is identical on any re-generation within the same 28-day period (idempotent).
+    // Profile-ward was previously the primary signal but caused interns to step
+    // forward once per ward run within a period instead of once per period.
     let internsToSchedule = facilityInterns;
     const shouldRotateInternWards =
       genForm.rotateInterns && facilityInterns.length > 0 && !internsHaveSubmittedAssignments;
@@ -771,40 +769,23 @@ function RotaPage() {
 
       if (facilityWardNames.length > 0) {
         const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
-        // Primary: step one forward from the first intern's profile ward (most accurate
-        // when the previous period's PATCH succeeded and profiles are fresh).
-        // Fallback: use Math.round(periodOffset / DAYS) when profiles are null/unrecognised
-        // — this gives the correct period number even if the epoch is a day off.
-        const firstCurrentWard = parseWards(sortedInterns[0]?.ward ?? null)[0] ?? null;
-        const currentIdx = firstCurrentWard !== null ? facilityWardNames.indexOf(firstCurrentWard) : -1;
-        let nextBase: number;
-        if (currentIdx >= 0) {
-          nextBase = (currentIdx + 1) % facilityWardNames.length;
-        } else {
-          nextBase = Math.round(periodOffset / DAYS) % facilityWardNames.length;
-        }
+        // periodNumber = 0 for period 1, 1 for period 2, 2 for period 3, …
+        // Math.round absorbs an off-by-one-day epoch error.
+        const periodNumber = Math.round(periodOffset / DAYS);
+        const nextBase = periodNumber % facilityWardNames.length;
         internsToSchedule = sortedInterns.map((n, idx) => ({
           ...n,
           ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
         }));
-      } else {
-        internsToSchedule = facilityInterns.map((n) => {
-          const currentWard = parseWards(n.ward)[0] ?? null;
-          const newWard = nextInternWard(
-            currentWard,
-            genWards.map((w) => w.name),
-          );
-          return { ...n, ward: newWard };
-        });
-      }
 
-      try {
-        await Promise.all(
-          internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
-        );
-      } catch (e: unknown) {
-        toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
-        return;
+        try {
+          await Promise.all(
+            internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
+          );
+        } catch (e: unknown) {
+          toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
+          return;
+        }
       }
     }
 

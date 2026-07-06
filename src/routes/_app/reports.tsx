@@ -724,7 +724,7 @@ ${staffToPrint
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns";
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns / Porter-Day / NA-Day";
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
@@ -795,7 +795,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns";
+      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns / Porter-Day / NA-Day";
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
@@ -1643,7 +1643,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           >
                             <div>
                               <p className="text-sm font-semibold">
-                                {win.ward ?? "Matron / Coverage / Interns"}
+                                {win.ward ?? "Matron / Coverage / Interns / Porter-Day / NA-Day"}
                               </p>
                               {win.facility && (
                                 <p className="text-xs font-medium text-primary/80 mt-0.5">

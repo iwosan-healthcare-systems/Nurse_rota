@@ -936,9 +936,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     setBusy(true);
     try {
-      const matchedNurse = nurses.find((n) => n.name === fullName);
       await api.post("/leave-requests", {
-        nurse_id: matchedNurse?.id ?? null,
+        nurse_id: resolvedNurseId,
         nurse_name: fullName ?? "",
         requested_by: user?.id,
         type: effectiveType,
@@ -950,8 +949,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       logAudit("Submitted leave request", fullName ?? "");
       qc.invalidateQueries({ queryKey: ["leave"] });
       onClose();
-    } catch {
-      toast.error("Failed to submit request");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to submit request");
     } finally {
       setBusy(false);
     }
