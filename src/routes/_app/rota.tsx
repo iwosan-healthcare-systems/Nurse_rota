@@ -586,6 +586,16 @@ function RotaPage() {
     const genEnd = new Date(genStart);
     genEnd.setDate(genEnd.getDate() + DAYS - 1);
 
+    // Force-refresh nurse and ward data before building any scheduling inputs.
+    // The nurses query caches for 10 minutes, so without this a ward reassignment
+    // or role change made on the Staff page would be silently ignored.
+    await Promise.all([
+      qc.refetchQueries({ queryKey: ["nurses"] }),
+      qc.refetchQueries({ queryKey: ["gen-wards", genForm.facility] }),
+    ]);
+    const nurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
+    const genWards = qc.getQueryData<WardInput[]>(["gen-wards", genForm.facility]) ?? [];
+
     // Pre-flight: check for pending leave requests that overlap this period.
     // Skip if the user already confirmed ("Continue anyway").
     if (!genLeaveChecked) {
@@ -858,9 +868,10 @@ function RotaPage() {
           (v) =>
             `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, have ${v.actual}`,
         );
-        toast.warning(`Schedule saved with staffing shortfalls:\n${lines.join("\n")}`, {
-          duration: 8000,
-        });
+        toast.warning(
+          `Schedule saved — some ward minimums could not be fully met (not enough available staff):\n${lines.join("\n")}`,
+          { duration: 8000 },
+        );
         // Do NOT return — continue saving the draft
       }
 
