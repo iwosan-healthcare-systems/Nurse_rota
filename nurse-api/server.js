@@ -35,5 +35,10 @@ app.use((err, req, res, next) => {
   res.status(500).json({ error: err.message || 'Internal server error' });
 });
 
+const { startAutoEndJob } = require('./jobs/auto-end-shifts');
+
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => console.log(`Nurse API running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Nurse API running on port ${PORT}`);
+  startAutoEndJob();
+});

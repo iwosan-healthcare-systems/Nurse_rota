@@ -1,7 +1,14 @@
+export type FacilityLocation = { lat: number; lng: number; label: string };
+
+export type GpsSettings = {
+  radius_m: number;
+  facilities: Record<string, FacilityLocation[]>;
+};
+
 // Geo-fence configuration for all facility locations.
 // Each facility key matches the `facility` field stored on nurse records.
 // Ikeja has two campuses — the nearest one is used for distance checking.
-export const FACILITY_LOCATIONS: Record<string, { lat: number; lng: number; label: string }[]> = {
+export const FACILITY_LOCATIONS: Record<string, FacilityLocation[]> = {
   Ikeja: [
     { lat: 6.6044, lng: 3.3458, label: "Ikeja — 91 Obafemi Awolowo Way" },
     { lat: 6.6153343, lng: 3.3458773, label: "Ikeja — 91 Adeniyi Jones, Ogba" },
@@ -30,8 +37,9 @@ export function nearestLocation(
   facility: string,
   lat: number,
   lng: number,
+  facilityLocations?: Record<string, FacilityLocation[]>,
 ): { distanceM: number; label: string } | null {
-  const locs = FACILITY_LOCATIONS[facility];
+  const locs = (facilityLocations ?? FACILITY_LOCATIONS)[facility];
   if (!locs?.length) return null;
   let best: { distanceM: number; label: string } | null = null;
   for (const loc of locs) {
@@ -44,7 +52,11 @@ export function nearestLocation(
 /** Resolves with {lat, lng, ip} or rejects with a user-facing error message. */
 export async function verifyLocationAndCaptureIp(
   facility: string | null,
+  gpsSettings?: GpsSettings | null,
 ): Promise<{ lat: number; lng: number; ip: string | null }> {
+  const radiusM = gpsSettings?.radius_m ?? GEO_FENCE_RADIUS_M;
+  const facilityLocations = gpsSettings?.facilities;
+
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
       reject(new Error("Your browser does not support GPS. Cannot verify location."));
@@ -57,17 +69,17 @@ export async function verifyLocationAndCaptureIp(
 
         // Fence check (skip only when no facility is configured).
         if (facility) {
-          const nearest = nearestLocation(facility, lat, lng);
+          const nearest = nearestLocation(facility, lat, lng, facilityLocations);
           if (!nearest) {
             reject(
               new Error(`No location configured for "${facility}". Contact your administrator.`),
             );
             return;
           }
-          if (nearest.distanceM > GEO_FENCE_RADIUS_M) {
+          if (nearest.distanceM > radiusM) {
             reject(
               new Error(
-                `You are ${nearest.distanceM}m from ${nearest.label} — must be within ${GEO_FENCE_RADIUS_M}m to start your shift.`,
+                `You are ${nearest.distanceM}m from ${nearest.label} — must be within ${radiusM}m to start your shift.`,
               ),
             );
             return;

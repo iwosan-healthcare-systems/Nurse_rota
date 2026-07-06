@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
-import { verifyLocationAndCaptureIp } from "@/lib/geo-fence";
+import { verifyLocationAndCaptureIp, type GpsSettings } from "@/lib/geo-fence";
 
 function fmtDate(d: string) {
   return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
@@ -249,10 +249,25 @@ function ShiftPage() {
     },
   });
 
+  // GPS fence settings from portal (falls back to hardcoded defaults if not set)
+  const { data: gpsSettings } = useQuery<GpsSettings | null>({
+    queryKey: ["gps-settings"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      try {
+        const row = await api.get<{ value: GpsSettings }>("/portal-settings/gps_settings");
+        return row.value ?? null;
+      } catch {
+        return null;
+      }
+    },
+  });
+
   // Current period summary
   const { data: periodHours } = useQuery<PeriodHours | null>({
     queryKey: ["my-period-hours", nurseId],
     enabled: !!nurseId,
+    refetchInterval: 60000,
     queryFn: async () => {
       const arr = await api
         .get<PeriodHours[]>(`/nurse-period-hours?nurse_id=${nurseId}&limit=1`)
@@ -265,6 +280,7 @@ function ShiftPage() {
   const { data: currentPeriodLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["my-period-logs", nurseId],
     enabled: !!nurseId,
+    refetchInterval: 60000,
     queryFn: async () => {
       // Find the active period window start (earliest assignment in last 27 days)
       const lookback = new Date();
@@ -395,7 +411,7 @@ function ShiftPage() {
     // Locum shifts must be geo-verified against the locum facility, not the nurse's home facility.
     const facilityToCheck = todayLocum?.facility ?? nurseFacility;
     try {
-      const geo = await verifyLocationAndCaptureIp(facilityToCheck);
+      const geo = await verifyLocationAndCaptureIp(facilityToCheck, gpsSettings);
       pendingGeoRef.current = geo;
       if (isLate) {
         setLateDialog({ open: true, reason: "", capturedMinutes: minutesSinceStart });
@@ -882,18 +898,23 @@ type NurseRow = {
   target_hours: number;
 };
 type AllShiftLog = {
+  id: string;
   nurse_id: string;
   hours_logged: number | null;
   shift_date: string;
   shift_type: string;
   started_at: string;
   ended_at: string | null;
+  expected_end_at: string;
   is_late: boolean;
   late_minutes: number | null;
+  is_locum: boolean;
 };
 
 function AllNursesShiftView() {
   const [search, setSearch] = useState("");
+  const [ending, setEnding] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   const lookback = new Date();
   lookback.setDate(lookback.getDate() - 27);
@@ -906,23 +927,57 @@ function AllNursesShiftView() {
 
   const { data: logs = [] } = useQuery<AllShiftLog[]>({
     queryKey: ["all-shift-logs-current"],
+    refetchInterval: 60000,
     queryFn: () => api.get<AllShiftLog[]>(`/shift-logs?from=${lbStr}`),
   });
 
   // Build per-nurse totals
   const hoursMap = new Map<string, number>();
   const shiftsMap = new Map<string, number>();
-  const activeMap = new Map<string, boolean>(); // currently running
-  const lateMap = new Map<string, number>(); // late-start count
+  const activeMap = new Map<string, { logId: string; expectedEnd: string; isLocum: boolean }>();
+  const lateMap = new Map<string, number>();
   for (const l of logs) {
     if (l.hours_logged != null) {
       hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + l.hours_logged);
       shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
     } else if (!l.ended_at) {
-      activeMap.set(l.nurse_id, true);
+      activeMap.set(l.nurse_id, {
+        logId: l.id,
+        expectedEnd: l.expected_end_at,
+        isLocum: l.is_locum,
+      });
     }
     if (l.is_late) {
       lateMap.set(l.nurse_id, (lateMap.get(l.nurse_id) ?? 0) + 1);
+    }
+  }
+
+  async function handleAdminEndShift(nurseId: string) {
+    const active = activeMap.get(nurseId);
+    if (!active) return;
+    setEnding(nurseId);
+    try {
+      const endedAt = new Date(active.expectedEnd);
+      const startedAt = logs.find((l) => l.id === active.logId)?.started_at;
+      const hours = startedAt
+        ? Math.round(((endedAt.getTime() - new Date(startedAt).getTime()) / 3600000) * 100) / 100
+        : null;
+      await api.patch(`/shift-logs/${active.logId}`, {
+        ended_at: endedAt.toISOString(),
+        hours_logged: hours,
+      });
+      if (!active.isLocum && hours) {
+        await api
+          .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
+          .catch(() => {});
+      }
+      toast.success("Shift ended");
+      qc.invalidateQueries({ queryKey: ["all-shift-logs-current"] });
+      qc.invalidateQueries({ queryKey: ["nurses"] });
+    } catch {
+      toast.error("Failed to end shift");
+    } finally {
+      setEnding(null);
     }
   }
 
@@ -1005,7 +1060,8 @@ function AllNursesShiftView() {
               const lateCount = lateMap.get(n.id) ?? 0;
               const target = n.target_hours || 185;
               const pct = Math.min(Math.round((hrs / target) * 100), 100);
-              const isActive = activeMap.get(n.id) ?? false;
+              const activeEntry = activeMap.get(n.id);
+              const isActive = !!activeEntry;
               return (
                 <tr key={n.id} className="border-t hover:bg-muted/30">
                   <td className="px-4 py-3">
@@ -1041,10 +1097,20 @@ function AllNursesShiftView() {
                   </td>
                   <td className="px-4 py-3">
                     {isActive ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Active
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Active
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleAdminEndShift(n.id)}
+                          disabled={ending === n.id}
+                          className="text-xs px-2 py-0.5 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground disabled:opacity-50 transition-colors"
+                        >
+                          {ending === n.id ? "Ending…" : "End"}
+                        </button>
+                      </div>
                     ) : hrs > 0 ? (
                       <span className="text-xs text-muted-foreground">Logged hours</span>
                     ) : (
