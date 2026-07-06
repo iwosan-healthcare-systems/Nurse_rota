@@ -535,7 +535,7 @@ function ReportsContent() {
         Name: nurse?.name ?? "Unknown",
         Role: nurse?.role ?? "",
         Ward: nurse?.ward ?? "",
-        Date: l.shift_date,
+        Date: fmtDate(l.shift_date),
         "Shift Type": l.shift_type === "M" ? "Morning" : "Night",
         "Started At": l.started_at ? new Date(l.started_at).toLocaleString("en-GB") : "",
         "Ended At": l.ended_at ? new Date(l.ended_at).toLocaleString("en-GB") : "In Progress",
@@ -543,7 +543,7 @@ function ReportsContent() {
         Late: l.is_late ? "Yes" : "No",
         "Late (mins)": l.late_minutes ?? "",
         "Late Reason": l.late_reason ?? "",
-        "Period Start": l.period_start,
+        "Period Start": fmtDate(l.period_start),
       };
     });
     const ws = XLSX.utils.json_to_sheet(rows);
@@ -563,8 +563,8 @@ function ReportsContent() {
         Role: nurse?.role ?? "",
         Ward: nurse?.ward ?? "",
         Facility: nurse?.facility ?? "",
-        "Period Start": p.period_start,
-        "Period End": p.period_end,
+        "Period Start": fmtDate(p.period_start),
+        "Period End": fmtDate(p.period_end),
         "Total Hours": Number(p.total_hours).toFixed(2),
         "Total Shifts": p.total_shifts,
       };
@@ -583,7 +583,7 @@ function ReportsContent() {
         ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
         : undefined;
       return {
-        Date: r.shift_date,
+        Date: fmtDate(r.shift_date),
         Nurse: r.accepted_by_nurse_name ?? "Unknown",
         Ward: r.ward,
         Facility: r.facility,
@@ -630,8 +630,8 @@ function ReportsContent() {
       Facility: nurseMap.get(l.nurse_id ?? "")?.facility ?? "",
       Ward: nurseMap.get(l.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
       Type: l.type,
-      From: l.from_date,
-      To: l.to_date,
+      From: fmtDate(l.from_date),
+      To: fmtDate(l.to_date),
       Status: l.status,
       Reason: l.reason ?? "",
     }));
@@ -641,8 +641,8 @@ function ReportsContent() {
       Facility: nurseMap.get(s.nurse_id ?? "")?.facility ?? "",
       Ward: nurseMap.get(s.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
       Type: "Swap",
-      From: s.from_date,
-      To: s.to_date,
+      From: fmtDate(s.from_date),
+      To: fmtDate(s.to_date),
       Status: s.status,
       Note: s.reason ?? "",
     }));
