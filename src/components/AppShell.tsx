@@ -525,12 +525,21 @@ function RotaReminderBell({
     },
   });
 
-  // Unread locum notifications from shared notif state
+  // Unread "shift filled" notifications — sent to matron and CNO when a nurse accepts
+  const locumFilledKeys =
+    allNotifs
+      ?.filter(
+        (r) =>
+          !r.is_read &&
+          (r.notif_key.startsWith("locum_filled_matron_") ||
+            r.notif_key.startsWith("locum_filled_cno_")),
+      )
+      .map((r) => r.notif_key) ?? [];
+
+  // Unread locum notifications from shared notif state (declined requests only)
   const locumUnread =
     allNotifs?.filter(
-      (r) =>
-        !r.is_read &&
-        (r.notif_key.startsWith("locum_filled_") || r.notif_key.startsWith("locum_declined_")),
+      (r) => !r.is_read && r.notif_key.startsWith("locum_declined_"),
     ).length ?? 0;
 
   // Unread leave/switch outcome notifications (shown to the requesting staff member)
@@ -558,6 +567,7 @@ function RotaReminderBell({
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
   const showLocum = locumCount + locumUnread > 0;
+  const showLocumFilled = locumFilledKeys.length > 0;
 
   const mgmtUnread = showMgmt && mgmtState === "unread";
   const staffUnread = showStaff && staffState === "unread";
@@ -566,6 +576,7 @@ function RotaReminderBell({
     (mgmtUnread ? 1 : 0) +
     (staffUnread ? 1 : 0) +
     (showLocum ? 1 : 0) +
+    (showLocumFilled ? 1 : 0) +
     (workflowUnread ? 1 : 0) +
     (leaveUnread > 0 ? 1 : 0) +
     (coverUnread > 0 ? 1 : 0);
@@ -573,6 +584,7 @@ function RotaReminderBell({
   const allNotifItems = [
     ...(coverUnread > 0 ? [{ kind: "cover_needed" as const }] : []),
     ...(leaveUnread > 0 ? [{ kind: "leave_updates" as const }] : []),
+    ...(showLocumFilled ? [{ kind: "locum_filled" as const }] : []),
     ...(showLocum ? [{ kind: "locum" as const }] : []),
     ...(showStaff && staffNotif ? [{ kind: "staff" as const }] : []),
     // Workflow notifications appear before the generic deadline reminder
@@ -708,6 +720,35 @@ function RotaReminderBell({
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Open Leave &amp; Requests to see the outcome.
+                      </p>
+                    </div>
+                  ) : kind === "locum_filled" ? (
+                    <div
+                      key="locum_filled"
+                      className="rounded-lg border border-emerald-400/40 bg-emerald-50 dark:bg-emerald-950/20 p-3 space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Stethoscope className="h-4 w-4 shrink-0 text-emerald-600" />
+                          <p className="text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                            Locum Shift Accepted
+                          </p>
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shrink-0" />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => markManyNotifs(locumFilledKeys, true)}
+                          className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
+                        >
+                          Dismiss
+                        </button>
+                      </div>
+                      <p className="text-xs">
+                        A nurse has accepted a locum shift invite.{" "}
+                        {locumFilledKeys.length > 1 && `(${locumFilledKeys.length} shifts)`}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Open Bank Shift (Locum) → All Requests to view who accepted.
                       </p>
                     </div>
                   ) : kind === "locum" ? (

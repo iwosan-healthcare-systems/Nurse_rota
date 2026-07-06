@@ -294,10 +294,10 @@ function LeavePage() {
 
         const [arrA, arrB] = await Promise.all([
           api.get<{ id: string; shift: string }[]>(
-            `/shift-assignments?nurse_id=${l.nurse_id ?? ""}&shift_date=${sw.date}&status=published&limit=1`,
+            `/shift-assignments?nurse_id=${l.nurse_id ?? ""}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
           api.get<{ id: string; shift: string }[]>(
-            `/shift-assignments?nurse_id=${sw.nurseBId}&shift_date=${sw.date}&status=published&limit=1`,
+            `/shift-assignments?nurse_id=${sw.nurseBId}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
         ]);
         const assignA = arrA[0] ?? null;

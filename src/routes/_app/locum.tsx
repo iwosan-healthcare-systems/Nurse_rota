@@ -446,7 +446,7 @@ function LocumPage() {
     if (nurseId && invite.locum_request) {
       await api
         .patch(
-          `/shift-assignments?nurse_ids=${nurseId}&shift_date_from=${invite.locum_request.shift_date}&shift_date_to=${invite.locum_request.shift_date}&shift=OFF`,
+          `/shift-assignments?nurse_ids=${nurseId}&shift_date_from=${invite.locum_request.shift_date.slice(0, 10)}&shift_date_to=${invite.locum_request.shift_date.slice(0, 10)}&shift=OFF`,
           { shift: invite.locum_request.shift },
         )
         .catch(() => {});
@@ -888,7 +888,7 @@ function LocumHistoryView({
     );
 
   // Build a lookup: "nurseId|date" → log entry for actual hours
-  const logMap = new Map(logs.map((l) => [`${l.nurse_id}|${l.shift_date}`, l]));
+  const logMap = new Map(logs.map((l) => [`${l.nurse_id}|${l.shift_date.slice(0, 10)}`, l]));
 
   // Per-nurse summary — shifts + total hours worked
   const summary = Object.values(
@@ -897,7 +897,7 @@ function LocumHistoryView({
       if (!acc[key]) acc[key] = { name: r.accepted_by_nurse_name ?? "Unknown", count: 0, hours: 0 };
       acc[key].count++;
       const log = r.accepted_by_nurse_id
-        ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+        ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
         : undefined;
       acc[key].hours += log?.hours_logged ?? 0;
       return acc;
@@ -947,7 +947,7 @@ function LocumHistoryView({
           <tbody className="divide-y">
             {requests.map((r) => {
               const log = r.accepted_by_nurse_id
-                ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+                ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
                 : undefined;
               return (
                 <tr key={r.id} className="hover:bg-muted/20">
@@ -1543,7 +1543,7 @@ function SendInvitesModal({
       const offAssignments = await api
         .get<
           { nurse_id: string }[]
-        >(`/shift-assignments?shift_date=${request.shift_date}&shift=OFF&status=published&nurse_ids=${facilityIds.join(",")}`)
+        >(`/shift-assignments?shift_date=${request.shift_date.slice(0, 10)}&shift=OFF&status=published&nurse_ids=${facilityIds.join(",")}`)
         .catch(() => []);
 
       const offIds = new Set(offAssignments.map((a) => a.nurse_id));

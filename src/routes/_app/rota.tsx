@@ -350,7 +350,7 @@ function RotaPage() {
   const locumCellSet = useMemo(() => {
     const s = new Set<string>();
     locumFilled.forEach((lr) => {
-      if (lr.accepted_by_nurse_id) s.add(`${lr.accepted_by_nurse_id}|${lr.shift_date}`);
+      if (lr.accepted_by_nurse_id) s.add(`${lr.accepted_by_nurse_id}|${lr.shift_date.slice(0, 10)}`);
     });
     return s;
   }, [locumFilled]);
@@ -387,8 +387,8 @@ function RotaPage() {
     return assignments.some(
       (a) =>
         facilityInternIds.has(a.nurse_id) &&
-        a.shift_date >= genForm.startDate &&
-        a.shift_date <= genEndStr &&
+        a.shift_date.slice(0, 10) >= genForm.startDate &&
+        a.shift_date.slice(0, 10) <= genEndStr &&
         a.status !== "draft",
     );
   }, [assignments, nurses, genForm.facility, genForm.startDate]);
@@ -873,7 +873,7 @@ function RotaPage() {
           { nurse_id: string; shift_date: string }[]
         >(`/shift-assignments?nurse_ids=${scheduledIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
         .catch(() => []);
-      pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date}`));
+      pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
 
       const rows = draft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
@@ -898,7 +898,7 @@ function RotaPage() {
               { nurse_id: string; shift_date: string }[]
             >(`/shift-assignments?nurse_ids=${uncoveredIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}`)
             .catch(() => []);
-          const existingKeys = new Set(existingRows.map((r) => `${r.nurse_id}|${r.shift_date}`));
+          const existingKeys = new Set(existingRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
           const gapRows: {
             nurse_id: string;
             ward: string | null;
@@ -917,8 +917,8 @@ function RotaPage() {
                 (l) =>
                   l.nurse_id === nurse.id &&
                   l.status === "Approved" &&
-                  l.from_date <= ds &&
-                  l.to_date >= ds,
+                  l.from_date.slice(0, 10) <= ds &&
+                  l.to_date.slice(0, 10) >= ds,
               );
               gapRows.push({
                 nurse_id: nurse.id,
@@ -1159,7 +1159,7 @@ function RotaPage() {
         api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
       ]);
       const dateNote =
-        a.shift_date === b.shift_date ? a.shift_date : `${a.shift_date} ↔ ${b.shift_date}`;
+        a.shift_date.slice(0, 10) === b.shift_date.slice(0, 10) ? a.shift_date.slice(0, 10) : `${a.shift_date.slice(0, 10)} ↔ ${b.shift_date.slice(0, 10)}`;
       await logAudit("Swapped shifts", dateNote);
     } catch (e: unknown) {
       qc.invalidateQueries({ queryKey: ["assignments"] }); // rollback

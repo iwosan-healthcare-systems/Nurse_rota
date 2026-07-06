@@ -402,7 +402,7 @@ function ApprovalsPage() {
       if (globalIds.length) {
         await api
           .patch(
-            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate}&shift_date_to=${win.endDate}&status=draft`,
+            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate.slice(0, 10)}&shift_date_to=${win.endDate.slice(0, 10)}&status=draft`,
             { status: "submitted" },
           )
           .catch(() => {});
@@ -449,7 +449,7 @@ function ApprovalsPage() {
       if (globalIds.length) {
         await api
           .patch(
-            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate}&shift_date_to=${win.endDate}&neq_status=published`,
+            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate.slice(0, 10)}&shift_date_to=${win.endDate.slice(0, 10)}&neq_status=published`,
             { status: "published" },
           )
           .catch(() => {});
@@ -551,7 +551,7 @@ function ApprovalsPage() {
         )
       : [];
     const assignMap = new Map<string, string>();
-    allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date}`, a.shift));
+    allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift));
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
     return { activeNurses, assignMap };

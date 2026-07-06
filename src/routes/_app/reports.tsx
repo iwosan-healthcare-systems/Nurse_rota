@@ -357,7 +357,7 @@ function ReportsContent() {
   // Locum derived data
   const locumLogMap = useMemo(() => {
     const m = new Map<string, ShiftLog>();
-    for (const log of locumShiftLogs) m.set(`${log.nurse_id}|${log.shift_date}`, log);
+    for (const log of locumShiftLogs) m.set(`${log.nurse_id}|${log.shift_date.slice(0, 10)}`, log);
     return m;
   }, [locumShiftLogs]);
 
@@ -580,7 +580,7 @@ function ReportsContent() {
     if (scopedLocumRequests.length === 0) return toast.error("No locum shifts to export");
     const rows = scopedLocumRequests.map((r) => {
       const log = r.accepted_by_nurse_id
-        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
         : undefined;
       return {
         Date: r.shift_date,
@@ -616,6 +616,48 @@ function ReportsContent() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Locum Hours");
     XLSX.writeFile(wb, `locum-hours-${todayYmd()}.xlsx`);
+    toast.success("Exported");
+  }
+
+  function exportLeaveRequests() {
+    const leaveOnly = leave.filter((l) => l.type !== "Swap");
+    const switches = leave.filter((l) => l.type === "Swap");
+    if (leave.length === 0) return toast.error("No leave requests to export");
+    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+
+    const leaveRows = leaveOnly.map((l) => ({
+      Nurse: nurseMap.get(l.nurse_id ?? "")?.name ?? "Unknown",
+      Facility: nurseMap.get(l.nurse_id ?? "")?.facility ?? "",
+      Ward: nurseMap.get(l.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
+      Type: l.type,
+      From: l.from_date,
+      To: l.to_date,
+      Status: l.status,
+      Reason: l.reason ?? "",
+    }));
+
+    const switchRows = switches.map((s) => ({
+      Nurse: nurseMap.get(s.nurse_id ?? "")?.name ?? "Unknown",
+      Facility: nurseMap.get(s.nurse_id ?? "")?.facility ?? "",
+      Ward: nurseMap.get(s.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
+      Type: "Swap",
+      From: s.from_date,
+      To: s.to_date,
+      Status: s.status,
+      Note: s.reason ?? "",
+    }));
+
+    const wb = XLSX.utils.book_new();
+
+    const wsLeave = XLSX.utils.json_to_sheet(leaveRows.length ? leaveRows : [{ Note: "No leave requests" }]);
+    wsLeave["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(wb, wsLeave, "Leave Requests");
+
+    const wsSwitch = XLSX.utils.json_to_sheet(switchRows.length ? switchRows : [{ Note: "No switch requests" }]);
+    wsSwitch["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 32 }];
+    XLSX.utils.book_append_sheet(wb, wsSwitch, "Shift Switches");
+
+    XLSX.writeFile(wb, `leave-requests-${todayYmd()}.xlsx`);
     toast.success("Exported");
   }
 
@@ -711,7 +753,7 @@ ${staffToPrint
       : [];
 
     const assignMap = new Map(
-      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date}`, a.shift]),
+      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift]),
     );
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = nurses.filter((n) => activeIds.has(n.id));
@@ -1162,7 +1204,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   <tbody>
                     {scopedLocumRequests.map((r) => {
                       const log = r.accepted_by_nurse_id
-                        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date}`)
+                        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
                         : undefined;
                       return (
                         <tr key={r.id} className="border-t hover:bg-muted/30">
@@ -1252,6 +1294,15 @@ td.sm{text-align:left;color:#444;min-width:55px}
 
           return (
             <>
+              <div className="flex justify-end mb-4">
+                <button
+                  type="button"
+                  onClick={exportLeaveRequests}
+                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                >
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
+                </button>
+              </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
                 <Stat icon={PlaneTakeoff} label="Total Leave Requests" value={leaveOnly.length} />
                 <Stat icon={Clock} label="Pending" value={pending.length} />
