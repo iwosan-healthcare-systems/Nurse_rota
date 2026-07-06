@@ -938,7 +938,7 @@ function AllNursesShiftView() {
   const lateMap = new Map<string, number>();
   for (const l of logs) {
     if (l.hours_logged != null) {
-      hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + l.hours_logged);
+      hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + Number(l.hours_logged));
       shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
     } else if (!l.ended_at) {
       activeMap.set(l.nurse_id, {

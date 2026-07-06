@@ -217,7 +217,7 @@ function StaffPage() {
     const m = new Map<string, number>();
     for (const l of shiftLogs) {
       if (l.hours_logged != null) {
-        m.set(l.nurse_id, (m.get(l.nurse_id) ?? 0) + l.hours_logged);
+        m.set(l.nurse_id, (m.get(l.nurse_id) ?? 0) + Number(l.hours_logged));
       }
     }
     return m;

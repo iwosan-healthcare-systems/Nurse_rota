@@ -330,11 +330,11 @@ function ReportsContent() {
     const leave = new Map<string, number>();
     for (const log of shiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id))) {
       if (log.hours_logged != null) {
-        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
+        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
         shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
-        if (log.is_swap) swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + log.hours_logged);
+        if (log.is_swap) swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
         if (log.is_leave)
-          leave.set(log.nurse_id, (leave.get(log.nurse_id) ?? 0) + log.hours_logged);
+          leave.set(log.nurse_id, (leave.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
       }
     }
     return {
@@ -366,7 +366,7 @@ function ReportsContent() {
     const shifts = new Map<string, number>();
     for (const log of locumShiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id))) {
       if (log.hours_logged != null) {
-        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + log.hours_logged);
+        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
       }
       shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
     }
