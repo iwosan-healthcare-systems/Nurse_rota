@@ -556,7 +556,7 @@ function MenuPermissionsPage() {
 
         <p className="px-5 py-3 border-t text-xs text-muted-foreground">
           Use Google Maps to find accurate coordinates — right-click any location and copy the
-          lat/lng. Changes take effect immediately for all nurses on their next shift start.
+          lat/lng. Changes take effect immediately.
         </p>
       </section>
     </div>
