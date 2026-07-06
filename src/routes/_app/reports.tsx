@@ -1466,7 +1466,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       <tr key={p.nurse_id + p.period_start} className="border-t hover:bg-muted/30">
                         <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
                         <td className="px-4 py-3 text-muted-foreground tabular-nums">
-                          {p.period_start} → {p.period_end}
+                          {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
                         </td>
                         <td className="px-4 py-3 text-right tabular-nums">{p.total_shifts}</td>
                         <td className="px-4 py-3 text-right tabular-nums font-semibold">
