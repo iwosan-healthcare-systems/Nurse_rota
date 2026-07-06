@@ -71,6 +71,14 @@ type NurseRecord = {
   target_hours: number;
 };
 
+// Roles that are facility-wide: no ward is managed on the Staff page for them.
+// Mirrors isNoWardRole in staff.tsx (coverage/head nurses, porters).
+// Interns are excluded — they DO get a ward via rotation.
+function isFacilityWideRole(role: string | undefined) {
+  if (!role) return false;
+  return /^(head|coverage)\s*nurse$|^matron$|^porter(\s*-\s*day)?$/i.test(role);
+}
+
 type Assignment = {
   shift: "M" | "N" | "OFF" | "LEAVE";
   shift_date: string;
@@ -228,7 +236,11 @@ function NurseDashboard() {
     <div className="space-y-6">
       <PageHeader
         title={`Welcome, ${fullName?.split(" ")[0] ?? "Nurse"}`}
-        subtitle={[nurseRecord?.role, nurseFacility, nurseRecord?.ward?.split("|")[0]]
+        subtitle={[
+          nurseRecord?.role,
+          nurseFacility,
+          !isFacilityWideRole(nurseRecord?.role) && nurseRecord?.ward?.split("|")[0],
+        ]
           .filter(Boolean)
           .join(" · ")}
       />
@@ -245,7 +257,9 @@ function NurseDashboard() {
         <div className="bg-card border rounded-xl p-5 shadow-soft">
           <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">Ward</p>
           <p className="mt-2 text-lg font-semibold">
-            {nurseRecord?.ward?.split("|")[0] ?? "Not assigned"}
+            {isFacilityWideRole(nurseRecord?.role)
+              ? "Facility-wide"
+              : nurseRecord?.ward?.split("|")[0] ?? "Not assigned"}
           </p>
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">

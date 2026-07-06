@@ -1093,6 +1093,7 @@ function RotaPage() {
     );
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
+    qc.invalidateQueries({ queryKey: ["approvals"] });
   }
 
   function openShiftPicker(

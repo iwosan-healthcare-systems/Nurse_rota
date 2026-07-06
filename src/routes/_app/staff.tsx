@@ -192,7 +192,7 @@ function StaffPage() {
 
   const { data: wards = [] } = useQuery<{ name: string; facility: string | null }[]>({
     queryKey: ["wards"],
-    staleTime: 30 * 60 * 1000,
+    staleTime: 2 * 60 * 1000,
     queryFn: () => api.get<{ name: string; facility: string | null }[]>("/wards"),
   });
 
@@ -228,6 +228,8 @@ function StaffPage() {
     onSuccess: async (_, id) => {
       toast.success("Nurse removed");
       qc.invalidateQueries({ queryKey: ["nurses"] });
+      qc.invalidateQueries({ queryKey: ["nurses-approvals"] });
+      qc.invalidateQueries({ queryKey: ["assignments"] });
       logAudit("Removed nurse", id);
     },
     onError: (e: Error) => toast.error(e.message),

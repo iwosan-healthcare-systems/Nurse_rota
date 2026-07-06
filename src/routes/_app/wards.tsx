@@ -83,6 +83,9 @@ function WardsPage() {
       toast.success("Ward removed");
       logAudit("Removed ward", w.name);
       qc.invalidateQueries({ queryKey: ["wards"] });
+      qc.invalidateQueries({ queryKey: ["gen-wards"] });
+      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
+      qc.invalidateQueries({ queryKey: ["wards-simple"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to remove ward");
     }
@@ -107,6 +110,9 @@ function WardsPage() {
       toast.success(`All ${wardNames.length} ${facilityName} wards seeded / updated`);
       logAudit(`Seeded ${facilityName} ward defaults`, wardNames.join(", "));
       qc.invalidateQueries({ queryKey: ["wards"] });
+      qc.invalidateQueries({ queryKey: ["gen-wards"] });
+      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
+      qc.invalidateQueries({ queryKey: ["wards-simple"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : String(e));
     } finally {
@@ -375,6 +381,9 @@ function AddWardModal({
       toast.success("Ward added");
       logAudit("Added ward", form.name);
       qc.invalidateQueries({ queryKey: ["wards"] });
+      qc.invalidateQueries({ queryKey: ["gen-wards"] });
+      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
+      qc.invalidateQueries({ queryKey: ["wards-simple"] });
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to add ward");
@@ -493,6 +502,9 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
       toast.success("Ward updated");
       logAudit("Updated ward", form.name);
       qc.invalidateQueries({ queryKey: ["wards"] });
+      qc.invalidateQueries({ queryKey: ["gen-wards"] });
+      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
+      qc.invalidateQueries({ queryKey: ["wards-simple"] });
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to update ward");

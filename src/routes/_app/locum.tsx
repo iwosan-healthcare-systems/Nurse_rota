@@ -273,6 +273,7 @@ function LocumPage() {
     toast.success("Locum request submitted to CNO for review.");
     qc.invalidateQueries({ queryKey: ["locum-my"] });
     qc.invalidateQueries({ queryKey: ["locum-pending"] });
+    qc.invalidateQueries({ queryKey: ["locum-all"] });
     qc.invalidateQueries({ queryKey: ["locum-bell"] });
     setShowCreate(false);
   }
@@ -377,6 +378,8 @@ function LocumPage() {
       `Locum invites sent to ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}.`,
     );
     qc.invalidateQueries({ queryKey: ["locum-my"] });
+    qc.invalidateQueries({ queryKey: ["locum-pending"] });
+    qc.invalidateQueries({ queryKey: ["locum-all"] });
     qc.invalidateQueries({ queryKey: ["locum-bell"] });
     setSendingReq(null);
   }
@@ -467,6 +470,10 @@ function LocumPage() {
     );
     toast.success("Locum shift accepted! Your schedule has been updated.");
     qc.invalidateQueries({ queryKey: ["locum-invites"] });
+    qc.invalidateQueries({ queryKey: ["locum-my"] });
+    qc.invalidateQueries({ queryKey: ["locum-all"] });
+    qc.invalidateQueries({ queryKey: ["assignments"] });
+    qc.invalidateQueries({ queryKey: ["locum-filled-rota"] });
     qc.invalidateQueries({ queryKey: ["locum-bell"] });
     setRespondInvite(null);
     setRespondAction(null);
@@ -485,6 +492,8 @@ function LocumPage() {
     );
     toast.success("Invite declined.");
     qc.invalidateQueries({ queryKey: ["locum-invites"] });
+    qc.invalidateQueries({ queryKey: ["locum-my"] });
+    qc.invalidateQueries({ queryKey: ["locum-all"] });
     qc.invalidateQueries({ queryKey: ["locum-bell"] });
     setRespondInvite(null);
     setRespondAction(null);

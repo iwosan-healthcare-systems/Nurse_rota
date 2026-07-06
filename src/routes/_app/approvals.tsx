@@ -420,6 +420,7 @@ function ApprovalsPage() {
       .catch(() => {});
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["approvals"] });
+    qc.invalidateQueries({ queryKey: ["assignments"] });
   }
 
   type AssignmentStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
