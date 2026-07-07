@@ -187,7 +187,7 @@ export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
     min_night_na: 0,
   },
   "Surgical Unit": {
-    min_morning_nurses: 2,
+    min_morning_nurses: 1,
     min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 1,

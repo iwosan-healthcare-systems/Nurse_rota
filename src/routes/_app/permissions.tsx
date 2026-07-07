@@ -16,7 +16,17 @@ export const Route = createFileRoute("/_app/permissions")({
   component: PermissionsPage,
 });
 
-const ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"];
+const ROLES: AppRole[] = [
+  "admin",
+  "cno",
+  "chief_matron",
+  "head_nurse",
+  "hr_admin",
+  "nurse",
+  "surgical_nurse",
+  "porter",
+  "nursing_assistant",
+];
 
 type Capability = { key: string; label: string; roles: AppRole[] };
 
@@ -146,7 +156,9 @@ function PermissionsPage() {
 
   useEffect(() => {
     api
-      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>("/portal-settings/capabilities")
+      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>(
+        "/portal-settings/capabilities",
+      )
       .then(({ value }) => {
         if (value) {
           const merged = mergeCapabilities(value);
@@ -154,7 +166,9 @@ function PermissionsPage() {
           setCapabilities(merged);
         }
       })
-      .catch(() => { /* non-critical */ });
+      .catch(() => {
+        /* non-critical */
+      });
   }, []);
 
   function startEdit() {
@@ -325,7 +339,6 @@ function PermissionsPage() {
           </p>
         )}
       </section>
-
     </div>
   );
 }

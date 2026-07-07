@@ -50,6 +50,8 @@ const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 const NURSE_ROLES = [
   "Nurse",
+  "Surgical Nurse",
+  "Surgical Nurse - Day",
   "Matron",
   "Coverage Nurse",
   "Nurse Intern",
@@ -74,6 +76,10 @@ function normalizeRole(raw: string): string {
   // Exact case-insensitive match wins immediately
   const exact = NURSE_ROLES.find((r) => r.toLowerCase() === s.toLowerCase());
   if (exact) return exact;
+
+  // Surgical Nurse / Surgical Nurse - Day
+  if (/^surgical\s*nurse\s*-\s*day$/i.test(s)) return "Surgical Nurse - Day";
+  if (/^surgical\s*nurse$/i.test(s)) return "Surgical Nurse";
 
   // Porter / Porter - Day
   if (/^porter\s*-\s*day$/i.test(s)) return "Porter - Day";
