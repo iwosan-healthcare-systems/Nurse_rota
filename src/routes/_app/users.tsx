@@ -51,6 +51,7 @@ const ALL_ROLES: AppRole[] = [
   "nurse",
   "porter",
   "nursing_assistant",
+  "surgical_nurse",
 ];
 
 const ROLE_BADGE_COLORS: Record<AppRole, string> = {
@@ -62,6 +63,7 @@ const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   nurse: "bg-muted text-muted-foreground border-border",
   porter: "bg-orange-100 text-orange-700 border-orange-200",
   nursing_assistant: "bg-sky-100 text-sky-700 border-sky-200",
+  surgical_nurse: "bg-indigo-100 text-indigo-700 border-indigo-200",
 };
 
 type ProfileRow = {

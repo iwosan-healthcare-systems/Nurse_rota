@@ -1,4 +1,4 @@
-﻿// Auto-scheduling engine for the 28-day rota.
+// Auto-scheduling engine for the 28-day rota.
 //
 // Universal 16-day cycle for ALL roles (strict, no override): 4M → 4OFF → 4N → 4OFF
 //   Offsets are snapped to 4-day block boundaries so every nurse always starts
@@ -73,10 +73,22 @@ export interface SafetyViolation {
 // 16-day cycle: 4M → 4OFF → 4N → 4OFF. Every N block is followed by 4 OFF days
 // so the rest rule (no M the day after N) is always satisfied.
 const NURSE_CYCLE: readonly ShiftCode[] = [
-  "M", "M", "M", "M",
-  "OFF", "OFF", "OFF", "OFF",
-  "N", "N", "N", "N",
-  "OFF", "OFF", "OFF", "OFF",
+  "M",
+  "M",
+  "M",
+  "M",
+  "OFF",
+  "OFF",
+  "OFF",
+  "OFF",
+  "N",
+  "N",
+  "N",
+  "N",
+  "OFF",
+  "OFF",
+  "OFF",
+  "OFF",
 ];
 
 // 8-day cycle: 4M → 4OFF. No night shifts — for porter-day and nursing assistant-day.
@@ -171,6 +183,14 @@ export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
     min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
+    min_night_supervisor: 0,
+    min_night_na: 0,
+  },
+  "Surgical Unit": {
+    min_morning_nurses: 2,
+    min_morning_supervisor: 0,
+    min_morning_na: 0,
+    min_night_nurses: 1,
     min_night_supervisor: 0,
     min_night_na: 0,
   },
@@ -318,6 +338,14 @@ export function isPorterType(role: string) {
 
 export function isPorterDayType(role: string) {
   return /^porter\s*-\s*day$/i.test(role);
+}
+
+export function isSurgicalNurseDayType(role: string) {
+  return /^surgical\s*nurse\s*-\s*day$/i.test(role);
+}
+
+export function isSurgicalNurseType(role: string) {
+  return /^surgical\s*nurse$/i.test(role);
 }
 
 export function isInternType(role: string) {
@@ -727,11 +755,9 @@ function scheduleCoverageNurses(
       // A nurse may have multiple NC blocks if all candidates were exhausted for a slot.
       const nurseNcStarts = ncStartDays.get(i) ?? [];
       const pastNcStarts = nurseNcStarts.filter((s) => s <= d);
-      const relevantNcStart =
-        pastNcStarts.length > 0 ? Math.max(...pastNcStarts) : undefined;
+      const relevantNcStart = pastNcStarts.length > 0 ? Math.max(...pastNcStarts) : undefined;
       const inNcBlock = relevantNcStart !== undefined && d < relevantNcStart + 4;
-      const inPostNcOff =
-        relevantNcStart !== undefined && !inNcBlock && d < relevantNcStart + 8;
+      const inPostNcOff = relevantNcStart !== undefined && !inNcBlock && d < relevantNcStart + 8;
       const afterNcOff = relevantNcStart !== undefined && !inNcBlock && !inPostNcOff;
 
       let shift: ShiftCode;
@@ -946,8 +972,15 @@ export function generateSchedule(opts: {
     const supervisors = wardNurses
       .filter((n) => isWardSupervisor(n.role))
       .sort((a, b) => a.id.localeCompare(b.id));
+    // Surgical Nurse - Day always gets DAY_ONLY_CYCLE regardless of the ward cycle,
+    // so they are split out from regulars and scheduled separately.
+    const surgicalDay = wardNurses
+      .filter((n) => isSurgicalNurseDayType(n.role))
+      .sort((a, b) => a.id.localeCompare(b.id));
     const regulars = wardNurses
-      .filter((n) => !isNAType(n.role) && !isWardSupervisor(n.role))
+      .filter(
+        (n) => !isNAType(n.role) && !isWardSupervisor(n.role) && !isSurgicalNurseDayType(n.role),
+      )
       .sort((a, b) => a.id.localeCompare(b.id));
     const naRegular = wardNurses
       .filter((n) => isNAType(n.role) && !isNADayType(n.role))
@@ -957,6 +990,7 @@ export function generateSchedule(opts: {
       .sort((a, b) => a.id.localeCompare(b.id));
 
     const supervisorSeed = stableGroupOffset(supervisors) * 4;
+    const surgicalDaySeed = stableGroupOffset(surgicalDay) * 4;
     const regularSeed = stableGroupOffset(regulars) * 4;
     const naRegularSeed = stableGroupOffset(naRegular) * 4;
     const naDaySeed = stableGroupOffset(naDay) * 4;
@@ -974,6 +1008,17 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + supervisorSeed,
+    );
+    // Surgical Nurse - Day: always morning-only (4M→4OFF), even in a full-cycle ward.
+    scheduleGroup(
+      surgicalDay,
+      DAY_ONLY_CYCLE,
+      days,
+      opts.startDate,
+      leave,
+      ward.name,
+      out,
+      periodOffset + surgicalDaySeed,
     );
     scheduleGroup(
       regulars,

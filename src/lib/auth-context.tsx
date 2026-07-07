@@ -3,7 +3,16 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { api, getToken, clearToken } from "@/lib/api";
 import { toast } from "sonner";
 
-export type AppRole = "admin" | "cno" | "chief_matron" | "head_nurse" | "hr_admin" | "nurse" | "porter" | "nursing_assistant";
+export type AppRole =
+  | "admin"
+  | "cno"
+  | "chief_matron"
+  | "head_nurse"
+  | "hr_admin"
+  | "nurse"
+  | "porter"
+  | "nursing_assistant"
+  | "surgical_nurse";
 
 export interface ApiUser {
   id: string;
@@ -93,7 +102,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
       return;
     }
-    api.get<ApiUser>('/auth/me')
+    api
+      .get<ApiUser>("/auth/me")
       .then((me) => {
         applyUser(me);
       })
@@ -107,7 +117,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!getToken()) return;
     api
-      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>("/portal-settings/capabilities")
+      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>(
+        "/portal-settings/capabilities",
+      )
       .then(({ value }) => {
         if (value && Array.isArray(value)) {
           localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(value));
@@ -130,8 +142,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!user) return;
 
-    const IDLE_MS = 60 * 60 * 1000;  // 1 hour
-    const WARN_MS = 55 * 60 * 1000;  // warn at 55 min
+    const IDLE_MS = 60 * 60 * 1000; // 1 hour
+    const WARN_MS = 55 * 60 * 1000; // warn at 55 min
 
     function doLogout() {
       toast.dismiss("idle-warn");
@@ -145,10 +157,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
 
     function doWarn() {
-      toast.warning("You will be logged out in 5 minutes due to inactivity. Move the mouse or press a key to stay logged in.", {
-        id: "idle-warn",
-        duration: 5 * 60 * 1000,
-      });
+      toast.warning(
+        "You will be logged out in 5 minutes due to inactivity. Move the mouse or press a key to stay logged in.",
+        {
+          id: "idle-warn",
+          duration: 5 * 60 * 1000,
+        },
+      );
     }
 
     let logoutTimer = setTimeout(doLogout, IDLE_MS);
@@ -178,7 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       EVENTS.forEach((e) => window.removeEventListener(e, onActivity));
       toast.dismiss("idle-warn");
     };
-  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [user]);
 
   function applyUser(me: ApiUser) {
     setUser(me);
@@ -250,19 +265,52 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canManageWards: cap("manage_wards", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canEditRota: cap("edit_rota", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
     canAutoGenerate: cap("auto_generate", ["admin", "head_nurse"]),
-    canSubmitApproval: cap("submit_approval", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canSubmitApproval: cap("submit_approval", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+    ]),
     canApproveChiefMatron: cap("approve_chief_matron", ["admin", "chief_matron"]),
     canApproveCno: cap("approve_cno", ["admin", "cno"]),
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
-    canApproveLeave: cap("approve_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
-    canRequestLeave: cap("request_leave", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse", "porter", "nursing_assistant"]),
+    canApproveLeave: cap("approve_leave", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+    ]),
+    canRequestLeave: cap("request_leave", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+      "nurse",
+      "porter",
+      "nursing_assistant",
+    ]),
     canRequestShiftSwitch: cap("request_shift_switch", ["admin", "chief_matron"]),
     canApproveShiftSwitch: cap("approve_shift_switch", ["admin", "cno"]),
     canCreateLogin: ar === "admin",
     canEditTargetHours: cap("edit_target_hours", ["admin"]),
-    canPrintStaff: cap("print_staff_list", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
-    canPrintSchedule: cap("print_schedule", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+    canPrintStaff: cap("print_staff_list", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+    ]),
+    canPrintSchedule: cap("print_schedule", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+    ]),
     canRequestLocum: cap("request_locum", ["admin", "chief_matron"]),
     canApproveLocum: cap("approve_locum", ["admin", "cno"]),
     canSendLocumInvites: cap("send_locum_invites", ["admin", "chief_matron"]),
@@ -273,7 +321,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <Ctx.Provider value={{ ...value, setLoggedInUser } as AuthCtx & { setLoggedInUser: (u: ApiUser) => void }}>
+    <Ctx.Provider
+      value={{ ...value, setLoggedInUser } as AuthCtx & { setLoggedInUser: (u: ApiUser) => void }}
+    >
       {children}
     </Ctx.Provider>
   );
@@ -291,7 +341,12 @@ export function useAuthInternal() {
   return c;
 }
 
-export const NURSE_TIER_ROLES: AppRole[] = ["nurse", "porter", "nursing_assistant"];
+export const NURSE_TIER_ROLES: AppRole[] = [
+  "nurse",
+  "porter",
+  "nursing_assistant",
+  "surgical_nurse",
+];
 
 export const ROLE_LABELS: Record<AppRole, string> = {
   admin: "System Administrator",
@@ -302,6 +357,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   nurse: "Nurse",
   porter: "Porter",
   nursing_assistant: "Nursing Assistant",
+  surgical_nurse: "Surgical Nurse",
 };
 
 export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
@@ -313,4 +369,5 @@ export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
   nurse: "View your schedule, submit leave requests and access rota",
   porter: "View your schedule, submit leave requests and access rota",
   nursing_assistant: "View your schedule, submit leave requests and access rota",
+  surgical_nurse: "Surgical Unit — view your schedule, submit leave requests and access rota",
 };

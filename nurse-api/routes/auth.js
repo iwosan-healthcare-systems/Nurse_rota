@@ -253,6 +253,7 @@ router.post(
       if (/^hr/.test(r)) return "hr_admin";
       if (/^porter/.test(r)) return "porter";
       if (/^nurs(e|ing).?assistant/.test(r)) return "nursing_assistant";
+      if (/^surgical\s*nurse/i.test(r)) return "surgical_nurse";
       return "nurse";
     }
 
