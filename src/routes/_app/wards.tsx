@@ -24,8 +24,7 @@ export const Route = createFileRoute("/_app/wards")({
       { title: "Wards — Nurses Rota" },
       {
         name: "description",
-        content:
-          "Manage hospital wards, nurse-to-patient ratios and minimum staffing requirements per shift.",
+        content: "Manage hospital wards and minimum staffing requirements per shift.",
       },
     ],
   }),
@@ -39,10 +38,8 @@ type Ward = {
   name: string;
   facility: string | null;
   min_morning_nurses: number;
-  min_morning_supervisor: number;
   min_morning_na: number;
   min_night_nurses: number;
-  min_night_supervisor: number;
   min_night_na: number;
 };
 
@@ -298,8 +295,7 @@ function WardCard({
   onEdit: () => void;
   onDelete: () => void;
 }) {
-  const nightOnly =
-    w.min_night_nurses === 0 && w.min_night_supervisor === 0 && w.min_night_na === 0;
+  const nightOnly = w.min_night_nurses === 0 && w.min_night_na === 0;
   return (
     <div className="bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-start justify-between gap-2">
@@ -333,7 +329,7 @@ function WardCard({
             Morning min
           </p>
           <p className="text-sm font-semibold mt-1">
-            {w.min_morning_supervisor}S · {w.min_morning_nurses}N · {w.min_morning_na}NA
+            {w.min_morning_nurses}N · {w.min_morning_na}NA
           </p>
         </div>
         <div className="border rounded-lg p-3">
@@ -344,7 +340,7 @@ function WardCard({
             <p className="text-sm font-semibold mt-1 text-muted-foreground">Morning only</p>
           ) : (
             <p className="text-sm font-semibold mt-1">
-              {w.min_night_supervisor}S · {w.min_night_nurses}N · {w.min_night_na}NA
+              {w.min_night_nurses}N · {w.min_night_na}NA
             </p>
           )}
         </div>
@@ -365,10 +361,8 @@ function AddWardModal({
   const [form, setForm] = useState({
     name: "",
     min_morning_nurses: 2,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 2,
-    min_night_supervisor: 0,
     min_night_na: 1,
   });
   const [busy, setBusy] = useState(false);
@@ -428,16 +422,11 @@ function AddWardModal({
             className={inputCls}
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <NumField
             label="AM Nurses"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
-          />
-          <NumField
-            label="AM Supervisor"
-            value={form.min_morning_supervisor}
-            onChange={(v) => setForm({ ...form, min_morning_supervisor: v })}
           />
           <NumField
             label="AM NA"
@@ -448,11 +437,6 @@ function AddWardModal({
             label="PM Nurses"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
-          />
-          <NumField
-            label="PM Supervisor"
-            value={form.min_night_supervisor}
-            onChange={(v) => setForm({ ...form, min_night_supervisor: v })}
           />
           <NumField
             label="PM NA"
@@ -486,10 +470,8 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
   const [form, setForm] = useState({
     name: ward.name,
     min_morning_nurses: ward.min_morning_nurses,
-    min_morning_supervisor: ward.min_morning_supervisor,
     min_morning_na: ward.min_morning_na,
     min_night_nurses: ward.min_night_nurses,
-    min_night_supervisor: ward.min_night_supervisor,
     min_night_na: ward.min_night_na,
   });
   const [busy, setBusy] = useState(false);
@@ -532,16 +514,11 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             className={inputCls}
           />
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           <NumField
             label="AM Nurses"
             value={form.min_morning_nurses}
             onChange={(v) => setForm({ ...form, min_morning_nurses: v })}
-          />
-          <NumField
-            label="AM Supervisor"
-            value={form.min_morning_supervisor}
-            onChange={(v) => setForm({ ...form, min_morning_supervisor: v })}
           />
           <NumField
             label="AM NA"
@@ -552,11 +529,6 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             label="PM Nurses"
             value={form.min_night_nurses}
             onChange={(v) => setForm({ ...form, min_night_nurses: v })}
-          />
-          <NumField
-            label="PM Supervisor"
-            value={form.min_night_supervisor}
-            onChange={(v) => setForm({ ...form, min_night_supervisor: v })}
           />
           <NumField
             label="PM NA"

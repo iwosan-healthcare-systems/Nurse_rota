@@ -28,37 +28,20 @@ router.post(
   "/",
   requireRole("admin", "cno"),
   wrap(async (req, res) => {
-    const {
-      name,
-      facility,
-      ratio,
-      min_morning_nurses,
-      min_morning_supervisor,
-      min_morning_na,
-      min_night_nurses,
-      min_night_supervisor,
-      min_night_na,
-      patients,
-      staffed,
-    } = req.body;
+    const { name, facility, min_morning_nurses, min_morning_na, min_night_nurses, min_night_na } =
+      req.body;
     if (!name) return res.status(400).json({ error: "Name is required" });
 
     const { rows } = await pool.query(
-      `INSERT INTO wards (name, facility, ratio, min_morning_nurses, min_morning_supervisor, min_morning_na,
-      min_night_nurses, min_night_supervisor, min_night_na, patients, staffed)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      `INSERT INTO wards (name, facility, min_morning_nurses, min_morning_na, min_night_nurses, min_night_na)
+     VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
       [
         name,
         facility || null,
-        ratio || null,
         min_morning_nurses || 0,
-        min_morning_supervisor || 0,
         min_morning_na || 0,
         min_night_nurses || 0,
-        min_night_supervisor || 0,
         min_night_na || 0,
-        patients || 0,
-        staffed || 0,
       ],
     );
     res.status(201).json(rows[0]);
@@ -72,14 +55,9 @@ router.patch(
     const allowed = [
       "name",
       "facility",
-      "ratio",
-      "patients",
-      "staffed",
       "min_morning_nurses",
-      "min_morning_supervisor",
       "min_morning_na",
       "min_night_nurses",
-      "min_night_supervisor",
       "min_night_na",
     ];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));

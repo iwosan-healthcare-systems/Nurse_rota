@@ -40,10 +40,8 @@ export interface WardInput {
   name: string;
   facility?: string | null;
   min_morning_nurses: number;
-  min_morning_supervisor: number;
   min_morning_na: number;
   min_night_nurses: number;
-  min_night_supervisor: number;
   min_night_na: number;
 }
 
@@ -65,7 +63,7 @@ export interface SafetyViolation {
   ward: string;
   date: string;
   shift: "M" | "N";
-  role: "nurse" | "supervisor" | "na";
+  role: "nurse" | "na";
   required: number;
   actual: number;
 }
@@ -96,102 +94,75 @@ const DAY_ONLY_CYCLE: readonly ShiftCode[] = ["M", "M", "M", "M", "OFF", "OFF", 
 
 type WardMins = Pick<
   WardInput,
-  | "min_morning_nurses"
-  | "min_morning_supervisor"
-  | "min_morning_na"
-  | "min_night_nurses"
-  | "min_night_supervisor"
-  | "min_night_na"
+  "min_morning_nurses" | "min_morning_na" | "min_night_nurses" | "min_night_na"
 >;
 
 // Ikoyi-specific minimum staffing per ward.
 export const IKOYI_WARD_MINIMUMS: Record<string, WardMins> = {
   "IP Ward": {
     min_morning_nurses: 5,
-    min_morning_supervisor: 0,
     min_morning_na: 3,
     min_night_nurses: 5,
-    min_night_supervisor: 0,
     min_night_na: 2,
   },
   ER: {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   ICU: {
     min_morning_nurses: 5,
-    min_morning_supervisor: 0,
     min_morning_na: 2,
     min_night_nurses: 5,
-    min_night_supervisor: 0,
     min_night_na: 2,
   },
   "Operation Theatre": {
     min_morning_nurses: 6,
-    min_morning_supervisor: 0,
     min_morning_na: 2,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   NICU: {
     min_morning_nurses: 4,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 3,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   SCBU: {
     min_morning_nurses: 4,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 3,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   GOPD: {
     min_morning_nurses: 4,
-    min_morning_supervisor: 0,
     min_morning_na: 4,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   "Labour Ward": {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   Dialysis: {
     min_morning_nurses: 2,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   Oncology: {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   "Surgical Unit": {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
 };
@@ -204,42 +175,32 @@ export const IKOYI_WARD_NAMES = Object.keys(IKOYI_WARD_MINIMUMS);
 export const LIGALI_WARD_MINIMUMS: Record<string, WardMins> = {
   ER: {
     min_morning_nurses: 2,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   GOPD: {
     min_morning_nurses: 4,
-    min_morning_supervisor: 0,
     min_morning_na: 4,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   "IP Ward": {
     min_morning_nurses: 3,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 2,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   "ICU & CathLab": {
     min_morning_nurses: 3,
-    min_morning_supervisor: 0,
     min_morning_na: 1,
     min_night_nurses: 1,
-    min_night_supervisor: 0,
     min_night_na: 1,
   },
   "Operation Theatre": {
     min_morning_nurses: 2,
-    min_morning_supervisor: 0,
     min_morning_na: 2,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
 };
@@ -253,50 +214,38 @@ export const LIGALI_WARD_NAMES = Object.keys(LIGALI_WARD_MINIMUMS);
 export const IKEJA_WARD_MINIMUMS: Record<string, WardMins> = {
   "IP Ward": {
     min_morning_nurses: 10,
-    min_morning_supervisor: 0,
     min_morning_na: 3,
     min_night_nurses: 9,
-    min_night_supervisor: 0,
     min_night_na: 2,
   },
   "Labour Ward": {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   ER: {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   SCBU: {
     min_morning_nurses: 2,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   HDU: {
     min_morning_nurses: 1,
-    min_morning_supervisor: 0,
     min_morning_na: 0,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
   GOPD: {
     min_morning_nurses: 5,
-    min_morning_supervisor: 0,
     min_morning_na: 3,
     min_night_nurses: 0,
-    min_night_supervisor: 0,
     min_night_na: 0,
   },
 };
@@ -377,7 +326,7 @@ function isNurseOrIntern(role: string) {
 }
 
 function isMorningOnlyWard(ward: WardInput): boolean {
-  return ward.min_night_nurses === 0 && ward.min_night_supervisor === 0 && ward.min_night_na === 0;
+  return ward.min_night_nurses === 0 && ward.min_night_na === 0;
 }
 
 function stableGroupOffset(group: NurseInput[]): number {
@@ -484,7 +433,7 @@ function enforceMinima(
       shift: "M" | "N",
       required: number,
       roleTest: (r: string) => boolean,
-      role: "nurse" | "supervisor" | "na",
+      role: "nurse" | "na",
     ) => {
       if (required <= 0) return;
       const actual = count(shift, roleTest);
@@ -493,10 +442,8 @@ function enforceMinima(
       }
     };
 
-    check("M", ward.min_morning_supervisor, isWardSupervisor, "supervisor");
     check("M", ward.min_morning_nurses, isNurseOrIntern, "nurse");
     check("M", ward.min_morning_na, isNAType, "na");
-    check("N", ward.min_night_supervisor, isWardSupervisor, "supervisor");
     check("N", ward.min_night_nurses, isNurseOrIntern, "nurse");
     check("N", ward.min_night_na, isNAType, "na");
   }

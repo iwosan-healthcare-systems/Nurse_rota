@@ -171,7 +171,9 @@ function NurseDashboard() {
     enabled: !!nurseId,
     queryFn: () =>
       api
-        .get<Assignment[]>(`/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`)
+        .get<
+          Assignment[]
+        >(`/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`)
         .then((arr) => arr[0] ?? null),
   });
 
@@ -189,7 +191,8 @@ function NurseDashboard() {
   const { data: activeLog } = useQuery<ShiftLog | null>({
     queryKey: ["my-active-log", nurseId, today],
     enabled: !!nurseId,
-    queryFn: () => api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${today}`),
+    queryFn: () =>
+      api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${today}`),
     refetchInterval: 60000,
   });
 
@@ -272,7 +275,7 @@ function NurseDashboard() {
           <p className="mt-2 text-lg font-semibold">
             {isFacilityWideRole(nurseRecord?.role)
               ? "Facility-wide"
-              : nurseRecord?.ward?.split("|")[0] ?? "Not assigned"}
+              : (nurseRecord?.ward?.split("|")[0] ?? "Not assigned")}
           </p>
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">
@@ -368,13 +371,13 @@ function NurseDashboard() {
               {!activeLog &&
                 todayAssignment.status === "published" &&
                 (todayAssignment.shift === "M" || todayAssignment.shift === "N") && (
-                <Link
-                  to="/shift"
-                  className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
-                >
-                  <PlayCircle className="h-4 w-4" /> Start Shift
-                </Link>
-              )}
+                  <Link
+                    to="/shift"
+                    className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
+                  >
+                    <PlayCircle className="h-4 w-4" /> Start Shift
+                  </Link>
+                )}
               {activeLog?.ended_at && (
                 <p className="text-sm text-muted-foreground">
                   Completed · {fmtHoursDetailed(activeLog.hours_logged ?? 0)} logged
@@ -566,9 +569,8 @@ function ManagementDashboard() {
                 <div key={w.id} className="flex items-center justify-between gap-3 text-sm py-1">
                   <span className="truncate font-medium w-32 sm:w-40">{w.name}</span>
                   <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
-                    AM: {w.min_morning_supervisor}S · {w.min_morning_nurses}N+I · {w.min_morning_na}
-                    NA &nbsp;·&nbsp; PM: {w.min_night_supervisor}S · {w.min_night_nurses}N+I ·{" "}
-                    {w.min_night_na}NA
+                    AM: {w.min_morning_nurses}N+I · {w.min_morning_na}NA &nbsp;·&nbsp; PM:{" "}
+                    {w.min_night_nurses}N+I · {w.min_night_na}NA
                   </span>
                 </div>
               ))}
@@ -616,15 +618,15 @@ function ManagementDashboard() {
           { to: "/staff", icon: Users, label: "Manage Staff" },
           { to: "/reports", icon: TrendingUp, label: "Reports" },
         ].map(({ to, icon: Icon, label }) => (
-            <Link
-              key={to}
-              to={to}
-              className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-soft hover:bg-muted/50 transition text-sm font-medium"
-            >
-              <Icon className="h-4 w-4 text-primary shrink-0" />
-              {label}
-            </Link>
-          ))}
+          <Link
+            key={to}
+            to={to}
+            className="flex items-center gap-3 rounded-xl border bg-card p-4 shadow-soft hover:bg-muted/50 transition text-sm font-medium"
+          >
+            <Icon className="h-4 w-4 text-primary shrink-0" />
+            {label}
+          </Link>
+        ))}
       </div>
     </div>
   );
