@@ -130,7 +130,7 @@ type Nurse = {
 };
 
 function StaffPage() {
-  const { canManageStaff, canCreateLogin, canEditTargetHours } = useAuth();
+  const { canManageStaff, canCreateLogin, canEditTargetHours, canDelete } = useAuth();
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
@@ -618,16 +618,44 @@ function StaffPage() {
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
-                          <button
-                            type="button"
-                            aria-label={`Remove ${n.name}`}
-                            onClick={() => {
-                              if (confirm(`Remove ${n.name}?`)) delMut.mutate(n.id);
-                            }}
-                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {canDelete ? (
+                            <button
+                              type="button"
+                              aria-label={`Remove ${n.name}`}
+                              onClick={() => {
+                                if (confirm(`Remove ${n.name}?`)) delMut.mutate(n.id);
+                              }}
+                              className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          ) : (
+                            (() => {
+                              const info = profileInfo(n.name);
+                              if (!info) return null;
+                              return info.isActive ? (
+                                <button
+                                  type="button"
+                                  aria-label={`Deactivate ${n.name}`}
+                                  title="Deactivate login"
+                                  onClick={() => void deactivateLogin(info.id)}
+                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+                                >
+                                  <UserX className="h-4 w-4" />
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  aria-label={`Reactivate ${n.name}`}
+                                  title="Reactivate login"
+                                  onClick={() => void reactivateLogin(info.id)}
+                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/10 text-success"
+                                >
+                                  <UserCheck className="h-4 w-4" />
+                                </button>
+                              );
+                            })()
+                          )}
                         </div>
                       </td>
                     )}
