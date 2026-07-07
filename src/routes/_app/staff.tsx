@@ -78,17 +78,18 @@ function normalizeRole(raw: string): string {
   if (exact) return exact;
 
   // Surgical Nurse / Surgical Nurse - Day
-  if (/^surgical\s*nurse\s*-\s*day$/i.test(s)) return "Surgical Nurse - Day";
-  if (/^surgical\s*nurse$/i.test(s)) return "Surgical Nurse";
+  // Accepts abbreviations (Surg Nurse) and common misspellings (Surgcal, Surgicl, Surgial)
+  if (/^surg\S*\s+nurs\S*\s*[-–]\s*day$/i.test(s)) return "Surgical Nurse - Day";
+  if (/^surg\S*\s+nurs\S*$/i.test(s)) return "Surgical Nurse";
 
-  // Porter / Porter - Day
-  if (/^porter\s*-\s*day$/i.test(s)) return "Porter - Day";
-  if (/^porter$/i.test(s)) return "Porter";
+  // Porter / Porter - Day — accepts abbreviations (Port, Portr) and minor misspellings
+  if (/^port\S*\s*[-–]\s*day$/i.test(s)) return "Porter - Day";
+  if (/^port\S*$/i.test(s)) return "Porter";
 
   // Nursing Assistant / Nursing Assistant - Day
-  // Accepts: "Nurse Assistant", "Nursing Asst", "Nurs Asst - Day", etc.
-  if (/^nurs(e|ing)\s+ass(istant|t?)?\s*-\s*day$/i.test(s)) return "Nursing Assistant - Day";
-  if (/^nurs(e|ing)\s+ass(istant|t?)?$/i.test(s)) return "Nursing Assistant";
+  // Accepts: "Nurse Asst", "Nursing Asst", "Nurs Asst", "Nurse Aide", "Nursing Aid - Day", etc.
+  if (/^nurs\S*\s+a(?:ss\S*|id\S*)\s*[-–]\s*day$/i.test(s)) return "Nursing Assistant - Day";
+  if (/^nurs\S*\s+a(?:ss\S*|id\S*)$/i.test(s)) return "Nursing Assistant";
 
   // Matron — catches "mtron", "mtrn", "maton", "matorn", etc.
   if (/^ma?t[ro]{0,2}n?$/i.test(s)) return "Matron";
