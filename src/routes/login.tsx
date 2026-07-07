@@ -15,7 +15,17 @@ import {
   type AppRole,
 } from "@/lib/auth-context";
 
-const APP_ROLES: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "nurse"];
+const APP_ROLES: AppRole[] = [
+  "admin",
+  "cno",
+  "chief_matron",
+  "head_nurse",
+  "hr_admin",
+  "nurse",
+  "surgical_nurse",
+  "porter",
+  "nursing_assistant",
+];
 
 function toAppRoles(rawRoles: unknown): AppRole[] {
   if (!Array.isArray(rawRoles)) return [];
