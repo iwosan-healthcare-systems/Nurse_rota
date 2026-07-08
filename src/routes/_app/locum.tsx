@@ -161,9 +161,12 @@ function LocumPage() {
   // Chief Matron is scoped to their own facility.
   const locumFacility: string | null = isCNO ? null : (nurseFacility ?? null);
   const isNurse = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
+  // Any user linked to a nurse record (by name match) can receive and view locum invites.
+  // This includes head nurses who are not in NURSE_TIER_ROLES but are still eligible invitees.
+  const canSeeInvites = !!nurseId;
 
   type Tab = "my-requests" | "review" | "all" | "invites" | "history";
-  const defaultTab: Tab = isNurse ? "invites" : isCNO ? "review" : "my-requests";
+  const defaultTab: Tab = canSeeInvites ? "invites" : isCNO ? "review" : "my-requests";
   const [tab, setTab] = useState<Tab>(defaultTab);
 
   // Dialog state
@@ -503,7 +506,7 @@ function LocumPage() {
 
   type TabDef = { id: Tab; label: string; badge?: number };
   const tabs: TabDef[] = [
-    ...(isNurse
+    ...(canSeeInvites
       ? [
           {
             id: "invites" as Tab,

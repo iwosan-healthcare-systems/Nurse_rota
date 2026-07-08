@@ -33,7 +33,7 @@ router.post(
     const roles = roleRows.map((r) => r.role);
 
     const { rows: nurseRows } = await pool.query(
-      "SELECT id, facility FROM nurses WHERE name = $1 LIMIT 1",
+      "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
       [user.full_name],
     );
     const nurse = nurseRows[0] ?? null;
@@ -76,7 +76,7 @@ router.get(
 
     const [{ rows: roleRows }, { rows: nurseRows }] = await Promise.all([
       pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.user.userId]),
-      pool.query("SELECT id, facility FROM nurses WHERE name = $1 LIMIT 1", [rows[0].full_name]),
+      pool.query("SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1", [rows[0].full_name]),
     ]);
 
     const nurse = nurseRows[0] ?? null;
