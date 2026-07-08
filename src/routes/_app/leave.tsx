@@ -86,6 +86,9 @@ function LeavePage() {
     canRequestLeave,
     canRequestShiftSwitch,
     canApproveShiftSwitch,
+    nurseFacility,
+    isAdmin,
+    activeRole,
   } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
@@ -99,15 +102,31 @@ function LeavePage() {
     queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
   });
 
-  // Any approval role (leave OR shift-switch) gets the full list — they need to see all requests.
+  // CNO and admin see all facilities; every other approver is scoped to their own facility.
+  const isCnoOrAdmin = isAdmin || activeRole === "cno";
+  const facilityScope: string | null = isCnoOrAdmin ? null : (nurseFacility ?? null);
+
+  // Fetch nurses so we can show a facility badge when CNO/admin views all facilities.
+  const { data: nurses = [] } = useQuery<{ id: string; name: string; facility: string | null }[]>({
+    queryKey: ["nurses"],
+    staleTime: 10 * 60 * 1000,
+    queryFn: () => api.get("/nurses"),
+  });
+  const nurseToFacility = useMemo(
+    () => new Map(nurses.map((n) => [n.id, n.facility])),
+    [nurses],
+  );
+
+  // Any approval role (leave OR shift-switch) gets the full list for their scope.
   const canSeeAll = canApproveLeave || canApproveShiftSwitch;
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: canSeeAll ? ["leave"] : ["leave", "mine", user?.id, nurseId],
+    queryKey: canSeeAll ? ["leave", facilityScope] : ["leave", "mine", user?.id, nurseId],
     refetchInterval: 30 * 1000,
     queryFn: async () => {
       if (canSeeAll) {
-        return api.get<LeaveRow[]>("/leave-requests");
+        const qs = facilityScope ? `?facility=${encodeURIComponent(facilityScope)}` : "";
+        return api.get<LeaveRow[]>(`/leave-requests${qs}`);
       }
 
       // Three queries for non-approvers:
@@ -180,7 +199,7 @@ function LeavePage() {
     try {
       if (status === "Approved" && l.nurse_id) {
         const publishedShifts = await api.get<{ id: string; shift_date: string; shift: string }[]>(
-          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status_in=submitted,approved_chief,approved_cno,published&shift_in=M,N`,
+          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status_in=draft,submitted,approved_chief,approved_cno,published&shift_in=M,N`,
         );
 
         if (publishedShifts.length > 0) {
@@ -557,12 +576,20 @@ function LeavePage() {
           }
         />
       ) : activeTab === "leave" ? (
-        <LeaveTable rows={visibleRows} canApprove={canApproveLeave} onReview={reviewLeave} />
+        <LeaveTable
+          rows={visibleRows}
+          canApprove={canApproveLeave}
+          onReview={reviewLeave}
+          nurseToFacility={nurseToFacility}
+          showFacility={isCnoOrAdmin}
+        />
       ) : (
         <SwitchTable
           rows={visibleRows}
           canApprove={canApproveShiftSwitch}
           onReview={reviewSwitch}
+          nurseToFacility={nurseToFacility}
+          showFacility={isCnoOrAdmin}
         />
       )}
 
@@ -578,10 +605,14 @@ function LeaveTable({
   rows,
   canApprove,
   onReview,
+  nurseToFacility,
+  showFacility,
 }: {
   rows: LeaveRow[];
   canApprove: boolean;
   onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
+  nurseToFacility?: Map<string, string | null>;
+  showFacility?: boolean;
 }) {
   const { user } = useAuth();
   const [reviewing, setReviewing] = useState<{
@@ -624,7 +655,16 @@ function LeaveTable({
               ) : null}
               {rows.map((l) => (
                 <tr key={l.id} className="border-t hover:bg-muted/30">
-                  {canApprove && <td className="px-4 py-3 font-medium">{l.nurse_name}</td>}
+                  {canApprove && (
+                    <td className="px-4 py-3">
+                      <p className="font-medium">{l.nurse_name}</p>
+                      {showFacility && l.nurse_id && nurseToFacility?.get(l.nurse_id) && (
+                        <p className="text-[10px] font-semibold text-primary/70 mt-0.5">
+                          {nurseToFacility.get(l.nurse_id)}
+                        </p>
+                      )}
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
                   <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
                     {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
@@ -742,10 +782,14 @@ function SwitchTable({
   rows,
   canApprove,
   onReview,
+  nurseToFacility,
+  showFacility,
 }: {
   rows: LeaveRow[];
   canApprove: boolean;
   onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
+  nurseToFacility?: Map<string, string | null>;
+  showFacility?: boolean;
 }) {
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
@@ -791,7 +835,14 @@ function SwitchTable({
                 const sw = parseSwitch(l);
                 return (
                   <tr key={l.id} className="border-t hover:bg-muted/30">
-                    <td className="px-4 py-3 font-medium">{l.nurse_name}</td>
+                    <td className="px-4 py-3">
+                      <p className="font-medium">{l.nurse_name}</p>
+                      {showFacility && l.nurse_id && nurseToFacility?.get(l.nurse_id) && (
+                        <p className="text-[10px] font-semibold text-primary/70 mt-0.5">
+                          {nurseToFacility.get(l.nurse_id)}
+                        </p>
+                      )}
+                    </td>
                     <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
                     <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
                       {fmtDateLeave(sw?.date ?? l.from_date)}
