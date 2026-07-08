@@ -303,21 +303,35 @@ function RotaPage() {
     },
   });
 
-  // Fetch assignments filtered to only the loaded nurses and date range.
-  // Querying without a nurse filter hits PostgREST's 1000-row default limit when
-  // a facility has many nurses — later days silently disappear from the grid.
-  // Batching by 30 IDs keeps each response well under 1000 rows (30 × 28 = 840).
-  const nurseIds = useMemo(() => nurses.map((n) => n.id), [nurses]);
+  // When a specific facility is selected, scope the query to that facility's nurses.
+  // When "All Facilities" is selected (effectiveFacility = ""), omit the nurse_ids
+  // filter entirely — passing every UUID in the URL can exceed nginx's header-size
+  // limit and the server returns [] with no error.  Our Express API has no row cap,
+  // so querying by date range alone is safe.
+  const displayNurseIds = useMemo(
+    () =>
+      effectiveFacility
+        ? nurses.filter((n) => n.facility === effectiveFacility).map((n) => n.id)
+        : null, // null = no nurse filter (all facilities)
+    [nurses, effectiveFacility],
+  );
+
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery({
-    queryKey: ["assignments", ymd(startDate), ymd(endDate), nurseIds.length, isNurseTier],
+    // Key on effectiveFacility instead of nurseIds.length so a facility-switch
+    // always triggers a fresh fetch even when both facilities have the same nurse count.
+    queryKey: ["assignments", ymd(startDate), ymd(endDate), effectiveFacility, isNurseTier],
     // Wait until the window start is known so we don't fetch for the wrong date range,
     // flash an empty state, then refetch — causing the visible flicker on page load.
-    enabled: nurseIds.length > 0 && !windowLoading,
+    enabled: nurses.length > 0 && !windowLoading,
     staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const statusParam = isNurseTier ? "&status=published" : "";
+      const nurseParam =
+        displayNurseIds && displayNurseIds.length > 0
+          ? `&nurse_ids=${displayNurseIds.join(",")}`
+          : "";
       return api.get<Assignment[]>(
-        `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}${statusParam}`,
+        `/shift-assignments?from=${ymd(startDate)}&to=${ymd(endDate)}${nurseParam}${statusParam}`,
       );
     },
   });
