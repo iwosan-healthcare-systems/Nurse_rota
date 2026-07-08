@@ -222,25 +222,25 @@ function RotaPage() {
       const nurseFilter =
         facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
 
-      // Earliest assignment within the past 27 days = start of the active window.
-      // Gaps between schedules (days with no assignments) ensure we don't bleed
-      // into a previous finished window.
+      // Run both window checks in parallel: current (last 27 days) and future (tomorrow+).
+      // If a current window is found, we use it; otherwise fall back to the future one.
+      // Parallel fetch halves the waterfall when no current window exists.
       const statusParam = isNurseTier ? "&status=published" : "";
-      const current = await api
-        .get<
-          { shift_date: string }[]
-        >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`)
-        .catch(() => []);
-      if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
-
-      // No active window — snap forward to the next upcoming one
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      const future = await api
-        .get<
-          { shift_date: string }[]
-        >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`)
-        .catch(() => []);
+      const [current, future] = await Promise.all([
+        api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`,
+          )
+          .catch(() => [] as { shift_date: string }[]),
+        api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`,
+          )
+          .catch(() => [] as { shift_date: string }[]),
+      ]);
+      if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
       return (future[0]?.shift_date ?? todayStr).slice(0, 10);
     },
   });
