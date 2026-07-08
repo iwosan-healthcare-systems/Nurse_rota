@@ -575,21 +575,12 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    const hasExistingSchedule = assignments.length > 0;
-    const nextPeriodDate = new Date(startDate);
-    nextPeriodDate.setDate(nextPeriodDate.getDate() + DAYS);
-
-    // Schedule exists for viewed period → offer the period after it.
-    // No schedule + viewing current period (startOffset=0) → first-ever gen, offer today.
-    // No schedule + viewing next period (startOffset=1) → offer that period's start date.
-    const defaultStartDate = hasExistingSchedule
-      ? ymd(nextPeriodDate)
-      : startOffset === 0
-        ? todayYmd()
-        : ymd(startDate);
-
+    // Always default to the start of the period currently being viewed.
+    // Admins generate ward-by-ward within the same period, so jumping to the next
+    // period automatically (when assignments exist) was wrong — it forced them to
+    // manually correct the date on every subsequent ward run.
     setGenForm({
-      startDate: defaultStartDate,
+      startDate: ymd(startDate),
       facility: lockedFacility ?? "",
       ward: "",
       rotateInterns: true,
