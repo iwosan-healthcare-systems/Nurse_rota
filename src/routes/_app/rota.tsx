@@ -465,7 +465,10 @@ function RotaPage() {
         : "/wards";
       const rows = await api.get<WardInput[]>(url);
       const seen = new Set<string>();
-      return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
+      // Prefer facility-specific records over null-facility fallbacks when names collide.
+      return [...rows]
+        .sort((a, b) => (a.facility && !b.facility ? -1 : !a.facility && b.facility ? 1 : 0))
+        .filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
   });
 
@@ -479,7 +482,10 @@ function RotaPage() {
         : "/wards";
       const rows = await api.get<WardInput[]>(url);
       const seen = new Set<string>();
-      return rows.filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
+      // Prefer facility-specific records over null-facility fallbacks when names collide.
+      return [...rows]
+        .sort((a, b) => (a.facility && !b.facility ? -1 : !a.facility && b.facility ? 1 : 0))
+        .filter((w) => (seen.has(w.name) ? false : seen.add(w.name) && true));
     },
   });
 
@@ -658,7 +664,7 @@ function RotaPage() {
         !isNADayType(n.role),
     );
     if (isWardRun) {
-      wardNurses = wardNurses.filter((n) => parseWards(n.ward).includes(genForm.ward));
+      wardNurses = wardNurses.filter((n) => parseWards(n.ward)[0] === genForm.ward);
     }
 
     if (!wardNurses.length) {

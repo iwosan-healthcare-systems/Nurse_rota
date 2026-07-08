@@ -20,7 +20,7 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { isGlobalHead, isInternType, isMatron } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType, isMatron, isPorterType, isNADayType } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -396,7 +396,7 @@ function ApprovalsPage() {
         .filter(
           (n) =>
             n.facility === win.facility &&
-            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
+            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)),
         )
         .map((n) => n.id);
       if (globalIds.length) {
@@ -443,7 +443,7 @@ function ApprovalsPage() {
         .filter(
           (n) =>
             n.facility === win.facility &&
-            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role)),
+            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)),
         )
         .map((n) => n.id);
       if (globalIds.length) {
@@ -536,12 +536,28 @@ function ApprovalsPage() {
       (n) => n.facility === win.facility,
     );
     if (win.ward !== null) {
+      // Mirror the wardNurses filter in rota.tsx: exclude all facility-level roles
+      // (matron, coverage/head, intern, porter, NA-day) even if their nurse profile
+      // happens to list this ward — their assignments are stored with ward = null
+      // and belong in the coverage card, not the ward card.
       scopedNurses = scopedNurses.filter(
-        (n) => !isGlobalHead(n.role) && parseWards(n.ward).includes(win.ward!),
+        (n) =>
+          !isGlobalHead(n.role) &&
+          !isMatron(n.role) &&
+          !isInternType(n.role) &&
+          !isPorterType(n.role) &&
+          !isNADayType(n.role) &&
+          parseWards(n.ward).includes(win.ward!),
       );
     } else {
+      // Coverage card: all facility-level roles whose assignments are stored with ward = null.
       scopedNurses = scopedNurses.filter(
-        (n) => isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role),
+        (n) =>
+          isGlobalHead(n.role) ||
+          isInternType(n.role) ||
+          isMatron(n.role) ||
+          isPorterType(n.role) ||
+          isNADayType(n.role),
       );
     }
     const nurseIds = scopedNurses.map((n) => n.id);
