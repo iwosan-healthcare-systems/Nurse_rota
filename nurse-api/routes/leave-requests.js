@@ -62,6 +62,11 @@ router.get(
       conditions.push(`reason LIKE $${params.length + 1}`);
       params.push(req.query.reason_like + "%");
     }
+    // Filter to only leave requests belonging to nurses at a specific facility.
+    if (req.query.facility) {
+      conditions.push(`nurse_id IN (SELECT id FROM nurses WHERE facility = $${params.length + 1})`);
+      params.push(req.query.facility);
+    }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     let query = `SELECT * FROM leave_requests ${where} ORDER BY created_at DESC`;

@@ -320,6 +320,14 @@ function ReportsContent() {
         : locumFilledRequests,
     [locumFilledRequests, reportFacility],
   );
+  // Leave requests scoped to the same facility set — CNO/admin see all, others see their own.
+  const scopedLeave = useMemo(
+    () =>
+      reportFacility
+        ? leave.filter((l) => l.nurse_id && scopedNurseIds.has(l.nurse_id))
+        : leave,
+    [leave, scopedNurseIds, reportFacility],
+  );
 
   // Build per-nurse hours for current period (regular + swap + leave; locum excluded).
   // swapHoursMap and leaveHoursMap allow breakdown display without excluding from total.
@@ -620,9 +628,9 @@ function ReportsContent() {
   }
 
   function exportLeaveRequests() {
-    const leaveOnly = leave.filter((l) => l.type !== "Swap");
-    const switches = leave.filter((l) => l.type === "Swap");
-    if (leave.length === 0) return toast.error("No leave requests to export");
+    const leaveOnly = scopedLeave.filter((l) => l.type !== "Swap");
+    const switches = scopedLeave.filter((l) => l.type === "Swap");
+    if (scopedLeave.length === 0) return toast.error("No leave requests to export");
     const nurseMap = new Map(nurses.map((n) => [n.id, n]));
 
     const leaveRows = leaveOnly.map((l) => ({
@@ -1281,8 +1289,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
       {/* ── Leave & Requests ─────────────────────────────────────────────── */}
       {tab === "leave" &&
         (() => {
-          const leaveOnly = leave.filter((l: { type: string }) => l.type !== "Swap");
-          const switches = leave.filter((l: { type: string }) => l.type === "Swap");
+          const leaveOnly = scopedLeave.filter((l: { type: string }) => l.type !== "Swap");
+          const switches = scopedLeave.filter((l: { type: string }) => l.type === "Swap");
           const pending = leaveOnly.filter((l: { status: string }) => l.status === "Pending");
           const approved = leaveOnly.filter((l: { status: string }) => l.status === "Approved");
           const rejected = leaveOnly.filter((l: { status: string }) => l.status === "Rejected");
