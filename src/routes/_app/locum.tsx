@@ -1036,6 +1036,14 @@ function RequestCard({
 }) {
   const [expanded, setExpanded] = useState(false);
 
+  // Fetch the invite list when expanded and invites have been sent
+  const showInvites = expanded && (req.status === "invites_sent" || req.status === "filled");
+  const { data: reqInvites = [] } = useQuery<LocumInvite[]>({
+    queryKey: ["locum-invites-req", req.id],
+    enabled: showInvites,
+    queryFn: () => api.get<LocumInvite[]>(`/locum/invites?locum_request_id=${req.id}`),
+  });
+
   return (
     <div className="rounded-lg border bg-card overflow-hidden">
       <div
@@ -1094,6 +1102,29 @@ function RequestCard({
               value={req.hdu_nurses}
             />
           </div>
+
+          {showInvites && reqInvites.length > 0 && (
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                Nurses Invited ({reqInvites.length})
+              </p>
+              <ul className="space-y-1.5">
+                {reqInvites.map((inv) => (
+                  <li key={inv.id} className="flex items-center justify-between text-sm">
+                    <span className="text-sm">{inv.nurse_name}</span>
+                    <span
+                      className={cn(
+                        "text-xs px-2 py-0.5 rounded-full font-medium",
+                        INVITE_COLOR[inv.status],
+                      )}
+                    >
+                      {INVITE_LABEL[inv.status]}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {req.status === "declined" && req.decline_reason && (
             <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-md px-3 py-2.5">
@@ -1573,12 +1604,16 @@ function SendInvitesModal({
         >(`/profiles?full_names=${encodeURIComponent(names.join(","))}`)
         .catch(() => []);
 
-      const profileMap = Object.fromEntries(profiles.map((p) => [p.full_name, p.id]));
+      // Use lowercase keys so a case difference between nurses.name and profiles.full_name
+      // doesn't cause the lookup to return null (the API matches case-insensitively).
+      const profileMap = Object.fromEntries(
+        profiles.map((p) => [p.full_name.toLowerCase(), p.id]),
+      );
 
       return eligible.map((n) => ({
         nurse_id: n.id,
         nurse_name: n.name,
-        auth_user_id: profileMap[n.name] ?? null,
+        auth_user_id: profileMap[n.name.toLowerCase()] ?? null,
       })) as OffNurse[];
     },
   });
