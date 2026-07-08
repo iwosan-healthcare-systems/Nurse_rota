@@ -561,8 +561,15 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
+    // First generation (no existing assignments in the current view) → default to today.
+    // Subsequent generation → default to the period after the current one, so the admin
+    // doesn't have to manually advance the date every time they schedule the next block.
+    const hasExistingSchedule = assignments.length > 0;
+    const nextPeriodDate = new Date(startDate);
+    nextPeriodDate.setDate(nextPeriodDate.getDate() + DAYS);
+
     setGenForm({
-      startDate: ymd(startDate),
+      startDate: hasExistingSchedule ? ymd(nextPeriodDate) : todayYmd(),
       facility: lockedFacility ?? "",
       ward: "",
       rotateInterns: true,
@@ -958,21 +965,15 @@ function RotaPage() {
         qc.setQueryData(["schedule-window-start", activeRole, effectiveFacility], genForm.startDate);
       }
 
-      // 2. Pre-load the assignments cache for the exact period that was generated.
-      //    This runs before setBusy(false), so by the time the UI unblocks the data
-      //    is already in cache and the grid renders with shifts — no loading flash,
-      //    no stale-date mismatch where hours show but cells are all "—".
-      const genEndObj = new Date(genForm.startDate + "T00:00:00");
-      genEndObj.setDate(genEndObj.getDate() + DAYS - 1);
-      const genEndStr = ymd(genEndObj);
-      const statusP = isNurseTier ? "&status=published" : "";
-      await qc.prefetchQuery({
-        queryKey: ["assignments", genForm.startDate, genEndStr, nurseIds.length, isNurseTier],
-        queryFn: () =>
-          api.get<Assignment[]>(
-            `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${genForm.startDate}&to=${genEndStr}${statusP}`,
-          ),
-      });
+      // 2. Force the assignments grid to re-fetch.
+      //    prefetchQuery silently skips the fetch when the same key is already in cache
+      //    and hasn't gone stale yet — e.g. the query fetched [] before generation and
+      //    its 2-minute staleTime hasn't elapsed.  invalidateQueries marks the cache as
+      //    stale regardless, so TanStack Query immediately re-fetches for any active
+      //    subscriber (the grid).  Concurrent users generating different wards are safe:
+      //    each browser has an independent cache and the API uses per-row upserts, so
+      //    simultaneous writes to different wards never conflict.
+      qc.invalidateQueries({ queryKey: ["assignments"] });
 
       // 3. Refresh nurse list (intern ward reassignments).
       qc.invalidateQueries({ queryKey: ["nurses"] });
