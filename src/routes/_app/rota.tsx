@@ -965,15 +965,17 @@ function RotaPage() {
         qc.setQueryData(["schedule-window-start", activeRole, effectiveFacility], genForm.startDate);
       }
 
-      // 2. Force the assignments grid to re-fetch.
-      //    prefetchQuery silently skips the fetch when the same key is already in cache
-      //    and hasn't gone stale yet — e.g. the query fetched [] before generation and
-      //    its 2-minute staleTime hasn't elapsed.  invalidateQueries marks the cache as
-      //    stale regardless, so TanStack Query immediately re-fetches for any active
-      //    subscriber (the grid).  Concurrent users generating different wards are safe:
-      //    each browser has an independent cache and the API uses per-row upserts, so
-      //    simultaneous writes to different wards never conflict.
-      qc.invalidateQueries({ queryKey: ["assignments"] });
+      // 2. Force-refresh assignments and wait for the data to land before lifting
+      //    the busy overlay.  Three reasons this is the right tool:
+      //    • prefetchQuery skips the fetch when data is already in cache (even
+      //      stale data from a pre-generation empty fetch within the staleTime window)
+      //    • invalidateQueries fires the refetch but doesn't await it, so setBusy(false)
+      //      runs before the data arrives and the grid flickers empty
+      //    • refetchQueries + await keeps the overlay on-screen until the API responds,
+      //      then the grid renders fully populated on the first visible frame
+      //    Concurrent users are safe: each browser has its own independent cache;
+      //    per-row DB upserts mean simultaneous writes to different wards never conflict.
+      await qc.refetchQueries({ queryKey: ["assignments"] });
 
       // 3. Refresh nurse list (intern ward reassignments).
       qc.invalidateQueries({ queryKey: ["nurses"] });
