@@ -130,7 +130,15 @@ type Nurse = {
 };
 
 function StaffPage() {
-  const { canManageStaff, canCreateLogin, canEditTargetHours, canDelete, nurseFacility, isAdmin, activeRole } = useAuth();
+  const {
+    canManageStaff,
+    canCreateLogin,
+    canEditTargetHours,
+    canDelete,
+    nurseFacility,
+    isAdmin,
+    activeRole,
+  } = useAuth();
   const qc = useQueryClient();
 
   // Only admin, CNO, and HR can browse across facilities; everyone else is locked to their own.
@@ -240,7 +248,6 @@ function StaffPage() {
     onSuccess: async (_, id) => {
       toast.success("Nurse removed");
       qc.invalidateQueries({ queryKey: ["nurses"] });
-      qc.invalidateQueries({ queryKey: ["nurses-approvals"] });
       qc.invalidateQueries({ queryKey: ["assignments"] });
       logAudit("Removed nurse", id);
     },

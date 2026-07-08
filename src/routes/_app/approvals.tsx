@@ -218,8 +218,7 @@ function ApprovalsPage() {
   const canSubmit = canSubmitApproval;
 
   const { data: allNurses = [] } = useQuery({
-    queryKey: ["nurses-approvals"],
-    staleTime: 10 * 60 * 1000,
+    queryKey: ["nurses"],
     queryFn: () =>
       api.get<{ id: string; name: string; role: string; ward: string | null; facility: string | null }[]>(
         "/nurses",

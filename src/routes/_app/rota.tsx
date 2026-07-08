@@ -288,7 +288,6 @@ function RotaPage() {
   // ── Data queries ─────────────────────────────────────────────────────────
   const { data: nurses = [] } = useQuery<NurseInput[]>({
     queryKey: ["nurses"],
-    staleTime: 10 * 60 * 1000,
     queryFn: () => api.get<NurseInput[]>("/nurses"),
   });
 
