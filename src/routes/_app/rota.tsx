@@ -141,7 +141,6 @@ function RotaPage() {
     canSubmitApproval,
     user,
     nurseFacility,
-    isAdmin,
     nurseId,
     activeRole,
   } = useAuth();
@@ -953,6 +952,10 @@ function RotaPage() {
       //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
       if (startOffset === 0) {
         qc.setQueryData(["schedule-window-start", activeRole, genForm.facility], genForm.startDate);
+        // Also update the display's anchor key — it's keyed by effectiveFacility (the toolbar
+        // filter), which can differ from genForm.facility when the admin has no facility selected.
+        // Without this the anchor stays stale and the prefetched data lands in the wrong cache key.
+        qc.setQueryData(["schedule-window-start", activeRole, effectiveFacility], genForm.startDate);
       }
 
       // 2. Pre-load the assignments cache for the exact period that was generated.
