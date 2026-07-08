@@ -143,6 +143,7 @@ router.patch(
           "hours_this_month",
           "target_hours",
           "certifications",
+          "profile_id",
         ]
       : ["ward"];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));

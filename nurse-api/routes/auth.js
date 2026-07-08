@@ -32,10 +32,21 @@ router.post(
     ]);
     const roles = roleRows.map((r) => r.role);
 
-    const { rows: nurseRows } = await pool.query(
-      "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
-      [user.full_name],
+    // Try direct profile_id link first (exact, no name-collision risk)
+    let { rows: nurseRows } = await pool.query(
+      "SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1",
+      [user.id],
     );
+    if (!nurseRows[0]) {
+      const { rows: byName } = await pool.query(
+        "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
+        [user.full_name],
+      );
+      if (byName[0]) {
+        nurseRows = byName;
+        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [user.id, byName[0].id]).catch(() => {});
+      }
+    }
     const nurse = nurseRows[0] ?? null;
 
     const token = jwt.sign(
@@ -74,11 +85,22 @@ router.get(
     );
     if (!rows[0]) return res.status(404).json({ error: "User not found" });
 
-    const [{ rows: roleRows }, { rows: nurseRows }] = await Promise.all([
+    const [{ rows: roleRows }, { rows: profileIdRows }] = await Promise.all([
       pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.user.userId]),
-      pool.query("SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1", [rows[0].full_name]),
+      pool.query("SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1", [req.user.userId]),
     ]);
 
+    let nurseRows = profileIdRows;
+    if (!nurseRows[0]) {
+      const { rows: byName } = await pool.query(
+        "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
+        [rows[0].full_name],
+      );
+      if (byName[0]) {
+        nurseRows = byName;
+        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id]).catch(() => {});
+      }
+    }
     const nurse = nurseRows[0] ?? null;
     res.json({
       ...rows[0],
@@ -291,6 +313,10 @@ router.post(
           rows[0].id,
           appRole,
         ]);
+        await client.query(
+          "UPDATE nurses SET profile_id = $1 WHERE LOWER(name) = LOWER($2) AND profile_id IS NULL",
+          [rows[0].id, nurse.name],
+        );
         created.push({ name: nurse.name, email });
       }
       await client.query("COMMIT");

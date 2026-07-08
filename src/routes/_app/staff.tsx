@@ -130,8 +130,13 @@ type Nurse = {
 };
 
 function StaffPage() {
-  const { canManageStaff, canCreateLogin, canEditTargetHours, canDelete } = useAuth();
+  const { canManageStaff, canCreateLogin, canEditTargetHours, canDelete, nurseFacility, isAdmin, activeRole } = useAuth();
   const qc = useQueryClient();
+
+  // Only admin, CNO, and HR can browse across facilities; everyone else is locked to their own.
+  const canSeeAllFacilities = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const lockedFacility: string | null = canSeeAllFacilities ? null : (nurseFacility ?? null);
+
   const [search, setSearch] = useState("");
   const [filterRole, setFilterRole] = useState("");
   const [filterFacility, setFilterFacility] = useState("");
@@ -242,6 +247,9 @@ function StaffPage() {
     onError: (e: Error) => toast.error(e.message),
   });
 
+  // Locked roles always see their own facility regardless of the dropdown state.
+  const effectiveFilterFacility = lockedFacility ?? filterFacility;
+
   const filtered = useMemo(
     () =>
       nurses.filter((n) => {
@@ -253,7 +261,7 @@ function StaffPage() {
         )
           return false;
         if (filterRole && n.role !== filterRole) return false;
-        if (filterFacility && n.facility !== filterFacility) return false;
+        if (effectiveFilterFacility && n.facility !== effectiveFilterFacility) return false;
         if (filterWard && !parseWards(n.ward).includes(filterWard)) return false;
         if (filterStatus) {
           const info = profileInfo(n.name);
@@ -262,7 +270,7 @@ function StaffPage() {
         }
         return true;
       }),
-    [nurses, search, filterRole, filterFacility, filterWard, filterStatus, profileInfo],
+    [nurses, search, filterRole, effectiveFilterFacility, filterWard, filterStatus, profileInfo],
   );
 
   const activeFilters = [filterRole, filterFacility, filterWard, filterStatus].filter(
@@ -295,7 +303,11 @@ function StaffPage() {
     <div>
       <PageHeader
         title="Nursing Staff"
-        subtitle={`${nurses.length} nurse${nurses.length === 1 ? "" : "s"} registered`}
+        subtitle={
+          lockedFacility
+            ? `${filtered.length} nurse${filtered.length === 1 ? "" : "s"} · ${lockedFacility}`
+            : `${nurses.length} nurse${nurses.length === 1 ? "" : "s"} registered`
+        }
         actions={
           <>
             {canEditTargetHours && (
@@ -362,23 +374,25 @@ function StaffPage() {
             ))}
           </select>
 
-          {/* Facility filter */}
-          <select
-            aria-label="Filter by facility"
-            value={filterFacility}
-            onChange={(e) => {
-              setFilterFacility(e.target.value);
-              setFilterWard("");
-            }}
-            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
-          >
-            <option value="">All facilities</option>
-            {FACILITIES.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+          {/* Facility filter — hidden for roles locked to a single facility */}
+          {canSeeAllFacilities && (
+            <select
+              aria-label="Filter by facility"
+              value={filterFacility}
+              onChange={(e) => {
+                setFilterFacility(e.target.value);
+                setFilterWard("");
+              }}
+              className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
+            >
+              <option value="">All facilities</option>
+              {FACILITIES.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          )}
 
           {/* Ward filter */}
           <select

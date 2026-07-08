@@ -93,6 +93,7 @@ export function AppShell() {
     roles,
     activeRole,
     nurseId,
+    nurseFacility,
     needsRoleSelection,
     mustChangePassword,
     clearMustChangePassword,
@@ -496,15 +497,16 @@ function RotaReminderBell({
 
   // ── Locum: pending-action counts ─────────────────────────────────────────
   const { data: locumCount = 0 } = useQuery({
-    queryKey: ["locum-bell", userId, activeRole, nurseId],
+    queryKey: ["locum-bell", userId, activeRole, nurseId, nurseFacility],
     enabled: !!userId,
     staleTime: 60 * 1000,
     queryFn: async () => {
       let total = 0;
 
       if (nurseId) {
+        const facilityParam = nurseFacility ? `&facility=${encodeURIComponent(nurseFacility)}` : "";
         const invites = await api.get<{ id: string }[]>(
-          `/locum/invites?nurse_id=${nurseId}&status=pending`,
+          `/locum/invites?nurse_id=${nurseId}&status=pending${facilityParam}`,
         );
         total += invites.length;
       }

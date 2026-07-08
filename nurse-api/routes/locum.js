@@ -64,14 +64,16 @@ router.post(
       hdu_nurses,
       requested_by,
       requested_by_name,
+      role_needed,
     } = req.body;
     if (!shift_date || !shift || !facility || !ward || !requested_by || !requested_by_name)
       return res.status(400).json({ error: "Missing required fields" });
 
+    const nursesNeeded = parseInt(req.body.nurses_needed, 10) || 1;
     const { rows } = await pool.query(
       `INSERT INTO locum_requests
-     (shift_date, shift, facility, ward, nurses_in_ward, ventilated_patients, hdu_nurses, requested_by, requested_by_name)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+     (shift_date, shift, facility, ward, nurses_in_ward, ventilated_patients, hdu_nurses, requested_by, requested_by_name, nurses_needed, role_needed)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
       [
         shift_date,
         shift,
@@ -82,6 +84,8 @@ router.post(
         hdu_nurses || 0,
         requested_by,
         requested_by_name,
+        nursesNeeded,
+        role_needed || null,
       ],
     );
     res.status(201).json(rows[0]);
@@ -101,6 +105,8 @@ router.patch(
       "accepted_by_nurse_id",
       "accepted_by_nurse_name",
       "accepted_at",
+      "nurses_needed",
+      "role_needed",
       "updated_at",
     ];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
@@ -120,25 +126,55 @@ router.patch(
   }),
 );
 
-// Atomic claim: update to filled only if status=invites_sent (race-safe)
+// Atomic claim: supports nurses_needed > 1.
+// Returns the updated request, or null if no spots remain.
+// Checks accepted-invite count atomically so concurrent claims can't over-fill.
 router.post(
   "/requests/:id/claim",
   wrap(async (req, res) => {
-    // Derive nurse identity from the authenticated user — never trust the body for this
-    const { rows: nurseRows } = await pool.query(
-      "SELECT id, name FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+    // Derive nurse identity from the authenticated user — never trust the body for this.
+    // Try profile_id first (direct link); fall back to name match and auto-save the link.
+    let { rows: nurseRows } = await pool.query(
+      "SELECT id, name FROM nurses WHERE profile_id = $1 LIMIT 1",
       [req.user.userId],
     );
+    if (!nurseRows[0]) {
+      const { rows: byName } = await pool.query(
+        "SELECT id, name FROM nurses WHERE LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1)) LIMIT 1",
+        [req.user.userId],
+      );
+      if (byName[0]) {
+        nurseRows = byName;
+        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id]).catch(() => {});
+      }
+    }
     if (!nurseRows[0])
       return res.status(403).json({ error: "Nurse record not found for this account" });
 
+    const { id: nurseId, name: nurseName } = nurseRows[0];
+
+    // Single UPDATE that:
+    //  1. Guards: request must still be open AND accepted count < nurses_needed
+    //  2. Sets status to 'filled' only when this acceptance reaches nurses_needed
+    //  3. Records the first acceptee (COALESCE preserves existing value for subsequent accepts)
     const { rows } = await pool.query(
       `UPDATE locum_requests
-     SET status = 'filled', accepted_by_nurse_id = $1, accepted_by_nurse_name = $2,
-         accepted_at = NOW(), updated_at = NOW()
-     WHERE id = $3 AND status = 'invites_sent'
-     RETURNING *`,
-      [nurseRows[0].id, nurseRows[0].name, req.params.id],
+       SET status = CASE
+             WHEN (SELECT COUNT(*) FROM locum_invites
+                   WHERE locum_request_id = $3 AND status = 'accepted') + 1 >= nurses_needed
+             THEN 'filled'
+             ELSE 'invites_sent'
+           END,
+           accepted_by_nurse_id   = COALESCE(accepted_by_nurse_id, $1),
+           accepted_by_nurse_name = COALESCE(accepted_by_nurse_name, $2),
+           accepted_at            = COALESCE(accepted_at, NOW()),
+           updated_at             = NOW()
+       WHERE id = $3
+         AND status = 'invites_sent'
+         AND (SELECT COUNT(*) FROM locum_invites
+              WHERE locum_request_id = $3 AND status = 'accepted') < nurses_needed
+       RETURNING *`,
+      [nurseId, nurseName, req.params.id],
     );
     res.json(rows[0] ?? null);
   }),
@@ -163,6 +199,10 @@ router.get(
     if (req.query.status) {
       conditions.push(`li.status = $${params.length + 1}`);
       params.push(req.query.status);
+    }
+    if (req.query.facility) {
+      conditions.push(`lr.facility = $${params.length + 1}`);
+      params.push(req.query.facility);
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";

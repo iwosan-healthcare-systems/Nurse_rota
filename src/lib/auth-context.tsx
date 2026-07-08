@@ -76,6 +76,7 @@ interface AuthCtx {
   canApproveLocum: boolean;
   canSendLocumInvites: boolean;
   canViewLocumHours: boolean;
+  canViewLocumRequests: boolean;
   canViewReports: boolean;
   canViewAudit: boolean;
   signOut: () => void;
@@ -315,6 +316,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveLocum: cap("approve_locum", ["admin", "cno"]),
     canSendLocumInvites: cap("send_locum_invites", ["admin", "chief_matron"]),
     canViewLocumHours: cap("view_locum_hours", ["admin", "cno", "chief_matron"]),
+    canViewLocumRequests: cap("view_locum_requests", ["admin", "cno", "chief_matron", "head_nurse"]),
     canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "hr_admin"]),
     canViewAudit: cap("view_audit", ["admin", "cno"]),
     signOut,

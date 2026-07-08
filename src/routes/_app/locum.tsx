@@ -49,6 +49,8 @@ type LocumRequest = {
   nurses_in_ward: number;
   ventilated_patients: number;
   hdu_nurses: number;
+  nurses_needed: number;
+  role_needed: string | null;
   status: LocumStatus;
   requested_by: string;
   requested_by_name: string;
@@ -151,22 +153,31 @@ function LocumPage() {
     canApproveLocum,
     canSendLocumInvites,
     canViewLocumHours,
+    canViewLocumRequests,
   } = useAuth();
   const qc = useQueryClient();
 
   const isMatron = canRequestLocum;
   const isCNO = canApproveLocum;
+  // Head nurses see requests for their facility (read-only) but not the other management tabs.
+  const isHeadNurse = canViewLocumRequests && !isMatron && !isCNO;
 
   // CNO (and admin, since admin is in approve_locum defaults) see all facilities.
-  // Chief Matron is scoped to their own facility.
+  // Chief Matron / Head Nurse are scoped to their own facility.
   const locumFacility: string | null = isCNO ? null : (nurseFacility ?? null);
   const isNurse = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
-  // Any user linked to a nurse record (by name match) can receive and view locum invites.
-  // This includes head nurses who are not in NURSE_TIER_ROLES but are still eligible invitees.
-  const canSeeInvites = !!nurseId;
+  // Only ward-level roles (nurse, porter, nursing_assistant, surgical_nurse) see the invites tab.
+  // Head nurses / matrons are excluded — they manage requests, not receive them.
+  const canSeeInvites = isNurse;
 
-  type Tab = "my-requests" | "review" | "all" | "invites" | "history";
-  const defaultTab: Tab = canSeeInvites ? "invites" : isCNO ? "review" : "my-requests";
+  type Tab = "my-requests" | "review" | "all" | "invites" | "history" | "status";
+  const defaultTab: Tab = canSeeInvites
+    ? "invites"
+    : isCNO
+      ? "review"
+      : isHeadNurse
+        ? "status"
+        : "my-requests";
   const [tab, setTab] = useState<Tab>(defaultTab);
 
   // Dialog state
@@ -197,6 +208,14 @@ function LocumPage() {
     queryFn: () => api.get<LocumRequest[]>("/locum/requests"),
   });
 
+  // Head nurse: read-only view of all requests for their facility
+  const { data: facilityRequests = [], isLoading: facilityLoading } = useQuery({
+    queryKey: ["locum-facility", nurseFacility],
+    enabled: isHeadNurse && !!nurseFacility,
+    queryFn: () =>
+      api.get<LocumRequest[]>(`/locum/requests?facility=${encodeURIComponent(nurseFacility!)}`),
+  });
+
   const { data: filledRequests = [], isLoading: historyLoading } = useQuery({
     queryKey: ["locum-history", locumFacility],
     enabled: canViewLocumHours,
@@ -225,10 +244,13 @@ function LocumPage() {
   });
 
   const { data: myInvites = [], isLoading: invitesLoading } = useQuery({
-    queryKey: ["locum-invites", nurseId],
+    queryKey: ["locum-invites", nurseId, nurseFacility],
     enabled: !!nurseId,
     refetchInterval: 30 * 1000,
-    queryFn: () => api.get<LocumInvite[]>(`/locum/invites?nurse_id=${nurseId}`),
+    queryFn: () =>
+      api.get<LocumInvite[]>(
+        `/locum/invites?nurse_id=${nurseId}${nurseFacility ? `&facility=${encodeURIComponent(nurseFacility)}` : ""}`,
+      ),
   });
 
   const { data: wards = [] } = useQuery({
@@ -247,6 +269,8 @@ function LocumPage() {
     nurses_in_ward: number;
     ventilated_patients: number;
     hdu_nurses: number;
+    nurses_needed: number;
+    role_needed: string;
   }) {
     const req = await api.post<LocumRequest>("/locum/requests", {
       ...form,
@@ -414,38 +438,7 @@ function LocumPage() {
       responded_at: new Date().toISOString(),
     });
 
-    // Notify other pending invitees and mark them unavailable
-    const otherPending = await api
-      .get<
-        { nurse_name: string }[]
-      >(`/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending`)
-      .catch(() => [] as { nurse_name: string }[]);
-    if (otherPending.length) {
-      const names = otherPending.map((i) => i.nurse_name).join(",");
-      const otherProfiles = await api
-        .get<{ id: string }[]>(`/profiles?full_names=${encodeURIComponent(names)}`)
-        .catch(() => [] as { id: string }[]);
-      if (otherProfiles.length) {
-        await api
-          .post(
-            "/notifications/upsert",
-            otherProfiles.map((p) => ({
-              user_id: p.id,
-              notif_key: `locum_filled_nurse_${invite.locum_request_id}`,
-              is_read: false,
-            })),
-          )
-          .catch(() => {});
-      }
-      await api
-        .patch(
-          `/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending&neq_id=${invite.id}`,
-          { status: "unavailable", responded_at: new Date().toISOString() },
-        )
-        .catch(() => {});
-    }
-
-    // Update nurse's shift assignment OFF → locum shift type
+    // Update this nurse's shift assignment OFF → locum shift type (always, for every acceptee)
     if (nurseId && invite.locum_request) {
       await api
         .patch(
@@ -455,23 +448,61 @@ function LocumPage() {
         .catch(() => {});
     }
 
-    // Notify matron and CNO
-    if (invite.locum_request) {
-      const req = invite.locum_request;
-      const notifRows = [
-        { user_id: req.requested_by, notif_key: `locum_filled_matron_${req.id}`, is_read: false },
-        ...(req.reviewed_by
-          ? [{ user_id: req.reviewed_by, notif_key: `locum_filled_cno_${req.id}`, is_read: false }]
-          : []),
-      ];
-      await api.post("/notifications/upsert", notifRows).catch(() => {});
+    // Only close remaining pending invites and notify matron/CNO when ALL spots are filled.
+    // claimed.status stays 'invites_sent' until accepted count reaches nurses_needed.
+    if (claimed.status === "filled") {
+      const otherPending = await api
+        .get<
+          { nurse_name: string }[]
+        >(`/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending`)
+        .catch(() => [] as { nurse_name: string }[]);
+      if (otherPending.length) {
+        const names = otherPending.map((i) => i.nurse_name).join(",");
+        const otherProfiles = await api
+          .get<{ id: string }[]>(`/profiles?full_names=${encodeURIComponent(names)}`)
+          .catch(() => [] as { id: string }[]);
+        if (otherProfiles.length) {
+          await api
+            .post(
+              "/notifications/upsert",
+              otherProfiles.map((p) => ({
+                user_id: p.id,
+                notif_key: `locum_filled_nurse_${invite.locum_request_id}`,
+                is_read: false,
+              })),
+            )
+            .catch(() => {});
+        }
+        await api
+          .patch(
+            `/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending&neq_id=${invite.id}`,
+            { status: "unavailable", responded_at: new Date().toISOString() },
+          )
+          .catch(() => {});
+      }
+
+      // Notify matron and CNO
+      if (invite.locum_request) {
+        const req = invite.locum_request;
+        const notifRows = [
+          { user_id: req.requested_by, notif_key: `locum_filled_matron_${req.id}`, is_read: false },
+          ...(req.reviewed_by
+            ? [{ user_id: req.reviewed_by, notif_key: `locum_filled_cno_${req.id}`, is_read: false }]
+            : []),
+        ];
+        await api.post("/notifications/upsert", notifRows).catch(() => {});
+      }
     }
 
     await logAudit(
       "Locum shift accepted",
       `${invite.locum_request?.ward} · ${invite.locum_request?.shift === "M" ? "Morning" : "Night"} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
     );
-    toast.success("Locum shift accepted! Your schedule has been updated.");
+    toast.success(
+      claimed.status === "filled"
+        ? "Locum shift accepted! Your schedule has been updated."
+        : "Locum shift accepted! All needed nurses are not yet confirmed — your slot is secured.",
+    );
     qc.invalidateQueries({ queryKey: ["locum-invites"] });
     qc.invalidateQueries({ queryKey: ["locum-my"] });
     qc.invalidateQueries({ queryKey: ["locum-all"] });
@@ -516,6 +547,7 @@ function LocumPage() {
         ]
       : []),
     ...(isMatron ? [{ id: "my-requests" as Tab, label: "My Requests" }] : []),
+    ...(isHeadNurse ? [{ id: "status" as Tab, label: "Requests" }] : []),
     ...(isCNO
       ? [
           { id: "review" as Tab, label: "Pending Review", badge: pendingRequests.length },
@@ -606,6 +638,7 @@ function LocumPage() {
           }}
         />
       )}
+      {tab === "status" && <AllRequestsView requests={facilityRequests} loading={facilityLoading} />}
       {tab === "all" && <AllRequestsView requests={allRequests} loading={allLoading} />}
       {tab === "history" && (
         <LocumHistoryView requests={filledRequests} logs={locumLogs} loading={historyLoading} />
@@ -1108,9 +1141,40 @@ function RequestCard({
 
           {showInvites && reqInvites.length > 0 && (
             <div className="space-y-2">
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-                Nurses Invited ({reqInvites.length})
-              </p>
+              {(() => {
+                const accepted = reqInvites.filter((i) => i.status === "accepted").length;
+                const needed = req.nurses_needed ?? 1;
+                return (
+                  <>
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                        Nurses Invited ({reqInvites.length})
+                      </p>
+                      <span
+                        className={cn(
+                          "text-xs font-semibold px-2 py-0.5 rounded-full",
+                          accepted >= needed
+                            ? "bg-emerald-100 text-emerald-700"
+                            : "bg-amber-100 text-amber-700",
+                        )}
+                      >
+                        {accepted}/{needed} accepted
+                      </span>
+                    </div>
+                    {needed > 1 && (
+                      <div className="w-full h-1.5 rounded-full bg-muted overflow-hidden">
+                        <div
+                          className={cn(
+                            "h-full rounded-full transition-all",
+                            accepted >= needed ? "bg-emerald-500" : "bg-amber-400",
+                          )}
+                          style={{ width: `${Math.min(100, (accepted / needed) * 100)}%` }}
+                        />
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
               <ul className="space-y-1.5">
                 {reqInvites.map((inv) => (
                   <li key={inv.id} className="flex items-center justify-between text-sm">
@@ -1236,6 +1300,8 @@ function CreateRequestModal({
     nurses_in_ward: number;
     ventilated_patients: number;
     hdu_nurses: number;
+    nurses_needed: number;
+    role_needed: string;
   }) => Promise<void>;
 }) {
   // Derive unique facility list from the filtered wards prop
@@ -1246,9 +1312,11 @@ function CreateRequestModal({
   const [shift, setShift] = useState<"M" | "N">("M");
   const [facility, setFacility] = useState(lockedFacility ?? facilities[0] ?? "");
   const [ward, setWard] = useState("");
+  const [roleNeeded, setRoleNeeded] = useState("Nurse");
   const [nursesInWard, setNursesInWard] = useState("");
   const [ventPatients, setVentPatients] = useState("");
   const [hduNurses, setHduNurses] = useState("");
+  const [nursesNeeded, setNursesNeeded] = useState("1");
 
   // Wards available for the selected facility
   const facilityWards = wards.filter((w) => w.facility === facility);
@@ -1264,6 +1332,8 @@ function CreateRequestModal({
     if (!ward) return toast.error("Please select a ward.");
     if (!nursesInWard || !ventPatients || !hduNurses)
       return toast.error("Please answer all assessment questions.");
+    if (!nursesNeeded || parseInt(nursesNeeded) < 1)
+      return toast.error("Number of nurses needed must be at least 1.");
     setBusy(true);
     try {
       await onSubmit({
@@ -1274,6 +1344,8 @@ function CreateRequestModal({
         nurses_in_ward: parseInt(nursesInWard),
         ventilated_patients: parseInt(ventPatients),
         hdu_nurses: parseInt(hduNurses),
+        nurses_needed: parseInt(nursesNeeded),
+        role_needed: roleNeeded,
       });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to submit request.");
@@ -1352,6 +1424,36 @@ function CreateRequestModal({
             ))}
           </select>
         </Field>
+
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Role Needed *">
+            <select
+              aria-label="Role needed"
+              className={inp}
+              value={roleNeeded}
+              onChange={(e) => setRoleNeeded(e.target.value)}
+              required
+            >
+              <option value="Nurse">Nurse</option>
+              <option value="Nursing Assistant">Nursing Assistant</option>
+              <option value="Porter">Porter</option>
+              <option value="Surgical Nurse">Surgical Nurse</option>
+            </select>
+          </Field>
+
+          <Field label="Nurses Needed *">
+            <input
+              type="number"
+              min={1}
+              max={20}
+              required
+              className={inp}
+              placeholder="e.g. 2"
+              value={nursesNeeded}
+              onChange={(e) => setNursesNeeded(e.target.value)}
+            />
+          </Field>
+        </div>
 
         <hr />
         <p className="text-sm font-semibold flex items-center gap-2">
@@ -1561,19 +1663,19 @@ function SendInvitesModal({
   // builds an unbounded nurse_id array that can exceed Supabase's URL length limit
   // and silently return empty results.
   const { data: offNurses, isLoading } = useQuery({
-    queryKey: ["locum-off-nurses", request.shift_date, request.facility],
+    queryKey: ["locum-off-nurses", request.shift_date, request.facility, request.role_needed],
     queryFn: async () => {
-      // 1. Get nurses at this facility with ward/role for eligibility filtering
+      // 1. Get nurses at this facility — profile_id is included so no name-matching needed
       const facilityNurses = await api
         .get<
-          { id: string; name: string; role: string | null; ward: string | null }[]
+          { id: string; name: string; role: string | null; ward: string | null; profile_id: string | null }[]
         >(`/nurses?facility=${encodeURIComponent(request.facility)}`)
         .catch(() => []);
 
       const facilityIds = facilityNurses.map((n) => n.id);
       if (!facilityIds.length) return [] as OffNurse[];
 
-      // 2. Single query — custom API accepts nurse_ids as comma-sep ANY($1)
+      // 2. Find which of those nurses have a published OFF assignment on this date
       const offAssignments = await api
         .get<
           { nurse_id: string }[]
@@ -1584,39 +1686,19 @@ function SendInvitesModal({
       const offNursesList = facilityNurses.filter((n) => offIds.has(n.id));
       if (!offNursesList.length) return [] as OffNurse[];
 
-      // 3. Filter to request ward only; exclude matrons, nurse assistants, and interns
-      const isExcludedRole = (role: string | null) =>
-        /matron/i.test(role ?? "") ||
-        /nurse\s*assistant/i.test(role ?? "") ||
-        /intern/i.test(role ?? "");
-      const eligible = offNursesList.filter(
-        (n) =>
-          !isExcludedRole(n.role) &&
-          (n.ward ?? "")
-            .split("|")
-            .map((w) => w.trim())
-            .includes(request.ward),
-      );
-      if (!eligible.length) return [] as OffNurse[];
-
-      // 4. Look up auth user IDs by matching name → profiles.full_name
-      const names = eligible.map((n) => n.name);
-      const profiles = await api
-        .get<
-          { id: string; full_name: string }[]
-        >(`/profiles?full_names=${encodeURIComponent(names.join(","))}`)
-        .catch(() => []);
-
-      // Use lowercase keys so a case difference between nurses.name and profiles.full_name
-      // doesn't cause the lookup to return null (the API matches case-insensitively).
-      const profileMap = Object.fromEntries(
-        profiles.map((p) => [p.full_name.toLowerCase(), p.id]),
-      );
+      // 3. Filter by ward and role_needed.
+      // startsWith so "Nursing Assistant" covers both "Nursing Assistant" and "Nursing Assistant - Day".
+      const eligible = offNursesList.filter((n) => {
+        const inWard = (n.ward ?? "").split("|").map((w) => w.trim()).includes(request.ward);
+        if (!inWard) return false;
+        if (!request.role_needed) return true;
+        return n.role?.toLowerCase().startsWith(request.role_needed.toLowerCase()) ?? false;
+      });
 
       return eligible.map((n) => ({
         nurse_id: n.id,
         nurse_name: n.name,
-        auth_user_id: profileMap[n.name.toLowerCase()] ?? null,
+        auth_user_id: n.profile_id ?? null,
       })) as OffNurse[];
     },
   });
@@ -1647,10 +1729,13 @@ function SendInvitesModal({
         </div>
 
         <p className="text-sm text-muted-foreground">
-          The invite will be sent to nurses in the <strong>{request.ward}</strong> ward who are on{" "}
-          <strong>OFF</strong> duty on this date at <strong>{request.facility}</strong>, excluding
-          matrons, nurse assistants, and interns. The first nurse to accept will be assigned the
-          shift.
+          The invite will be sent to{" "}
+          <strong>{request.role_needed ? `${request.role_needed}s` : "nurses"}</strong> in the{" "}
+          <strong>{request.ward}</strong> ward on <strong>OFF</strong> duty on this date at{" "}
+          <strong>{request.facility}</strong>.{" "}
+          {(request.nurses_needed ?? 1) > 1
+            ? `The first ${request.nurses_needed} to accept will be assigned the shift.`
+            : "The first to accept will be assigned the shift."}
         </p>
 
         {isLoading ? (
@@ -1763,8 +1848,7 @@ function RespondInviteModal({
 
         {!isDecline && (
           <p className="text-sm text-muted-foreground">
-            By accepting, this locum shift will be added to your schedule. You will be the first to
-            accept so the shift is yours.
+            By accepting, this locum shift will be added to your schedule.
           </p>
         )}
 

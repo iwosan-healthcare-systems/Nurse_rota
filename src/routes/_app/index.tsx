@@ -484,7 +484,9 @@ function NurseDashboard() {
 function ManagementDashboard() {
   const { fullName, isAdmin, nurseFacility, canApproveLeave, activeRole } = useAuth();
 
-  const facilityFilter = !isAdmin && nurseFacility ? nurseFacility : null;
+  // Admin, CNO, and HR are not tied to a facility — they see data across all facilities.
+  const canSeeAll = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const facilityFilter: string | null = canSeeAll ? null : (nurseFacility ?? null);
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
@@ -503,10 +505,12 @@ function ManagementDashboard() {
     ? allNurses.filter((n) => n.facility === facilityFilter)
     : allNurses;
   const facilityNurseNames = new Set(nurses.map((n) => n.name));
-  const visibleLeave =
-    facilityFilter && !canApproveLeave
-      ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
-      : leave;
+  const visibleWards = facilityFilter
+    ? wards.filter((w) => (w as { facility?: string | null }).facility === facilityFilter)
+    : wards;
+  const visibleLeave = facilityFilter
+    ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
+    : leave;
   const pendingLeave = visibleLeave.filter((l) => l.status === "Pending");
 
   const subtitle = facilityFilter
@@ -527,7 +531,7 @@ function ManagementDashboard() {
           value={nurses.length}
           hint={facilityFilter ?? "All facilities"}
         />
-        <Stat icon={Building2} label="Wards" value={wards.length} hint="Configured wards" />
+        <Stat icon={Building2} label="Wards" value={visibleWards.length} hint="Configured wards" />
         <Stat
           icon={PlaneTakeoff}
           label="Pending Leave"
@@ -537,7 +541,7 @@ function ManagementDashboard() {
         <Stat
           icon={CheckCircle2}
           label="Approved Leave"
-          value={leave.filter((l) => l.status === "Approved").length}
+          value={visibleLeave.filter((l) => l.status === "Approved").length}
           tone="success"
         />
       </div>
@@ -556,7 +560,7 @@ function ManagementDashboard() {
               View all <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
-          {wards.length === 0 ? (
+          {visibleWards.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">
               No wards configured yet.{" "}
               <Link to="/wards" className="text-primary hover:underline">
@@ -565,7 +569,7 @@ function ManagementDashboard() {
             </p>
           ) : (
             <div className="space-y-2">
-              {wards.slice(0, 8).map((w) => (
+              {visibleWards.slice(0, 8).map((w) => (
                 <div key={w.id} className="flex items-center justify-between gap-3 text-sm py-1">
                   <span className="truncate font-medium w-32 sm:w-40">{w.name}</span>
                   <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
