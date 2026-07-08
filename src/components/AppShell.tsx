@@ -236,7 +236,7 @@ export function AppShell() {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold truncate">{currentTitle(path)}</p>
           </div>
-          <RotaReminderBell activeRole={activeRole} nurseId={nurseId} userId={user?.id ?? null} />
+          <RotaReminderBell activeRole={activeRole} nurseId={nurseId} nurseFacility={nurseFacility} userId={user?.id ?? null} />
           <div className="h-9 w-9 rounded-full bg-primary/15 text-primary grid place-items-center text-sm font-semibold shrink-0">
             {initials || "U"}
           </div>
@@ -330,10 +330,12 @@ function upsertManyNotifs(userId: string, keys: string[], isRead: boolean, refet
 function RotaReminderBell({
   activeRole,
   nurseId,
+  nurseFacility,
   userId,
 }: {
   activeRole: string | null;
   nurseId: string | null;
+  nurseFacility: string | null;
   userId: string | null;
 }) {
   const canSeeManagement =
