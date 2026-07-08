@@ -575,15 +575,21 @@ function RotaPage() {
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    // First generation (no existing assignments in the current view) → default to today.
-    // Subsequent generation → default to the period after the current one, so the admin
-    // doesn't have to manually advance the date every time they schedule the next block.
     const hasExistingSchedule = assignments.length > 0;
     const nextPeriodDate = new Date(startDate);
     nextPeriodDate.setDate(nextPeriodDate.getDate() + DAYS);
 
+    // Schedule exists for viewed period → offer the period after it.
+    // No schedule + viewing current period (startOffset=0) → first-ever gen, offer today.
+    // No schedule + viewing next period (startOffset=1) → offer that period's start date.
+    const defaultStartDate = hasExistingSchedule
+      ? ymd(nextPeriodDate)
+      : startOffset === 0
+        ? todayYmd()
+        : ymd(startDate);
+
     setGenForm({
-      startDate: hasExistingSchedule ? ymd(nextPeriodDate) : todayYmd(),
+      startDate: defaultStartDate,
       facility: lockedFacility ?? "",
       ward: "",
       rotateInterns: true,
@@ -888,10 +894,13 @@ function RotaPage() {
       // Find nurse+date pairs that still have a published row after the delete step.
       // We cannot overwrite published rows, so we exclude them from the insert.
       const publishedKeys = new Set<string>();
+      // Query by date range only — nurse_ids removed to avoid nginx URL-length limit on large
+      // rosters. Published keys from other facilities never match draft rows (which are already
+      // scoped to this facility's schedulingNurses), so the cross-facility over-fetch is harmless.
       const pubRows = await api
         .get<
           { nurse_id: string; shift_date: string }[]
-        >(`/shift-assignments?nurse_ids=${scheduledIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
+        >(`/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
         .catch(() => []);
       pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
 
