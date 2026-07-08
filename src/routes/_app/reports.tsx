@@ -91,7 +91,7 @@ type LeaveRequest = {
   from_date: string;
   to_date: string;
   status: "Pending" | "Approved" | "Rejected";
-  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap";
+  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Leave of Absence" | "Swap";
   reason: string | null;
 };
 type ArchiveAssignment = {
@@ -329,8 +329,8 @@ function ReportsContent() {
     [leave, scopedNurseIds, reportFacility],
   );
 
-  // Build per-nurse hours for current period (regular + swap + leave; locum excluded).
-  // swapHoursMap and leaveHoursMap allow breakdown display without excluding from total.
+  // Build per-nurse hours for current period (locum and swap-coverage excluded from regular total).
+  // swapHoursMap tracks additional shift hours separately for breakdown display.
   const { nurseHoursMap, nurseShiftCountMap, swapHoursMap, leaveHoursMap } = useMemo(() => {
     const hours = new Map<string, number>();
     const shifts = new Map<string, number>();
@@ -338,9 +338,12 @@ function ReportsContent() {
     const leave = new Map<string, number>();
     for (const log of shiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id))) {
       if (log.hours_logged != null) {
-        hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
-        shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
-        if (log.is_swap) swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
+        if (log.is_swap) {
+          swap.set(log.nurse_id, (swap.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
+        } else {
+          hours.set(log.nurse_id, (hours.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
+          shifts.set(log.nurse_id, (shifts.get(log.nurse_id) ?? 0) + 1);
+        }
         if (log.is_leave)
           leave.set(log.nurse_id, (leave.get(log.nurse_id) ?? 0) + Number(log.hours_logged));
       }
@@ -985,7 +988,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           <div className="pl-39 flex gap-2">
                             {swapH > 0 && (
                               <span className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
-                                {swapH.toFixed(1)}h swap
+                                +{swapH.toFixed(1)}h additional
                               </span>
                             )}
                             {leaveH > 0 && (
@@ -1069,7 +1072,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                               title={log.swap_note ?? undefined}
                               className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full"
                             >
-                              Swap
+                              Additional Shift
                             </span>
                           ) : log.is_leave ? (
                             <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">

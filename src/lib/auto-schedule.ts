@@ -340,6 +340,85 @@ function stableGroupOffset(group: NurseInput[]): number {
   return h % group.length;
 }
 
+type PriorAssignment = { nurse_id: string; shift_date: string; shift: ShiftCode };
+
+/**
+ * Given a nurse's last N actual shifts (chronological), find the unambiguous
+ * next position in the cycle. Returns null when the sequence doesn't match
+ * exactly one position in the cycle (i.e. ambiguous or contains edits like
+ * LEAVE / MWC / NC that don't belong to the base cycle).
+ */
+function detectCyclePhase(recent: ShiftCode[], cycle: readonly ShiftCode[]): number | null {
+  const n = recent.length;
+  if (n === 0) return null;
+  const len = cycle.length;
+  let found: number | null = null;
+  for (let start = 0; start < len; start++) {
+    let ok = true;
+    for (let i = 0; i < n; i++) {
+      if (recent[i] !== cycle[(start + i) % len]) {
+        ok = false;
+        break;
+      }
+    }
+    if (ok) {
+      if (found !== null) return null; // two matches → ambiguous
+      found = (start + n) % len;
+    }
+  }
+  return found;
+}
+
+/**
+ * For each nurse in group, look at their last 4 shifts from prev and detect
+ * their cycle position. Returns a map of nurse_id → next cycle index to use
+ * as the starting position for the new period. Nurses whose last block is
+ * ambiguous or contains non-base shifts (LEAVE/MWC/NC) are omitted — the
+ * caller falls back to the mathematical phase for them.
+ */
+function buildPhaseOverrides(
+  group: NurseInput[],
+  prev: readonly PriorAssignment[],
+  cycle: readonly ShiftCode[],
+): Map<string, number> {
+  const out = new Map<string, number>();
+  if (prev.length === 0) return out;
+
+  const byNurse = new Map<string, PriorAssignment[]>();
+  for (const a of prev) {
+    if (!byNurse.has(a.nurse_id)) byNurse.set(a.nurse_id, []);
+    byNurse.get(a.nurse_id)!.push(a);
+  }
+
+  for (const nurse of group) {
+    const rows = byNurse.get(nurse.id);
+    if (!rows || rows.length < 4) continue;
+    const sorted = [...rows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
+
+    // Prefer 5-day look-back: the shift preceding 4 OFFs disambiguates which OFF
+    // block it is (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M).
+    // If day-5 contains a non-base shift, fall back to 4 days — only MMMM and
+    // NNNN are unambiguous there, but those are the common period-end cases.
+    let recent: ShiftCode[] | null = null;
+    if (sorted.length >= 5) {
+      const five = sorted.slice(-5).map((r) => r.shift);
+      if (!five.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
+        recent = five;
+      }
+    }
+    if (recent === null) {
+      const four = sorted.slice(-4).map((r) => r.shift);
+      if (four.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) continue;
+      recent = four;
+    }
+
+    const nextPos = detectCyclePhase(recent, cycle);
+    if (nextPos !== null) out.set(nurse.id, nextPos);
+  }
+
+  return out;
+}
+
 /**
  * Schedule a group of nurses strictly following `cycle`, writing into `out`.
  *
@@ -357,6 +436,7 @@ function scheduleGroup(
   wardName: string | null,
   out: DraftAssignment[],
   phase = 0,
+  prev: readonly PriorAssignment[] = [],
 ): void {
   const N = group.length;
   if (N === 0) return;
@@ -384,19 +464,27 @@ function scheduleGroup(
     nurseBlock.set(forAssignment[i].id, slot);
   }
 
+  // If previous-period assignments were supplied, detect each nurse's actual
+  // cycle position from their last 4 shifts and use that as the starting point
+  // for this period. Falls back to the mathematical phase for nurses whose last
+  // block is ambiguous (pure OFF × 4) or contains non-base shifts (LEAVE/MWC/NC).
+  const phaseOverrides = buildPhaseOverrides(group, prev, cycle);
+
   for (let d = 0; d < days; d++) {
     const date = new Date(startDate);
     date.setDate(date.getDate() + d);
     const dateStr = ymd(date);
     for (const nurse of byId) {
       const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
+      const startPos =
+        phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
       out.push({
         nurse_id: nurse.id,
         ward: wardName,
         shift_date: dateStr,
         shift: inLeave(leave, nurse.id, dateStr)
           ? "LEAVE"
-          : cycle[(((phase + d + offset) % len) + len) % len],
+          : cycle[(startPos + d) % len],
       });
     }
   }
@@ -496,6 +584,7 @@ function scheduleCoverageNurses(
   leave: LeaveInput[],
   out: DraftAssignment[],
   periodOffset = 0,
+  prev: readonly PriorAssignment[] = [],
 ): void {
   group = [...group].sort((a, b) => a.id.localeCompare(b.id));
   const N = group.length;
@@ -525,10 +614,20 @@ function scheduleCoverageNurses(
     return (nurseBlock.get(group[i].id) ?? 0) * 4;
   }
 
+  // Detect actual cycle positions from end of previous period.
+  const phaseOverrides = buildPhaseOverrides(group, prev, NURSE_CYCLE);
+
+  // Effective cycle position at day 0 of this period for nurse i.
+  // Uses the detected actual position when available (honours manual edits made
+  // at the end of the previous period); falls back to the mathematical formula.
+  function nurseEffectiveBase(i: number): number {
+    return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
+  }
+
   // First day d ∈ [0, CL) in this period where nurse i's N block begins.
-  // Solves: (periodOffset + d + phase) % CL = 8 → d = (8 − (periodOffset + phase) % CL + CL) % CL
+  // Solves: (effectiveBase + d) % CL = 8 → d = (8 − effectiveBase + CL) % CL
   function nBlockStartDay(i: number): number {
-    return (8 - ((periodOffset + nursePhase(i)) % CL) + CL) % CL;
+    return (8 - nurseEffectiveBase(i) + CL) % CL;
   }
 
   // ── Phase-aligned NC assignment ──────────────────────────────────────────
@@ -635,7 +734,7 @@ function scheduleCoverageNurses(
         ? CL - 4 // no prior Friday: treat as 2nd OFF block (pos 12)
         : ncS !== undefined && d - 1 >= ncS + 8
           ? (d - 1 - (ncS + 8)) % CL
-          : (periodOffset + (d - 1) + nursePhase(mwcNurse)) % CL;
+          : (nurseEffectiveBase(mwcNurse) + (d - 1)) % CL;
 
     // Which phase the nurse is in on Friday determines both whether a pre-MWC
     // rest day is needed and what phase follows after the post-MWC OFFs:
@@ -761,9 +860,7 @@ function scheduleCoverageNurses(
         shift =
           mwcResumeAt !== undefined
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
-            : NURSE_CYCLE[
-                (((periodOffset + d + (nurseBlock.get(group[i].id) ?? 0) * 4) % CL) + CL) % CL
-              ];
+            : NURSE_CYCLE[(nurseEffectiveBase(i) + d) % CL];
       }
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
@@ -784,10 +881,19 @@ export function generateSchedule(opts: {
   facility?: string;
   /** Days elapsed since the facility's very first scheduled day (period 0 = 0). */
   periodOffset?: number;
+  /**
+   * Actual shift assignments from the last 4 days of the previous period.
+   * When supplied, the generator detects each nurse's real cycle position at
+   * period end and continues from there instead of relying purely on the
+   * mathematical periodOffset. Nurses with ambiguous or non-base shifts in
+   * those 4 days fall back to the mathematical phase automatically.
+   */
+  previousAssignments?: readonly PriorAssignment[];
 }): ScheduleResult {
   const { nurses, wards, leave } = opts;
   const days = opts.days ?? 28;
   const periodOffset = opts.periodOffset ?? 0;
+  const prev = opts.previousAssignments ?? [];
   const out: DraftAssignment[] = [];
   const scheduled = new Set<string>();
   const allViolations: SafetyViolation[] = [];
@@ -814,7 +920,7 @@ export function generateSchedule(opts: {
   // 1. Coverage Nurses (global, not ward-bound)
   // Uses scheduleCoverageNurses: weekends → MWC, first weekday N → NC, rest stay N.
   const headNurses = nurses.filter((n) => isGlobalHead(n.role));
-  scheduleCoverageNurses(headNurses, days, opts.startDate, leave, out, periodOffset);
+  scheduleCoverageNurses(headNurses, days, opts.startDate, leave, out, periodOffset, prev);
   headNurses.forEach((n) => scheduled.add(n.id));
 
   // 2. Nurse Interns— grouped by assigned ward so interns in the same ward share
@@ -851,6 +957,7 @@ export function generateSchedule(opts: {
       null,
       out,
       periodOffset + stagger,
+      prev,
     );
     group.forEach((intern) => scheduled.add(intern.id));
   }
@@ -868,6 +975,7 @@ export function generateSchedule(opts: {
     null,
     out,
     periodOffset + stableGroupOffset(porterDay) * 4,
+    prev,
   );
   scheduleGroup(
     porterRegular,
@@ -878,6 +986,7 @@ export function generateSchedule(opts: {
     null,
     out,
     periodOffset + stableGroupOffset(porterRegular) * 4,
+    prev,
   );
   porterDay.forEach((n) => scheduled.add(n.id));
   porterRegular.forEach((n) => scheduled.add(n.id));
@@ -896,6 +1005,7 @@ export function generateSchedule(opts: {
     null,
     out,
     periodOffset + stableGroupOffset(naFacilityDay) * 4,
+    prev,
   );
   naFacilityDay.forEach((n) => scheduled.add(n.id));
 
@@ -955,6 +1065,7 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + supervisorSeed,
+      prev,
     );
     // Surgical Nurse - Day: always morning-only (4M→4OFF), even in a full-cycle ward.
     scheduleGroup(
@@ -966,6 +1077,7 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + surgicalDaySeed,
+      prev,
     );
     scheduleGroup(
       regulars,
@@ -976,6 +1088,7 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + regularSeed,
+      prev,
     );
     scheduleGroup(
       naRegular,
@@ -986,6 +1099,7 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + naRegularSeed,
+      prev,
     );
     scheduleGroup(
       naDay,
@@ -996,6 +1110,7 @@ export function generateSchedule(opts: {
       ward.name,
       out,
       periodOffset + naDaySeed,
+      prev,
     );
 
     // NA-Day nurses assigned to this ward in their profile still count toward

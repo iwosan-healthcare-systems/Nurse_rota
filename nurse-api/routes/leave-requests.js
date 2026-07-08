@@ -80,8 +80,8 @@ router.get(
 );
 
 // Leave types exempt from the 21-day pre-period closure window.
-// Sick and Emergency can always be submitted; Swap is a shift switch (not leave).
-const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap"];
+// Sick, Emergency, and Leave of Absence can always be submitted; Swap is a shift switch (not leave).
+const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap", "Leave of Absence"];
 
 router.post(
   "/",
@@ -108,7 +108,7 @@ router.post(
       // Only enforce when the next period is still in the future
       if (nextStart && closureDate && nextStart > today && today >= closureDate) {
         return res.status(422).json({
-          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick and Emergency leave can be submitted now.`,
+          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick, Emergency, and Leave of Absence can be submitted now.`,
           code: "LEAVE_WINDOW_CLOSED",
         });
       }

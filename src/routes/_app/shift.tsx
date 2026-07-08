@@ -438,8 +438,8 @@ function ShiftPage() {
       return toast.error(e instanceof Error ? e.message : "Failed to end shift");
     }
 
-    // Locum hours are tracked separately — do not add to the nurse's regular monthly total.
-    if (nurseId && !log.is_locum)
+    // Locum and swap-coverage hours are tracked separately — do not add to the nurse's regular monthly total.
+    if (nurseId && !log.is_locum && !log.is_swap)
       await api
         .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
         .catch(() => {});
@@ -751,16 +751,16 @@ function ShiftPage() {
             <Timer className="h-4 w-4" />
             <p className="text-xs uppercase tracking-wide font-medium">Hours this period</p>
           </div>
-          <p className="text-3xl font-bold">{fmtHours(currentPeriodHours)}</p>
+          <p className="text-3xl font-bold">{fmtHours(currentPeriodHours - swapPeriodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {currentPeriodLogs.filter((l) => l.ended_at).length} shifts completed
+            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap).length} shifts completed
           </p>
           {(swapPeriodHours > 0 || leavePeriodHours > 0) && (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {swapPeriodHours > 0 && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
                   <ArrowLeftRight className="h-2.5 w-2.5" />
-                  {fmtHours(swapPeriodHours)} swap
+                  {fmtHours(swapPeriodHours)} additional
                 </span>
               )}
               {leavePeriodHours > 0 && (
@@ -832,7 +832,7 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
                   )}
                   {log.is_swap && (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-100 border border-sky-200 px-1.5 py-0.5 rounded-full">
-                      <ArrowLeftRight className="h-2.5 w-2.5" /> Swap
+                      <ArrowLeftRight className="h-2.5 w-2.5" /> Additional Shift
                     </span>
                   )}
                   {log.is_late && (

@@ -778,6 +778,25 @@ function RotaPage() {
       }
     }
 
+    // Fetch the last 4 days of the previous period so the generator can detect
+    // each nurse's actual cycle position and continue from there rather than
+    // relying purely on the mathematical periodOffset.
+    let previousAssignments: { nurse_id: string; shift_date: string; shift: ShiftCode }[] = [];
+    if (periodOffset > 0) {
+      const facilityIds = facilityNurses.map((n) => n.id);
+      if (facilityIds.length > 0) {
+        const prevTo = new Date(genStart);
+        prevTo.setDate(prevTo.getDate() - 1);
+        const prevFrom = new Date(genStart);
+        prevFrom.setDate(prevFrom.getDate() - 5);
+        previousAssignments = await api
+          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
+          )
+          .catch(() => []);
+      }
+    }
+
     // Rotate intern ward profiles for this period.
     // Uses the epoch-based period number as the sole rotation signal so the result
     // is identical on any re-generation within the same 28-day period (idempotent).
@@ -858,6 +877,7 @@ function RotaPage() {
         days: DAYS,
         facility: genForm.facility,
         periodOffset,
+        previousAssignments,
       });
 
       // Safety-rule check: if the ward's minimums cannot be met with the

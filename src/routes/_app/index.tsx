@@ -14,6 +14,7 @@ import {
   MapPin,
   PlayCircle,
   TrendingUp,
+  ArrowLeftRight,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { type ComponentType, type ReactNode } from "react";
@@ -95,6 +96,18 @@ type ShiftLog = {
   expected_end_at: string;
   ended_at: string | null;
   hours_logged: number | null;
+  is_swap: boolean;
+  swap_note: string | null;
+};
+
+type WardRecord = {
+  id: string;
+  name: string;
+  facility?: string | null;
+  min_morning_nurses: number;
+  min_morning_na: number;
+  min_night_nurses: number;
+  min_night_na: number;
 };
 
 type LeaveRequest = {
@@ -213,11 +226,14 @@ function NurseDashboard() {
     queryFn: () => api.get<LeaveRequest[]>(`/leave-requests?nurse_id=${nurseId}&limit=5`),
   });
 
-  const periodHours = periodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const regularLogs = periodLogs.filter((l) => !l.is_swap);
+  const additionalLogs = periodLogs.filter((l) => l.is_swap && l.hours_logged != null);
+  const periodHours = regularLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const additionalHours = additionalLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
   const targetHours = nurseRecord?.target_hours ?? 185;
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
-  const completedShiftCount = periodLogs.filter((l) => l.hours_logged !== null).length;
+  const completedShiftCount = regularLogs.filter((l) => l.hours_logged !== null).length;
 
   const shiftLabel: Record<string, string> = {
     M: "Morning",
@@ -284,6 +300,9 @@ function NurseDashboard() {
           </p>
           <p className="mt-2 text-lg font-semibold">{fmtHours(periodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">{totalMinutes}m total</p>
+          {additionalHours > 0 && (
+            <p className="text-xs text-sky-600 mt-0.5">+{fmtHours(additionalHours)} additional</p>
+          )}
         </div>
       </div>
 
@@ -321,6 +340,9 @@ function NurseDashboard() {
           <p className="text-sm font-semibold">Hours progress — current 28-day period</p>
           <span className="text-xs text-muted-foreground tabular-nums">
             {fmtHours(periodHours)} / {fmtHours(targetHours)}
+            {additionalHours > 0 && (
+              <span className="ml-1.5 text-sky-600">+{fmtHours(additionalHours)} additional</span>
+            )}
           </span>
         </div>
         <div className="h-3 rounded-full bg-muted overflow-hidden">
@@ -475,6 +497,58 @@ function NurseDashboard() {
           )}
         </div>
       </div>
+
+      {additionalLogs.length > 0 && (
+        <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+          <div className="px-5 py-4 border-b flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ArrowLeftRight className="h-4 w-4 text-sky-600" />
+              <h2 className="font-semibold text-sm">Additional Shift Hours</h2>
+            </div>
+            <span className="text-xs text-muted-foreground">{fmtHours(additionalHours)} total</span>
+          </div>
+          <p className="px-5 pt-3 text-xs text-muted-foreground">
+            Hours worked as shift-switch cover — tracked separately, not included in your period
+            total.
+          </p>
+          <div className="divide-y mt-2">
+            {additionalLogs.map((log) => (
+              <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
+                <div className="flex items-center gap-3">
+                  <span
+                    className={cn(
+                      "h-7 w-7 rounded-full grid place-items-center text-xs font-bold",
+                      log.shift_type === "M"
+                        ? "bg-amber-100 text-amber-700"
+                        : "bg-indigo-100 text-indigo-700",
+                    )}
+                  >
+                    {log.shift_type}
+                  </span>
+                  <div>
+                    <p className="font-medium">
+                      {new Date(log.shift_date.slice(0, 10) + "T00:00:00").toLocaleDateString(
+                        "en-GB",
+                        {
+                          weekday: "short",
+                          day: "numeric",
+                          month: "short",
+                        },
+                      )}
+                    </p>
+                    {log.swap_note && (
+                      <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
+                    )}
+                  </div>
+                </div>
+                <span className="font-semibold tabular-nums text-sky-700">
+                  {fmtHours(Number(log.hours_logged))}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -494,7 +568,7 @@ function ManagementDashboard() {
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
-    queryFn: () => api.get<Record<string, unknown>[]>("/wards"),
+    queryFn: () => api.get<WardRecord[]>("/wards"),
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
@@ -505,9 +579,7 @@ function ManagementDashboard() {
     ? allNurses.filter((n) => n.facility === facilityFilter)
     : allNurses;
   const facilityNurseNames = new Set(nurses.map((n) => n.name));
-  const visibleWards = facilityFilter
-    ? wards.filter((w) => (w as { facility?: string | null }).facility === facilityFilter)
-    : wards;
+  const visibleWards = facilityFilter ? wards.filter((w) => w.facility === facilityFilter) : wards;
   const visibleLeave = facilityFilter
     ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
     : leave;

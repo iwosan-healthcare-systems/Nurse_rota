@@ -41,11 +41,11 @@ router.post(
     SET ended_at = expected_end_at,
         hours_logged = EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600
     WHERE ended_at IS NULL AND expected_end_at < NOW()
-    RETURNING id, nurse_id, hours_logged, is_locum
+    RETURNING id, nurse_id, hours_logged, is_locum, is_swap
   `);
 
     for (const row of result.rows) {
-      if (!row.is_locum && row.hours_logged) {
+      if (!row.is_locum && !row.is_swap && row.hours_logged) {
         await pool.query("SELECT increment_nurse_hours($1, $2)", [row.nurse_id, row.hours_logged]);
       }
     }
