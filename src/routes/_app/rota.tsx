@@ -339,18 +339,6 @@ function RotaPage() {
   // Combined: true while the window start OR the assignments are still loading.
   const isLoading = windowLoading || assignmentsLoading;
 
-  // True once at least one assignment exists for the current window.
-  // When a specific ward chip is selected, only count assignments for that ward's nurses —
-  // stale facility-wide drafts (matrons, coverage nurses, porters) must not hide the empty state.
-  const hasSchedule = useMemo(() => {
-    if (isLoading) return false;
-    if (selectedWard) {
-      const wardIds = new Set(filteredNurses.map((n) => n.id));
-      return assignments.some((a) => wardIds.has(a.nurse_id));
-    }
-    return assignments.length > 0;
-  }, [isLoading, assignments, filteredNurses, selectedWard]);
-
   // Filled locum requests for this window — used to highlight locum cells.
   const { data: locumFilled = [] } = useQuery({
     queryKey: ["locum-filled-rota", ymd(startDate), ymd(endDate)],
@@ -478,6 +466,18 @@ function RotaPage() {
     myOnly,
     nurseId,
   ]);
+
+  // True once at least one assignment exists for the current window.
+  // When a specific ward chip is selected, only count assignments for that ward's nurses —
+  // stale facility-wide drafts (matrons, coverage nurses, porters) must not hide the empty state.
+  const hasSchedule = useMemo(() => {
+    if (isLoading) return false;
+    if (selectedWard) {
+      const wardIds = new Set(filteredNurses.map((n) => n.id));
+      return assignments.some((a) => wardIds.has(a.nurse_id));
+    }
+    return assignments.length > 0;
+  }, [isLoading, assignments, filteredNurses, selectedWard]);
 
   // Wards filtered by facility — shared by both the toolbar and generate dialog.
   // Deduplicated by name since the wards table can have multiple rows per ward name
