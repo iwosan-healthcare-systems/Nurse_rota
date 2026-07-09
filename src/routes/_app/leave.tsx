@@ -477,7 +477,8 @@ function LeavePage() {
             <p className="mt-0.5 text-amber-700 dark:text-amber-400">
               The schedule period starting{" "}
               <strong>{fmtDateLeave(workflowStatus.nextPeriodStart!)}</strong> begins soon. Only{" "}
-              <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
+              <strong>Sick</strong>, <strong>Emergency</strong>,{" "}
+              <strong>Maternity</strong>, and{" "}
               <strong>Leave of Absence</strong> requests can be submitted until then.
             </p>
           </div>
@@ -1023,8 +1024,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   // Leave of Absence is always allowed regardless of rota status.
   const allowedTypes =
     datesInPublishedRota || leaveWindowClosed
-      ? ["Sick", "Emergency", "Leave of Absence"]
-      : ["Sick", "Annual", "Emergency", "Public Holiday", "Leave of Absence"];
+      ? ["Sick", "Emergency", "Maternity", "Leave of Absence"]
+      : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Leave of Absence"];
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
@@ -1097,7 +1098,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         {datesReady && datesInPublishedRota && (
           <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
             These dates fall within a <strong>published schedule</strong>. Only{" "}
-            <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
+            <strong>Sick</strong>, <strong>Emergency</strong>,{" "}
+            <strong>Maternity</strong>, and{" "}
             <strong>Leave of Absence</strong> can be requested.
           </div>
         )}
@@ -1108,7 +1110,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             <span>
               Leave window is closed — the next schedule starts{" "}
               <strong>{fmtDateLeave(workflowStatus!.nextPeriodStart!)}</strong>. Only{" "}
-              <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
+              <strong>Sick</strong>, <strong>Emergency</strong>,{" "}
+              <strong>Maternity</strong>, and{" "}
               <strong>Leave of Absence</strong> can be requested.
             </span>
           </div>

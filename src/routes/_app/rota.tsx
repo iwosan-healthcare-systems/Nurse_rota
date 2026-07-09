@@ -162,6 +162,7 @@ function RotaPage() {
   const [startOffset, setStartOffset] = useState(0);
   const [selectedFacility, setSelectedFacility] = useState(lockedFacility ?? "");
   const [selectedWard, setSelectedWard] = useState("");
+  const [selectedFacilityWide, setSelectedFacilityWide] = useState("");
   const [selectedRole, setSelectedRole] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -424,22 +425,31 @@ function RotaPage() {
   const filteredNurses = useMemo(() => {
     let list = nurses;
     if (effectiveFacility) list = list.filter((n) => n.facility === effectiveFacility);
-    // Nurse role: always scope to their own ward. Otherwise use the ward dropdown.
-    const effectiveWard = lockedWard ?? selectedWard;
-    if (effectiveWard)
+
+    if (lockedWard) {
+      // Nurse viewing their own ward: include facility-wide roles so they see
+      // matrons, coverage nurses and porters that appear in their ward's schedule.
       list = list.filter(
         (n) =>
           isGlobalHead(n.role) ||
           isMatron(n.role) ||
           isPorterType(n.role) ||
-          parseWards(n.ward).includes(effectiveWard),
+          parseWards(n.ward).includes(lockedWard),
       );
+    } else if (selectedWard) {
+      // Manager clicked a ward chip: strict ward-only, no facility-wide pass-through.
+      list = list.filter((n) => parseWards(n.ward).includes(selectedWard));
+    } else if (selectedFacilityWide) {
+      // Manager clicked a facility-wide role chip: show only that role group.
+      list = list.filter((n) => n.role === selectedFacilityWide);
+    }
+    // else: no selection → all nurses in facility (separated visually in the grid)
+
     if (selectedRole) list = list.filter((n) => n.role === selectedRole);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase().trim();
       list = list.filter((n) => n.name.toLowerCase().includes(q));
     }
-    // myOnly: restrict to just the current user's own row
     if (myOnly && nurseId) list = list.filter((n) => n.id === nurseId);
     return list;
   }, [
@@ -447,6 +457,7 @@ function RotaPage() {
     effectiveFacility,
     lockedWard,
     selectedWard,
+    selectedFacilityWide,
     selectedRole,
     searchQuery,
     myOnly,
@@ -611,6 +622,27 @@ function RotaPage() {
     }
     return map;
   }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
+
+  // Non-ward role groups for the facility-wide chip strip.
+  const facilityWideGroups = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const n of nurses) {
+      if (effectiveFacility && n.facility !== effectiveFacility) continue;
+      if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)) {
+        seen.set(n.role, (seen.get(n.role) ?? 0) + 1);
+      }
+    }
+    const order = (role: string) => {
+      if (isMatron(role)) return 0;
+      if (isGlobalHead(role)) return 1;
+      if (isNADayType(role)) return 2;
+      if (isPorterType(role)) return 3;
+      return 4;
+    };
+    return [...seen.entries()]
+      .sort((a, b) => order(a[0]) - order(b[0]))
+      .map(([role, count]) => ({ role, count }));
+  }, [nurses, effectiveFacility]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
@@ -1446,13 +1478,15 @@ function RotaPage() {
 
       {/* Ward chip strip — visible once a specific facility is selected */}
       {!lockedWard && !isNurseTier && effectiveFacility && facilityFilteredWards.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+        <div className="border-t pt-3 pb-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Wards</p>
+          <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
           <button
             type="button"
-            onClick={() => setSelectedWard("")}
+            onClick={() => { setSelectedWard(""); setSelectedFacilityWide(""); }}
             className={cn(
-              "shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-xs font-medium transition-all",
-              selectedWard === ""
+              "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
+              selectedWard === "" && selectedFacilityWide === ""
                 ? "bg-primary text-primary-foreground border-primary"
                 : "bg-card text-muted-foreground border hover:bg-muted",
             )}
@@ -1490,19 +1524,48 @@ function RotaPage() {
               <button
                 key={w.name}
                 type="button"
-                onClick={() => setSelectedWard(isSelected ? "" : w.name)}
+                onClick={() => { setSelectedWard(isSelected ? "" : w.name); setSelectedFacilityWide(""); }}
                 className={cn(
-                  "shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-xs font-medium transition-all",
+                  "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
                   chipCls[status] ?? chipCls.none,
                   isSelected && "ring-2 ring-offset-1 ring-primary shadow-sm",
                 )}
               >
-                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
+                <span className={cn("h-2 w-2 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
                 {w.name}
-                <span className="opacity-60">{statusLabel[status] ?? ""}</span>
+                <span className="opacity-60 text-[11px]">{statusLabel[status] ?? ""}</span>
               </button>
             );
           })}
+          </div>
+        </div>
+      )}
+
+      {/* Facility-wide role chips — non-ward staff (matrons, coverage nurses, porters) */}
+      {!lockedWard && !isNurseTier && effectiveFacility && facilityWideGroups.length > 0 && (
+        <div className="border-t pt-3 pb-2">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Facility-wide staff</p>
+          <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
+          {facilityWideGroups.map(({ role, count }) => {
+            const isSelected = selectedFacilityWide === role;
+            return (
+              <button
+                key={role}
+                type="button"
+                onClick={() => { setSelectedFacilityWide(isSelected ? "" : role); setSelectedWard(""); }}
+                className={cn(
+                  "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
+                  isSelected
+                    ? "bg-primary text-primary-foreground border-primary ring-2 ring-offset-1 ring-primary shadow-sm"
+                    : "bg-card text-muted-foreground border hover:bg-muted",
+                )}
+              >
+                {role}
+                <span className="opacity-60 text-[11px]">({count})</span>
+              </button>
+            );
+          })}
+          </div>
         </div>
       )}
 
@@ -1578,7 +1641,7 @@ function RotaPage() {
               : "Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
           }
           action={
-            canGenerate ? (
+            canGenerate && effectiveFacility && selectedWard ? (
               <button
                 type="button"
                 onClick={openGenDialog}
@@ -1586,6 +1649,8 @@ function RotaPage() {
               >
                 <CalendarDays className="h-4 w-4" /> Auto-generate
               </button>
+            ) : canGenerate ? (
+              <p className="text-xs text-muted-foreground">Select a facility and ward to generate a schedule.</p>
             ) : undefined
           }
         />
@@ -1627,7 +1692,31 @@ function RotaPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredNurses.map((n) => (
+                {filteredNurses.flatMap((n, idx) => {
+                  const isNonWard =
+                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role);
+                  const prevIsNonWard =
+                    idx > 0 &&
+                    (isGlobalHead(filteredNurses[idx - 1].role) ||
+                      isMatron(filteredNurses[idx - 1].role) ||
+                      isPorterType(filteredNurses[idx - 1].role) ||
+                      isNADayType(filteredNurses[idx - 1].role));
+                  const showDivider =
+                    !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
+                  const rows = [];
+                  if (showDivider) {
+                    rows.push(
+                      <tr key="divider-facility-wide" className="border-t-2 border-border/60">
+                        <td
+                          colSpan={3 + days.length}
+                          className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/40"
+                        >
+                          Facility-wide staff
+                        </td>
+                      </tr>,
+                    );
+                  }
+                  rows.push(
                   <tr key={n.id} className="border-t hover:bg-muted/30">
                     <td className="px-3 py-2 sticky left-0 bg-card z-10">
                       <div className="font-medium">{n.name}</div>
@@ -1745,8 +1834,10 @@ function RotaPage() {
                         </td>
                       );
                     })}
-                  </tr>
-                ))}
+                  </tr>,
+                  );
+                  return rows;
+                })}
               </tbody>
             </table>
           </div>

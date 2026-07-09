@@ -91,7 +91,7 @@ type LeaveRequest = {
   from_date: string;
   to_date: string;
   status: "Pending" | "Approved" | "Rejected";
-  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Leave of Absence" | "Swap";
+  type: "Sick" | "Annual" | "Emergency" | "Maternity" | "Public Holiday" | "Leave of Absence" | "Swap";
   reason: string | null;
 };
 type ArchiveAssignment = {
