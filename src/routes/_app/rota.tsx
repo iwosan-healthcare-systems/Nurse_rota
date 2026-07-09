@@ -436,8 +436,15 @@ function RotaPage() {
           parseWards(n.ward).includes(lockedWard),
       );
     } else if (selectedWard) {
-      // Manager clicked a ward chip: strict ward-only, no facility-wide pass-through.
-      list = list.filter((n) => parseWards(n.ward).includes(selectedWard));
+      // Manager clicked a ward chip: strict ward-only. Explicitly exclude facility-wide
+      // roles (coverage nurses, matrons, porters) even if their profile has a ward set.
+      list = list.filter(
+        (n) =>
+          !isGlobalHead(n.role) &&
+          !isMatron(n.role) &&
+          !isPorterType(n.role) &&
+          parseWards(n.ward).includes(selectedWard),
+      );
     } else if (selectedFacilityWide) {
       // Manager clicked a facility-wide role chip: show only that role group.
       list = list.filter((n) => n.role === selectedFacilityWide);
@@ -597,7 +604,7 @@ function RotaPage() {
     for (const n of nurses) {
       if (effectiveFacility && n.facility !== effectiveFacility) continue;
       const primaryWard = n.ward?.split("|")[0];
-      if (primaryWard && !isGlobalHead(n.role) && !isMatron(n.role) && !isPorterType(n.role)) {
+      if (primaryWard && !isGlobalHead(n.role) && !isMatron(n.role) && !isPorterType(n.role) && !isInternType(n.role)) {
         nurseWardMap.set(n.id, primaryWard);
       }
     }
@@ -711,6 +718,11 @@ function RotaPage() {
     const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
     const facilityPorters = facilityNurses.filter((n) => isPorterType(n.role));
     const facilityNADay = facilityNurses.filter((n) => isNADayType(n.role));
+    // For ward runs, only schedule NA-Day nurses whose assigned ward matches the selected ward.
+    // Other wards' NA-Day nurses will be scheduled when their own ward is generated.
+    const wardNADay = isWardRun
+      ? facilityNADay.filter((n) => parseWards(n.ward)[0] === genForm.ward)
+      : facilityNADay;
 
     // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards).
     // Matrons, porters, and NA-Day are excluded here and handled separately since they are
@@ -794,11 +806,11 @@ function RotaPage() {
               >(`/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
-        facilityNADay.length > 0
+        wardNADay.length > 0
           ? api
               .get<
                 { id: string }[]
-              >(`/shift-assignments?nurse_ids=${facilityNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              >(`/shift-assignments?nurse_ids=${wardNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
       ]);
@@ -806,7 +818,7 @@ function RotaPage() {
       includeHeads = headsRows.length === 0 && facilityHeads.length > 0;
       includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
       includePorters = portersRows.length === 0 && facilityPorters.length > 0;
-      includeNADay = naDayRows.length === 0 && facilityNADay.length > 0;
+      includeNADay = naDayRows.length === 0 && wardNADay.length > 0;
       internsHaveSubmittedAssignments = internsRows.some((r) => r.status !== "draft");
     }
 
@@ -897,7 +909,7 @@ function RotaPage() {
       ...(includeHeads ? facilityHeads : []),
       ...(includeInterns ? internsToSchedule : []),
       ...(includePorters ? facilityPorters : []),
-      ...(includeNADay ? facilityNADay : []),
+      ...(includeNADay ? wardNADay : []),
     ];
 
     const facilityOnlyFirst =
@@ -1478,16 +1490,6 @@ function RotaPage() {
           </div>
           {selectedWard && (
             <div className="flex items-center gap-2 mt-3 flex-wrap">
-              {canGenerate && !isWindowLocked && (
-                <button
-                  type="button"
-                  onClick={openGenDialog}
-                  disabled={busy}
-                  className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-                >
-                  <Wand2 className="h-4 w-4" /> Auto-generate
-                </button>
-              )}
               {isWindowLocked ? (
                 <span
                   className={cn(
