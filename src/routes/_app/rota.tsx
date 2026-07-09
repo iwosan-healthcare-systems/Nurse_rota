@@ -29,7 +29,6 @@ import {
   isGlobalHead,
   isMatron,
   isPorterType,
-  isNADayType,
   SHIFT_TIMES,
   type ShiftCode,
   type NurseInput,
@@ -108,8 +107,9 @@ type GenForm = {
   startDate: string;
   facility: string;
   ward: string;
-  rotateInterns: boolean;
 };
+
+type FacilityWideGroup = 'matron' | 'head' | 'porter' | 'intern';
 
 // Collapse per-day violations into a per-ward/shift/role worst-case summary.
 function summariseViolations(violations: SafetyViolation[]) {
@@ -178,8 +178,13 @@ function RotaPage() {
     startDate: todayYmd(),
     facility: "",
     ward: "",
-    rotateInterns: true,
   });
+
+  // Facility-wide generation dialog
+  const [fwDialogOpen, setFwDialogOpen] = useState(false);
+  const [fwRoleGroup, setFwRoleGroup] = useState<FacilityWideGroup | null>(null);
+  const [fwStartDate, setFwStartDate] = useState(todayYmd());
+  const [fwRotateInterns, setFwRotateInterns] = useState(true);
   // Pending leave warning — populated by the pre-flight check in handleGenerate.
   const [genPendingLeaves, setGenPendingLeaves] = useState<
     { name: string; from: string; to: string }[]
@@ -382,26 +387,14 @@ function RotaPage() {
 
   const extraShiftIds = useMemo(() => new Set(extraShifts.map((e) => e.nurseId)), [extraShifts]);
 
-  // True once interns have been scheduled for the period BEING GENERATED (first ward run done).
-  // Scoped to the generated period's date range so viewing period 1 doesn't lock the
-  // checkbox when the user is actually generating period 2.
+  // True once interns have non-draft (committed) assignments in the current view period.
+  // Used to lock the rotation checkbox when interns are already in the approval pipeline.
   const internsAreScheduled = useMemo(() => {
     const facilityInternIds = new Set(
-      nurses
-        .filter((n) => isInternType(n.role) && n.facility === genForm.facility)
-        .map((n) => n.id),
+      nurses.filter((n) => isInternType(n.role) && n.facility === effectiveFacility).map((n) => n.id),
     );
-    const genEndObj = new Date(genForm.startDate + "T00:00:00");
-    genEndObj.setDate(genEndObj.getDate() + DAYS - 1);
-    const genEndStr = ymd(genEndObj);
-    return assignments.some(
-      (a) =>
-        facilityInternIds.has(a.nurse_id) &&
-        a.shift_date.slice(0, 10) >= genForm.startDate &&
-        a.shift_date.slice(0, 10) <= genEndStr &&
-        a.status !== "draft",
-    );
-  }, [assignments, nurses, genForm.facility, genForm.startDate]);
+    return assignments.some((a) => facilityInternIds.has(a.nurse_id) && a.status !== "draft");
+  }, [assignments, nurses, effectiveFacility]);
 
   // Unique role values scoped to the selected facility (for the role filter dropdown).
   const availableRoles = useMemo(() => {
@@ -433,18 +426,21 @@ function RotaPage() {
           parseWards(n.ward).includes(lockedWard),
       );
     } else if (selectedWard) {
-      // Manager clicked a ward chip: strict ward-only. Explicitly exclude facility-wide
-      // roles (coverage nurses, matrons, porters) even if their profile has a ward set.
+      // Manager clicked a ward chip: strict ward-only. Exclude all facility-wide roles.
       list = list.filter(
         (n) =>
           !isGlobalHead(n.role) &&
           !isMatron(n.role) &&
           !isPorterType(n.role) &&
+          !isInternType(n.role) &&
           parseWards(n.ward).includes(selectedWard),
       );
     } else if (selectedFacilityWide) {
-      // Manager clicked a facility-wide role chip: show only that role group.
-      list = list.filter((n) => n.role === selectedFacilityWide);
+      // Manager clicked a facility-wide card: show only that role group.
+      if (selectedFacilityWide === "matron") list = list.filter((n) => isMatron(n.role));
+      else if (selectedFacilityWide === "head") list = list.filter((n) => isGlobalHead(n.role));
+      else if (selectedFacilityWide === "porter") list = list.filter((n) => isPorterType(n.role));
+      else if (selectedFacilityWide === "intern") list = list.filter((n) => isInternType(n.role));
     }
     // else: no selection → all nurses in facility (separated visually in the grid)
 
@@ -638,37 +634,72 @@ function RotaPage() {
     return map;
   }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
 
-  // Non-ward role groups for the facility-wide chip strip.
-  const facilityWideGroups = useMemo(() => {
-    const seen = new Map<string, number>();
-    for (const n of nurses) {
-      if (effectiveFacility && n.facility !== effectiveFacility) continue;
-      if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role)) {
-        seen.set(n.role, (seen.get(n.role) ?? 0) + 1);
-      }
-    }
-    const order = (role: string) => {
-      if (isMatron(role)) return 0;
-      if (isGlobalHead(role)) return 1;
-      if (isPorterType(role)) return 2;
-      return 3;
-    };
-    return [...seen.entries()]
-      .sort((a, b) => order(a[0]) - order(b[0]))
-      .map(([role, count]) => ({ role, count }));
+  // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
+  // Each card has a stable key and a count of staff in that group.
+  const facilityWideCardGroups = useMemo(() => {
+    const scoped = effectiveFacility ? nurses.filter((n) => n.facility === effectiveFacility) : nurses;
+    const groups: { key: FacilityWideGroup; label: string; count: number }[] = [];
+    const matronCount = scoped.filter((n) => isMatron(n.role)).length;
+    const headCount = scoped.filter((n) => isGlobalHead(n.role)).length;
+    const porterCount = scoped.filter((n) => isPorterType(n.role)).length;
+    const internCount = scoped.filter((n) => isInternType(n.role)).length;
+    if (matronCount > 0) groups.push({ key: "matron", label: "Matron", count: matronCount });
+    if (headCount > 0) groups.push({ key: "head", label: "Coverage Nurse", count: headCount });
+    if (porterCount > 0) groups.push({ key: "porter", label: "Porter", count: porterCount });
+    if (internCount > 0) groups.push({ key: "intern", label: "Nurse Intern", count: internCount });
+    return groups;
   }, [nurses, effectiveFacility]);
+
+  // Dominant assignment status per facility-wide group for the current period.
+  const facilityWideStatusMap = useMemo(() => {
+    const statuses: Record<FacilityWideGroup, string[]> = {
+      matron: [],
+      head: [],
+      porter: [],
+      intern: [],
+    };
+    const nurseById = new Map(nurses.map((n) => [n.id, n]));
+    for (const a of assignments) {
+      const nurse = nurseById.get(a.nurse_id);
+      if (!nurse) continue;
+      if (effectiveFacility && nurse.facility !== effectiveFacility) continue;
+      if (isMatron(nurse.role)) statuses.matron.push(a.status);
+      else if (isGlobalHead(nurse.role)) statuses.head.push(a.status);
+      else if (isPorterType(nurse.role)) statuses.porter.push(a.status);
+      else if (isInternType(nurse.role)) statuses.intern.push(a.status);
+    }
+    const dominant = (s: string[]): string => {
+      if (!s.length) return "none";
+      if (s.includes("published")) return "published";
+      if (s.includes("approved_cno")) return "approved_cno";
+      if (s.includes("approved_chief")) return "approved_chief";
+      if (s.includes("submitted")) return "submitted";
+      return "draft";
+    };
+    return {
+      matron: dominant(statuses.matron),
+      head: dominant(statuses.head),
+      porter: dominant(statuses.porter),
+      intern: dominant(statuses.intern),
+    } as Record<FacilityWideGroup, string>;
+  }, [assignments, nurses, effectiveFacility]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    // Facility and ward are pre-filled from the chip selections; only date is user-editable here.
     setGenForm({
       startDate: ymd(startDate),
       facility: effectiveFacility,
       ward: selectedWard,
-      rotateInterns: true,
     });
-    setGenPendingLeaves([]); // reset so re-opening always re-checks
+    setGenPendingLeaves([]);
     setGenOpen(true);
+  }
+
+  function openFwDialog(key: FacilityWideGroup) {
+    setFwRoleGroup(key);
+    setFwStartDate(ymd(startDate));
+    setFwRotateInterns(true);
+    setFwDialogOpen(true);
   }
 
   async function handleGenerate() {
@@ -719,128 +750,41 @@ function RotaPage() {
 
     setGenPendingLeaves([]);
 
-    const isWardRun = !!genForm.ward;
     const facilityNurses = nurses.filter((n) => n.facility === genForm.facility);
-    const facilityHeads = facilityNurses.filter((n) => isGlobalHead(n.role));
-    const facilityMatrons = facilityNurses.filter((n) => isMatron(n.role));
-    const facilityInterns = facilityNurses.filter((n) => isInternType(n.role));
-    const facilityPorters = facilityNurses.filter((n) => isPorterType(n.role));
-    const facilityNADay = facilityNurses.filter((n) => isNADayType(n.role));
-    // For ward runs, only schedule NA-Day nurses whose assigned ward matches the selected ward.
-    // Other wards' NA-Day nurses will be scheduled when their own ward is generated.
-    const wardNADay = isWardRun
-      ? facilityNADay.filter((n) => parseWards(n.ward)[0] === genForm.ward)
-      : facilityNADay;
 
-    // Ward nurses: regular nurses + NAs + senior nurses for the selected ward (or all wards).
-    // Matrons, porters, and NA-Day are excluded here and handled separately since they are
-    // facility-wide (ward = null) and would otherwise be filtered out of ward runs.
+    // Ward nurses: regular nurses + NAs + NA-Day + senior nurses for the selected ward.
+    // Facility-wide roles (matrons, coverage nurses, porters, interns) are now scheduled
+    // independently via their own cards — never included in a ward run.
     let wardNurses = facilityNurses.filter(
       (n) =>
         !isGlobalHead(n.role) &&
         !isMatron(n.role) &&
         !isInternType(n.role) &&
-        !isPorterType(n.role) &&
-        !isNADayType(n.role),
+        !isPorterType(n.role),
     );
-    if (isWardRun) {
-      wardNurses = wardNurses.filter((n) => parseWards(n.ward)[0] === genForm.ward);
-    }
+    wardNurses = wardNurses.filter((n) => parseWards(n.ward)[0] === genForm.ward);
 
     if (!wardNurses.length) {
-      toast.error(
-        isWardRun
-          ? `No staff assigned to ward "${genForm.ward}"`
-          : "No staff found for the selected facility",
-      );
+      toast.error(`No staff assigned to ward "${genForm.ward}"`);
       return;
     }
 
     // Block regeneration if this ward's schedule is already in the approval pipeline.
-    // (Published assignments are preserved by the delete step below; only draft is safe to overwrite.)
-    if (isWardRun && wardNurses.length > 0) {
-      const wardIds = wardNurses.map((n) => n.id);
-      const inApprovalRows = await api
-        .get<
-          { status: string }[]
-        >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
-        .catch(() => []);
-      if (inApprovalRows?.length) {
-        toast.error(
-          `"${genForm.ward}" is in the approval process. Return it to draft from the Approvals page before regenerating.`,
-          { duration: 8000 },
-        );
-        return;
-      }
-    }
-
-    // For ward runs: include matrons, head nurses, interns, and porters only if they
-    // have no existing assignments for this period (first ward run of the 28-day cycle).
-    // Subsequent ward runs keep their schedules untouched.
-    let includeMatrons = !isWardRun;
-    let includeHeads = !isWardRun;
-    let includeInterns = !isWardRun;
-    let includePorters = !isWardRun;
-    let includeNADay = !isWardRun;
-    let internsHaveSubmittedAssignments = false;
-
-    if (isWardRun) {
-      // Only non-draft (submitted/approved/published) assignments count as "already scheduled".
-      // Stale draft-only assignments are treated as if they don't exist — the generator will
-      // delete and regenerate them (via the scheduledIds delete step below).
-      const nonDraftParam = "status_in=submitted,approved_chief,approved_cno,published";
-      const [matronsRows, headsRows, internsRows, portersRows, naDayRows] = await Promise.all([
-        facilityMatrons.length > 0
-          ? api
-              .get<{ id: string }[]>(
-                `/shift-assignments?nurse_ids=${facilityMatrons.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
-              )
-              .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
-        facilityHeads.length > 0
-          ? api
-              .get<{ id: string }[]>(
-                `/shift-assignments?nurse_ids=${facilityHeads.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
-              )
-              .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
-        facilityInterns.length > 0
-          ? api
-              .get<{ id: string }[]>(
-                `/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
-              )
-              .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
-        facilityPorters.length > 0
-          ? api
-              .get<{ id: string }[]>(
-                `/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
-              )
-              .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
-        wardNADay.length > 0
-          ? api
-              .get<{ id: string }[]>(
-                `/shift-assignments?nurse_ids=${wardNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
-              )
-              .catch(() => [])
-          : Promise.resolve([] as { id: string }[]),
-      ]);
-      includeMatrons = matronsRows.length === 0 && facilityMatrons.length > 0;
-      includeHeads = headsRows.length === 0 && facilityHeads.length > 0;
-      includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
-      includePorters = portersRows.length === 0 && facilityPorters.length > 0;
-      includeNADay = naDayRows.length === 0 && wardNADay.length > 0;
-      // Interns with non-draft assignments are "committed" — preserve rotation and don't regenerate.
-      internsHaveSubmittedAssignments = internsRows.length > 0;
+    const wardIds = wardNurses.map((n) => n.id);
+    const inApprovalRows = await api
+      .get<{ status: string }[]>(
+        `/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`,
+      )
+      .catch(() => []);
+    if (inApprovalRows?.length) {
+      toast.error(
+        `"${genForm.ward}" is in the approval process. Return it to draft from the Approvals page before regenerating.`,
+        { duration: 8000 },
+      );
+      return;
     }
 
     // ── Period offset (epoch) ────────────────────────────────────────────────
-    // Compute how many days have elapsed since the facility's very first scheduled
-    // day. This is used both for cycle-phase continuity in generateSchedule AND for
-    // the intern rotation base index so the rotation is deterministic by period
-    // number rather than depending on the ward currently stored in the nurse's DB
-    // profile (which may be stale).
     let periodOffset = 0;
     {
       const facilityIds = facilityNurses.map((n) => n.id);
@@ -848,14 +792,11 @@ function RotaPage() {
         const dayBefore = new Date(genStart);
         dayBefore.setDate(dayBefore.getDate() - 1);
         const epochRows = await api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
+          )
           .catch(() => []);
         if (epochRows[0]?.shift_date) {
-          // Slice to 10 chars — the DB can return a full ISO timestamp and
-          // appending "T00:00:00" to that produces an unparseable string →
-          // Invalid Date → periodOffset = NaN → crash inside scheduleCoverageNurses.
           const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
           periodOffset = Math.round(
             (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
@@ -864,9 +805,6 @@ function RotaPage() {
       }
     }
 
-    // Fetch the last 4 days of the previous period so the generator can detect
-    // each nurse's actual cycle position and continue from there rather than
-    // relying purely on the mathematical periodOffset.
     let previousAssignments: { nurse_id: string; shift_date: string; shift: ShiftCode }[] = [];
     if (periodOffset > 0) {
       const facilityIds = facilityNurses.map((n) => n.id);
@@ -883,80 +821,19 @@ function RotaPage() {
       }
     }
 
-    // Rotate intern ward profiles for this period.
-    // Uses the epoch-based period number as the sole rotation signal so the result
-    // is identical on any re-generation within the same 28-day period (idempotent).
-    // Profile-ward was previously the primary signal but caused interns to step
-    // forward once per ward run within a period instead of once per period.
-    let internsToSchedule = facilityInterns;
-    const shouldRotateInternWards =
-      genForm.rotateInterns && facilityInterns.length > 0 && !internsHaveSubmittedAssignments;
-    if (shouldRotateInternWards) {
-      const facilityWardNames = genWards.map((w) => w.name);
-
-      if (facilityWardNames.length > 0) {
-        const sortedInterns = [...facilityInterns].sort((a, b) => a.name.localeCompare(b.name));
-        // periodNumber = 0 for period 1, 1 for period 2, 2 for period 3, …
-        // Math.round absorbs an off-by-one-day epoch error.
-        const periodNumber = Math.round(periodOffset / DAYS);
-        const nextBase = periodNumber % facilityWardNames.length;
-        internsToSchedule = sortedInterns.map((n, idx) => ({
-          ...n,
-          ward: facilityWardNames[(nextBase + idx) % facilityWardNames.length],
-        }));
-
-        try {
-          await Promise.all(
-            internsToSchedule.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
-          );
-        } catch (e: unknown) {
-          toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
-          return;
-        }
-      }
-    }
-
-    const schedulingNurses = [
-      ...wardNurses,
-      ...(includeMatrons ? facilityMatrons : []),
-      ...(includeHeads ? facilityHeads : []),
-      ...(includeInterns ? internsToSchedule : []),
-      ...(includePorters ? facilityPorters : []),
-      ...(includeNADay ? wardNADay : []),
-    ];
-
-    const facilityOnlyFirst =
-      includeMatrons || includeHeads || includeInterns || includePorters || includeNADay;
-    const statusNote =
-      isWardRun && !facilityOnlyFirst
-        ? " (Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day kept from previous run)"
-        : isWardRun && facilityOnlyFirst
-          ? " (incl. Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day — first run)"
-          : "";
-
     setGenOpen(false);
     setBusy(true);
     try {
-      // Pass only the wards relevant to this run so safety-rule violations are
-      // scoped correctly: a ward-specific run (e.g. "IP Ward") should only
-      // report violations for IP Ward, not for every other ward in the facility.
-      // Prefer facility-tagged records; also accept untagged wards (facility = null)
-      // so older records without a facility field still participate in enforcement.
       const facilityWards = genWards.filter(
-        (w) =>
-          (!genForm.ward || w.name === genForm.ward) &&
-          (!w.facility || w.facility === genForm.facility),
+        (w) => w.name === genForm.ward && (!w.facility || w.facility === genForm.facility),
       );
-
-      // periodOffset was computed before the rotation block above and is
-      // already in scope — no need to re-query the epoch here.
 
       const {
         assignments: draft,
         violations,
         extraShifts: genExtra,
       } = generateSchedule({
-        nurses: schedulingNurses,
+        nurses: wardNurses,
         wards: facilityWards,
         leave,
         startDate: genStart,
@@ -984,25 +861,18 @@ function RotaPage() {
         // Do NOT return — continue saving the draft
       }
 
-      // Scope the delete to only the nurses being regenerated in this run.
-      // Head nurse and intern assignments from a prior ward run are preserved.
-      const scheduledIds = schedulingNurses.map((n) => n.id);
+      const scheduledIds = wardNurses.map((n) => n.id);
       for (let i = 0; i < scheduledIds.length; i += 200) {
         await api.del(
           `/shift-assignments?nurse_ids=${scheduledIds.slice(i, i + 200).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&neq_status=published`,
         );
       }
 
-      // Find nurse+date pairs that still have a published row after the delete step.
-      // We cannot overwrite published rows, so we exclude them from the insert.
       const publishedKeys = new Set<string>();
-      // Query by date range only — nurse_ids removed to avoid nginx URL-length limit on large
-      // rosters. Published keys from other facilities never match draft rows (which are already
-      // scoped to this facility's schedulingNurses), so the cross-facility over-fetch is harmless.
       const pubRows = await api
-        .get<
-          { nurse_id: string; shift_date: string }[]
-        >(`/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
+        .get<{ nurse_id: string; shift_date: string }[]>(
+          `/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`,
+        )
         .catch(() => []);
       pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
 
@@ -1010,72 +880,17 @@ function RotaPage() {
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
         .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
 
-      // Upsert in batches of 500 rows.
       for (let i = 0; i < rows.length; i += 500) {
         await api.post("/shift-assignments/upsert", rows.slice(i, i + 500));
       }
 
-      // Gap-fill: give every facility nurse a row for each day.
-      // Only runs for full-facility runs — ward-specific runs intentionally leave
-      // other wards' nurses without rows so they display as "—" in the grid and
-      // are not pulled into this ward's approval window.
-      if (!isWardRun) {
-        const coveredIds = new Set(scheduledIds);
-        const uncoveredNurses = facilityNurses.filter((n) => !coveredIds.has(n.id));
-        if (uncoveredNurses.length > 0) {
-          const uncoveredIds = uncoveredNurses.map((n) => n.id);
-          const existingRows = await api
-            .get<
-              { nurse_id: string; shift_date: string }[]
-            >(`/shift-assignments?nurse_ids=${uncoveredIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}`)
-            .catch(() => []);
-          const existingKeys = new Set(existingRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
-          const gapRows: {
-            nurse_id: string;
-            ward: string | null;
-            shift_date: string;
-            shift: "OFF" | "LEAVE";
-            status: "draft";
-            created_by: string | null;
-          }[] = [];
-          for (const nurse of uncoveredNurses) {
-            for (let d = 0; d < DAYS; d++) {
-              const dt = new Date(genStart);
-              dt.setDate(dt.getDate() + d);
-              const ds = ymd(dt);
-              if (existingKeys.has(`${nurse.id}|${ds}`)) continue;
-              const onLeave = leave.some(
-                (l) =>
-                  l.nurse_id === nurse.id &&
-                  l.status === "Approved" &&
-                  l.from_date.slice(0, 10) <= ds &&
-                  l.to_date.slice(0, 10) >= ds,
-              );
-              gapRows.push({
-                nurse_id: nurse.id,
-                ward: nurse.ward,
-                shift_date: ds,
-                shift: onLeave ? "LEAVE" : "OFF",
-                status: "draft",
-                created_by: user?.id ?? null,
-              });
-            }
-          }
-          for (let i = 0; i < gapRows.length; i += 500) {
-            await api.post("/shift-assignments/upsert", gapRows.slice(i, i + 500));
-          }
-        }
-      }
-
       await logAudit(
         "Generated 28-day rota draft",
-        `${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""} · ${ymd(genStart)} → ${ymd(genEnd)}`,
+        `${genForm.facility} / ${genForm.ward} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       );
 
       setExtraShifts(genExtra);
-      toast.success(
-        `28-day draft generated for ${genForm.facility}${genForm.ward ? ` / ${genForm.ward}` : ""}${statusNote}`,
-      );
+      toast.success(`28-day draft generated for ${genForm.facility} / ${genForm.ward}`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
@@ -1109,94 +924,37 @@ function RotaPage() {
   }
 
   async function handleClear() {
-    if (isNaN(startDate.getTime())) {
-      toast.error("Date range not yet loaded — please wait a moment and try again.");
-      return;
-    }
-    const wardLabel = selectedWard || "all wards";
+    if (!selectedWard || isNaN(startDate.getTime())) return;
     if (
       !confirm(
-        `Clear draft shifts for ${wardLabel} in this 28-day window?\n\n` +
-          (selectedWard
-            ? "Matrons, Coverage Nurses, Porters, and Nurse Interns will also be cleared if no other ward has been generated.\n\n"
-            : "") +
-          "Shifts already submitted for approval, approved, or published will NOT be affected.",
+        `Clear draft shifts for ${selectedWard} in this 28-day window?\n\nShifts already submitted for approval, approved, or published will NOT be affected.`,
       )
     )
       return;
     setBusy(true);
     try {
       const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
+      // Clear ward nurses + NA-Day for this ward; facility-wide cards clear themselves.
+      const wardNurseIds = facilityNurseList
+        .filter(
+          (n) =>
+            !isGlobalHead(n.role) &&
+            !isMatron(n.role) &&
+            !isPorterType(n.role) &&
+            !isInternType(n.role) &&
+            parseWards(n.ward)[0] === selectedWard,
+        )
+        .map((n) => n.id);
 
-      // Ward-specific nurses (excludes facility-wide roles)
-      const wardNurseIds = selectedWard
-        ? facilityNurseList
-            .filter(
-              (n) =>
-                !isGlobalHead(n.role) &&
-                !isMatron(n.role) &&
-                !isPorterType(n.role) &&
-                !isInternType(n.role) &&
-                !isNADayType(n.role) &&
-                parseWards(n.ward)[0] === selectedWard,
-            )
-            .map((n) => n.id)
-        : filteredNurses.map((n) => n.id);
-
-      // NA-Day assigned to this ward specifically (always cleared with the ward)
-      const wardNADayIds = selectedWard
-        ? facilityNurseList
-            .filter((n) => isNADayType(n.role) && parseWards(n.ward)[0] === selectedWard)
-            .map((n) => n.id)
-        : [];
-
-      // Facility-wide staff (matrons, coverage nurses, porters, interns) are cleared only
-      // when no other ward has draft assignments — they were generated on the first ward run.
-      let facilityWideIds: string[] = [];
-      if (selectedWard) {
-        const otherWardNurseIds = facilityNurseList
-          .filter(
-            (n) =>
-              !isGlobalHead(n.role) &&
-              !isMatron(n.role) &&
-              !isPorterType(n.role) &&
-              !isInternType(n.role) &&
-              !isNADayType(n.role) &&
-              parseWards(n.ward)[0] !== selectedWard,
-          )
-          .map((n) => n.id);
-        let otherWardHasAssignments = false;
-        if (otherWardNurseIds.length > 0) {
-          const check = await api
-            .get<{ id: string }[]>(
-              `/shift-assignments?nurse_ids=${otherWardNurseIds.slice(0, 200).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&limit=1`,
-            )
-            .catch(() => []);
-          otherWardHasAssignments = check.length > 0;
-        }
-        if (!otherWardHasAssignments) {
-          facilityWideIds = facilityNurseList
-            .filter(
-              (n) =>
-                isGlobalHead(n.role) ||
-                isMatron(n.role) ||
-                isPorterType(n.role) ||
-                isInternType(n.role),
-            )
-            .map((n) => n.id);
-        }
-      }
-
-      const allIdsToClear = [...new Set([...wardNurseIds, ...wardNADayIds, ...facilityWideIds])];
       const BATCH = 200;
-      for (let i = 0; i < allIdsToClear.length; i += BATCH) {
+      for (let i = 0; i < wardNurseIds.length; i += BATCH) {
         await api.del(
-          `/shift-assignments?nurse_ids=${allIdsToClear.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
+          `/shift-assignments?nurse_ids=${wardNurseIds.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
         );
       }
       setExtraShifts([]);
-      toast.success(`Draft shifts cleared for ${wardLabel}`);
-      await logAudit("Cleared all draft shifts", `${ymd(startDate)} → ${ymd(endDate)}`);
+      toast.success(`Draft shifts cleared for ${selectedWard}`);
+      await logAudit("Cleared draft shifts", `${selectedWard} · ${ymd(startDate)} → ${ymd(endDate)}`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
       window.location.reload();
@@ -1227,48 +985,259 @@ function RotaPage() {
         });
     }
 
-    // When a specific ward is selected, also co-submit interns assigned to other
-    // wards. Intern assignments are stored with ward = null (same pool as coverage
-    // nurses) so they are independent of any ward's approval pipeline.
-    // Coverage nurses are already in filteredNurses via isGlobalHead pass-through;
-    // only interns from non-selected wards are missing.
-    if (selectedWard) {
-      const submittedIdSet = new Set(ids);
-      // Resolve the facility from the selected-facility filter or from a ward nurse.
-      const facility =
-        effectiveFacility ||
-        nurses.find(
-          (n) =>
-            !isGlobalHead(n.role) &&
-            !isInternType(n.role) &&
-            parseWards(n.ward).includes(selectedWard),
-        )?.facility ||
-        null;
-      const otherInternIds = nurses
-        .filter(
-          (n) =>
-            isInternType(n.role) &&
-            !submittedIdSet.has(n.id) &&
-            (!facility || n.facility === facility),
-        )
-        .map((n) => n.id);
-      for (let i = 0; i < otherInternIds.length; i += BATCH) {
-        await api.patch(
-          `/shift-assignments?nurse_ids=${otherInternIds.slice(i, i + BATCH).join(",")}&shift_date_from=${ymd(startDate)}&shift_date_to=${ymd(endDate)}&status=draft`,
-          { status: "submitted" },
-        );
-      }
-    }
-
     setBusy(false);
-    const wardLabel = selectedWard || effectiveFacility || "all wards";
     await logAudit(
       "Submitted rota for approval",
-      `${ymd(startDate)} → ${ymd(endDate)} (${wardLabel})`,
+      `${ymd(startDate)} → ${ymd(endDate)} (${selectedWard || effectiveFacility || "all wards"})`,
     );
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
+  }
+
+  async function handleGenerateFacilityWide() {
+    if (!fwRoleGroup || !effectiveFacility) return;
+
+    const genStart = new Date(fwStartDate + "T00:00:00");
+    const genEnd = new Date(genStart);
+    genEnd.setDate(genEnd.getDate() + DAYS - 1);
+
+    await Promise.all([
+      qc.refetchQueries({ queryKey: ["nurses"] }),
+      qc.refetchQueries({ queryKey: ["wards-by-facility", effectiveFacility] }),
+    ]);
+    const freshNurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
+    const freshWards = qc.getQueryData<WardInput[]>(["wards-by-facility", effectiveFacility]) ?? [];
+
+    const facilityNurses = freshNurses.filter((n) => n.facility === effectiveFacility);
+    const getGroup = (key: FacilityWideGroup) => {
+      if (key === "matron") return facilityNurses.filter((n) => isMatron(n.role));
+      if (key === "head") return facilityNurses.filter((n) => isGlobalHead(n.role));
+      if (key === "porter") return facilityNurses.filter((n) => isPorterType(n.role));
+      return facilityNurses.filter((n) => isInternType(n.role));
+    };
+    let targetNurses = getGroup(fwRoleGroup);
+
+    if (!targetNurses.length) {
+      toast.error(`No ${fwRoleGroup} staff found for ${effectiveFacility}`);
+      return;
+    }
+
+    const inApprovalRows = await api
+      .get<{ status: string }[]>(
+        `/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`,
+      )
+      .catch(() => []);
+    if (inApprovalRows?.length) {
+      toast.error(
+        `This schedule is in the approval process. Return it to draft from the Approvals page first.`,
+        { duration: 6000 },
+      );
+      return;
+    }
+
+    // Period offset for cycle-phase continuity
+    let periodOffset = 0;
+    const facilityIds = facilityNurses.map((n) => n.id);
+    if (facilityIds.length > 0) {
+      const dayBefore = new Date(genStart);
+      dayBefore.setDate(dayBefore.getDate() - 1);
+      const epochRows = await api
+        .get<{ shift_date: string }[]>(
+          `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
+        )
+        .catch(() => []);
+      if (epochRows[0]?.shift_date) {
+        const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
+        periodOffset = Math.round(
+          (genStart.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
+        );
+      }
+    }
+
+    let previousAssignments: { nurse_id: string; shift_date: string; shift: ShiftCode }[] = [];
+    if (periodOffset > 0 && facilityIds.length > 0) {
+      const prevTo = new Date(genStart);
+      prevTo.setDate(prevTo.getDate() - 1);
+      const prevFrom = new Date(genStart);
+      prevFrom.setDate(prevFrom.getDate() - 5);
+      previousAssignments = await api
+        .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
+          `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
+        )
+        .catch(() => []);
+    }
+
+    // Intern rotation
+    if (fwRoleGroup === "intern" && fwRotateInterns && targetNurses.length > 0 && !internsAreScheduled) {
+      const wardNames = freshWards.map((w) => w.name);
+      if (wardNames.length > 0) {
+        const sorted = [...targetNurses].sort((a, b) => a.name.localeCompare(b.name));
+        const periodNumber = Math.round(periodOffset / DAYS);
+        const nextBase = periodNumber % wardNames.length;
+        targetNurses = sorted.map((n, idx) => ({
+          ...n,
+          ward: wardNames[(nextBase + idx) % wardNames.length],
+        }));
+        try {
+          await Promise.all(targetNurses.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })));
+        } catch (e: unknown) {
+          toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
+          return;
+        }
+      }
+    }
+
+    setFwDialogOpen(false);
+    setBusy(true);
+    try {
+      const { assignments: draft, violations, extraShifts: genExtra } = generateSchedule({
+        nurses: targetNurses,
+        wards: freshWards.filter((w) => !w.facility || w.facility === effectiveFacility),
+        leave,
+        startDate: genStart,
+        days: DAYS,
+        facility: effectiveFacility,
+        periodOffset,
+        previousAssignments,
+      });
+
+      if (violations.length > 0) {
+        const summary = summariseViolations(violations);
+        const lines = summary.map(
+          (v) =>
+            `• ${v.ward} — ${v.shift === "M" ? "Morning" : "Night"} ${v.role}: need ${v.required}, have ${v.actual}`,
+        );
+        toast.warning(
+          `Schedule saved — some minimums could not be fully met:\n${lines.join("\n")}`,
+          { duration: 8000 },
+        );
+      }
+
+      const scheduledIds = targetNurses.map((n) => n.id);
+      for (let i = 0; i < scheduledIds.length; i += 200) {
+        await api.del(
+          `/shift-assignments?nurse_ids=${scheduledIds.slice(i, i + 200).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&neq_status=published`,
+        );
+      }
+
+      const pubRows = await api
+        .get<{ nurse_id: string; shift_date: string }[]>(
+          `/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`,
+        )
+        .catch(() => []);
+      const publishedKeys = new Set(pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
+
+      const rows = draft
+        .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
+        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+      for (let i = 0; i < rows.length; i += 500) {
+        await api.post("/shift-assignments/upsert", rows.slice(i, i + 500));
+      }
+
+      const labels: Record<FacilityWideGroup, string> = {
+        matron: "Matron",
+        head: "Coverage Nurse",
+        porter: "Porter",
+        intern: "Nurse Intern",
+      };
+      setExtraShifts((prev) => [
+        ...prev.filter((e) => !new Set(scheduledIds).has(e.nurseId)),
+        ...genExtra,
+      ]);
+      await logAudit(
+        "Generated facility-wide rota draft",
+        `${labels[fwRoleGroup]} · ${effectiveFacility} · ${ymd(genStart)} → ${ymd(genEnd)}`,
+      );
+      toast.success(`28-day draft generated for ${labels[fwRoleGroup]}`);
+      if (fwRoleGroup === "intern") qc.invalidateQueries({ queryKey: ["nurses"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      await qc.refetchQueries({ queryKey: ["assignments"] });
+      setBusy(false);
+    }
+  }
+
+  async function handleClearFacilityWide(key: FacilityWideGroup) {
+    const labels: Record<FacilityWideGroup, string> = {
+      matron: "Matron",
+      head: "Coverage Nurse",
+      porter: "Porter",
+      intern: "Nurse Intern",
+    };
+    if (
+      !confirm(
+        `Clear draft ${labels[key]} shifts for this 28-day window?\nShifts already submitted or approved will NOT be affected.`,
+      )
+    )
+      return;
+    setBusy(true);
+    try {
+      const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
+      const getIds = (k: FacilityWideGroup) => {
+        if (k === "matron") return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+        if (k === "head") return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+        if (k === "porter") return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
+        return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
+      };
+      const ids = getIds(key);
+      const BATCH = 200;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        await api.del(
+          `/shift-assignments?nurse_ids=${ids.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
+        );
+      }
+      toast.success(`${labels[key]} draft cleared`);
+      await qc.refetchQueries({ queryKey: ["assignments"] });
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to clear");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleSubmitFacilityWide(key: FacilityWideGroup) {
+    const labels: Record<FacilityWideGroup, string> = {
+      matron: "Matron",
+      head: "Coverage Nurse",
+      porter: "Porter",
+      intern: "Nurse Intern",
+    };
+    setBusy(true);
+    try {
+      const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
+      const getIds = (k: FacilityWideGroup) => {
+        if (k === "matron") return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+        if (k === "head") return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+        if (k === "porter") return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
+        return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
+      };
+      const ids = getIds(key);
+      const BATCH = 200;
+      for (let i = 0; i < ids.length; i += BATCH) {
+        await api
+          .patch(
+            `/shift-assignments?nurse_ids=${ids.slice(i, i + BATCH).join(",")}&shift_date_from=${ymd(startDate)}&shift_date_to=${ymd(endDate)}&status=draft`,
+            { status: "submitted" },
+          )
+          .catch((e: unknown) => {
+            toast.error(e instanceof Error ? e.message : "Failed to submit");
+            throw e;
+          });
+      }
+      await logAudit(
+        "Submitted facility-wide rota for approval",
+        `${labels[key]} · ${effectiveFacility} · ${ymd(startDate)} → ${ymd(endDate)}`,
+      );
+      toast.success(`${labels[key]} schedule submitted to Chief Matron`);
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["approvals"] });
+    } catch {
+      // error already toasted above
+    } finally {
+      setBusy(false);
+    }
   }
 
   function openShiftPicker(
@@ -1617,30 +1586,110 @@ function RotaPage() {
         </div>
       )}
 
-      {/* Facility-wide role chips — non-ward staff (matrons, coverage nurses, porters) */}
-      {!lockedWard && !isNurseTier && effectiveFacility && facilityWideGroups.length > 0 && (
+      {/* Facility-wide staff cards — each role group has its own generate / clear / submit */}
+      {!lockedWard && !isNurseTier && effectiveFacility && facilityWideCardGroups.length > 0 && (
         <div className="border-t pt-3 pb-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Facility-wide staff</p>
-          <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
-          {facilityWideGroups.map(({ role, count }) => {
-            const isSelected = selectedFacilityWide === role;
-            return (
-              <button
-                key={role}
-                type="button"
-                onClick={() => { setSelectedFacilityWide(isSelected ? "" : role); setSelectedWard(""); }}
-                className={cn(
-                  "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
-                  isSelected
-                    ? "bg-primary text-primary-foreground border-primary ring-2 ring-offset-1 ring-primary shadow-sm"
-                    : "bg-card text-muted-foreground border hover:bg-muted",
-                )}
-              >
-                {role}
-                <span className="opacity-60 text-[11px]">({count})</span>
-              </button>
-            );
-          })}
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            Facility-wide staff
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {facilityWideCardGroups.map(({ key, label, count }) => {
+              const status = facilityWideStatusMap[key];
+              const isSelected = selectedFacilityWide === key;
+              const isLocked = ["submitted", "approved_chief", "approved_cno", "published"].includes(status);
+              const chipCls: Record<string, string> = {
+                none: "border-border",
+                draft: "border-amber-200 dark:border-amber-700",
+                submitted: "border-sky-200 dark:border-sky-700",
+                approved_chief: "border-blue-200 dark:border-blue-700",
+                approved_cno: "border-violet-200 dark:border-violet-700",
+                published: "border-emerald-200 dark:border-emerald-700",
+              };
+              const dotCls: Record<string, string> = {
+                none: "bg-muted-foreground/30",
+                draft: "bg-amber-400",
+                submitted: "bg-sky-400",
+                approved_chief: "bg-blue-400",
+                approved_cno: "bg-violet-400",
+                published: "bg-emerald-500",
+              };
+              const statusLabel: Record<string, string> = {
+                none: "No draft",
+                draft: "Draft",
+                submitted: "Submitted",
+                approved_chief: "Chief ✓",
+                approved_cno: "CNO ✓",
+                published: "Published",
+              };
+              return (
+                <div
+                  key={key}
+                  onClick={() => {
+                    setSelectedFacilityWide(isSelected ? "" : key);
+                    setSelectedWard("");
+                  }}
+                  className={cn(
+                    "rounded-xl border p-3 cursor-pointer transition-all select-none",
+                    chipCls[status] ?? chipCls.none,
+                    isSelected
+                      ? "ring-2 ring-primary bg-primary/5"
+                      : "bg-card hover:bg-muted/40",
+                  )}
+                >
+                  <div className="flex items-start justify-between gap-1 mb-2">
+                    <div>
+                      <p className="text-xs font-semibold">{label}</p>
+                      <p className="text-[11px] text-muted-foreground">{count} staff</p>
+                    </div>
+                    <span className="inline-flex items-center gap-1 text-[10px] font-medium shrink-0">
+                      <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
+                      {statusLabel[status] ?? ""}
+                    </span>
+                  </div>
+
+                  {/* Action buttons — stop propagation so card click doesn't also fire */}
+                  <div className="flex gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                    {canGenerate && !isLocked && (
+                      <button
+                        type="button"
+                        onClick={() => openFwDialog(key)}
+                        disabled={busy}
+                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-primary/10 hover:bg-primary/20 text-primary border-primary/20 disabled:opacity-50"
+                      >
+                        <Wand2 className="h-3 w-3" />
+                        {status === "draft" ? "Regenerate" : "Generate"}
+                      </button>
+                    )}
+                    {status === "draft" && canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => handleClearFacilityWide(key)}
+                        disabled={busy}
+                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
+                      >
+                        <Trash2 className="h-3 w-3" /> Clear
+                      </button>
+                    )}
+                    {status === "draft" && canSubmit && (
+                      <button
+                        type="button"
+                        onClick={() => handleSubmitFacilityWide(key)}
+                        disabled={busy}
+                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
+                      >
+                        <Send className="h-3 w-3" /> Submit
+                      </button>
+                    )}
+                    {isLocked && (
+                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                        <Clock className="h-3 w-3" />
+                        {statusLabel[status]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
@@ -1770,8 +1819,7 @@ function RotaPage() {
               <tbody>
                 {filteredNurses.flatMap((n, idx) => {
                   // Hard guard: never render facility-wide roles in a ward-specific view.
-                  // They may slip into filteredNurses if their profile ward was accidentally set.
-                  if (selectedWard && (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))) {
+                  if (selectedWard && (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isInternType(n.role))) {
                     return [];
                   }
                   const isNonWard =
@@ -2026,29 +2074,6 @@ function RotaPage() {
               </p>
             </div>
 
-            {/* Rotate interns */}
-            <label
-              className={cn(
-                "flex items-start gap-2.5 select-none",
-                internsAreScheduled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={genForm.rotateInterns}
-                disabled={internsAreScheduled}
-                onChange={(e) => setGenForm((f) => ({ ...f, rotateInterns: e.target.checked }))}
-                className="mt-0.5 h-4 w-4 rounded border accent-primary disabled:cursor-not-allowed"
-              />
-              <span className="text-sm">
-                <span className="font-medium">Rotate intern departments</span>
-                <span className="block text-xs text-muted-foreground mt-0.5">
-                  {internsAreScheduled
-                    ? "Intern schedule is locked in from the first run of this period — rotation is applied on the next period."
-                    : "Automatically move each intern to their next assigned ward for this 28-day cycle."}
-                </span>
-              </span>
-            </label>
           </div>
 
           {/* Pending leave warning — hard block, no bypass */}
@@ -2091,6 +2116,94 @@ function RotaPage() {
               type="button"
               onClick={handleGenerate}
               disabled={!genForm.startDate || busy || genPendingLeaves.length > 0}
+              className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <Wand2 className="h-4 w-4" />
+              Generate
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Facility-wide generation dialog */}
+      <Dialog open={fwDialogOpen} onOpenChange={setFwDialogOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>
+              Generate{" "}
+              {{
+                matron: "Matron",
+                head: "Coverage Nurse",
+                porter: "Porter",
+                intern: "Nurse Intern",
+              }[fwRoleGroup ?? "matron"] ?? ""}{" "}
+              schedule
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/60 border text-sm">
+              <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="font-medium">{effectiveFacility}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>
+                {{
+                  matron: "Matron",
+                  head: "Coverage Nurse",
+                  porter: "Porter",
+                  intern: "Nurse Intern",
+                }[fwRoleGroup ?? "matron"] ?? ""}
+              </span>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium mb-1.5">Start date</label>
+              <input
+                type="date"
+                title="Schedule start date"
+                value={fwStartDate}
+                onChange={(e) => setFwStartDate(e.target.value)}
+                className="w-full h-9 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+              <p className="mt-1 text-xs text-muted-foreground">Schedule runs {DAYS} days from this date.</p>
+            </div>
+
+            {fwRoleGroup === "intern" && (
+              <label
+                className={cn(
+                  "flex items-start gap-2.5 select-none",
+                  internsAreScheduled ? "cursor-not-allowed opacity-60" : "cursor-pointer",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={fwRotateInterns}
+                  disabled={internsAreScheduled}
+                  onChange={(e) => setFwRotateInterns(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border accent-primary disabled:cursor-not-allowed"
+                />
+                <span className="text-sm">
+                  <span className="font-medium">Rotate intern departments</span>
+                  <span className="block text-xs text-muted-foreground mt-0.5">
+                    {internsAreScheduled
+                      ? "Intern schedule is already in the approval pipeline — rotation applies on the next period."
+                      : "Automatically move each intern to their next assigned ward for this 28-day cycle."}
+                  </span>
+                </span>
+              </label>
+            )}
+          </div>
+
+          <DialogFooter>
+            <DialogClose asChild>
+              <button type="button" className="h-9 px-4 rounded-md border text-sm hover:bg-muted">
+                Cancel
+              </button>
+            </DialogClose>
+            <button
+              type="button"
+              onClick={handleGenerateFacilityWide}
+              disabled={!fwStartDate || busy}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />

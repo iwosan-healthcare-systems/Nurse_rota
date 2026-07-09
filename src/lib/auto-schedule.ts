@@ -991,26 +991,9 @@ export function generateSchedule(opts: {
   porterDay.forEach((n) => scheduled.add(n.id));
   porterRegular.forEach((n) => scheduled.add(n.id));
 
-  // 4b. Nursing Assistant - Day (facility-level, ward=null — same pattern as porter-day).
-  //     Treated as facility-wide regardless of any ward field, so they always get
-  //     DAY_ONLY_CYCLE even when a ward is set in their profile.
-  //     They are excluded from the per-ward loop below to avoid double-scheduling.
-  const naFacilityDay = nurses.filter((n) => isNADayType(n.role));
-  scheduleGroup(
-    naFacilityDay,
-    DAY_ONLY_CYCLE,
-    days,
-    opts.startDate,
-    leave,
-    null,
-    out,
-    periodOffset + stableGroupOffset(naFacilityDay) * 4,
-    prev,
-  );
-  naFacilityDay.forEach((n) => scheduled.add(n.id));
-
-  // 5. Per-ward scheduling (supervisors, regulars, NAs) + safety rule enforcement
+  // 5. Per-ward scheduling (supervisors, regulars, NAs, NA-Day) + safety rule enforcement
   // All roles use the universal 16-day NURSE_CYCLE (4M→4OFF→4N→4OFF).
+  // NA-Day nurses are ward-specific and use DAY_ONLY_CYCLE (morning-only) per ward.
 
   for (const ward of wards) {
     const wardNurses = nurses.filter(
@@ -1019,8 +1002,7 @@ export function generateSchedule(opts: {
         !isGlobalHead(n.role) &&
         !isInternType(n.role) &&
         !isMatron(n.role) &&
-        !isPorterType(n.role) &&
-        !isNADayType(n.role),
+        !isPorterType(n.role),
     );
 
     // Sort each sub-group by ID for stable, DB-order-independent scheduling.
@@ -1113,13 +1095,6 @@ export function generateSchedule(opts: {
       prev,
     );
 
-    // NA-Day nurses assigned to this ward in their profile still count toward
-    // the ward's morning NA minimum even though they're scheduled facility-wide
-    // (ward=null). Include them in enforceMinima so their M shifts are counted.
-    const naDayForWard = nurses.filter(
-      (n) => isNADayType(n.role) && parseWards(n.ward)[0] === ward.name,
-    );
-
     // Only validate safety rules for wards that have staff in this run.
     // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
     // no nurses here), we skip enforcement — it would always report violations
@@ -1127,7 +1102,7 @@ export function generateSchedule(opts: {
     if (wardNurses.length > 0) {
       const { violations: wardViolations, extraPromos } = enforceMinima(
         out,
-        [...wardNurses, ...naDayForWard],
+        wardNurses,
         ward,
         days,
         opts.startDate,

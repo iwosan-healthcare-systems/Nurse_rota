@@ -23,6 +23,7 @@ import {
   EyeOff,
   Copy,
   ShieldAlert,
+  AlertTriangle,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
@@ -105,6 +106,29 @@ function normalizeRole(raw: string): string {
 
   // Unknown — keep original so the user can see what came in
   return s;
+}
+
+// Match a raw ward string from an Excel import to a canonical ward name.
+// Tries case-insensitive exact match first, then alphanumeric-only comparison
+// to handle spacing/punctuation variants (e.g. "IP ward" → "IP Ward",
+// "OperationTheatre" → "Operation Theatre"). Returns the original trimmed
+// string when no match is found so the preview can flag it.
+function normalizeWard(raw: string, knownWards: { name: string }[]): string {
+  if (!raw) return "";
+  const trimmed = raw.trim();
+  const lo = (s: string) => s.toLowerCase();
+  const alnum = (s: string) => lo(s).replace(/[^a-z0-9]/g, "");
+
+  const exact = knownWards.find((w) => lo(w.name) === lo(trimmed));
+  if (exact) return exact.name;
+
+  const alphaInput = alnum(trimmed);
+  if (alphaInput) {
+    const fuzzy = knownWards.find((w) => alnum(w.name) === alphaInput);
+    if (fuzzy) return fuzzy.name;
+  }
+
+  return trimmed;
 }
 
 function parseWards(ward: string | null): string[] {
@@ -707,6 +731,7 @@ function StaffPage() {
       {showUpload && (
         <UploadModal
           currentTargetHours={nurses[0]?.target_hours ?? 180}
+          wards={wards}
           onClose={() => setShowUpload(false)}
         />
       )}
@@ -1115,16 +1140,25 @@ function EditNurseModal({
 
 function UploadModal({
   currentTargetHours,
+  wards,
   onClose,
 }: {
   currentTargetHours: number;
+  wards: { name: string; facility: string | null }[];
   onClose: () => void;
 }) {
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
   const [rows, setRows] = useState<
-    { name: string; employee_id: string; role: string; ward: string; email: string }[]
+    {
+      name: string;
+      employee_id: string;
+      role: string;
+      ward: string;
+      email: string;
+      wardMatched: boolean;
+    }[]
   >([]);
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -1143,12 +1177,16 @@ function UploadModal({
             for (const n of names) if (keys[n]) return String(r[keys[n]] ?? "").trim();
             return "";
           };
+          const rawWard = get("ward", "department", "unit");
+          const normalizedWard = normalizeWard(rawWard, wards);
+          const wardMatched = !normalizedWard || wards.some((w) => w.name === normalizedWard);
           return {
             name: get("name", "full name", "nurse"),
             employee_id: get("employee id", "emp id", "employee number", "emp no", "staff id"),
             role: normalizeRole(get("role", "position")),
-            ward: get("ward", "department", "unit"),
+            ward: normalizedWard,
             email: get("email", "email address"),
+            wardMatched,
           };
         })
         .filter((r) => r.name);
@@ -1262,13 +1300,42 @@ function UploadModal({
                         {r.employee_id || "—"}
                       </td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.role}</td>
-                      <td className="px-3 py-1.5 text-muted-foreground">{r.ward || "—"}</td>
+                      <td className="px-3 py-1.5">
+                        {r.ward ? (
+                          r.wardMatched ? (
+                            <span className="text-muted-foreground">{r.ward}</span>
+                          ) : (
+                            <span
+                              className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-400"
+                              title="Ward not found in system — check spelling"
+                            >
+                              <AlertTriangle className="h-3 w-3 shrink-0" />
+                              {r.ward}
+                            </span>
+                          )
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="px-3 py-1.5 text-muted-foreground">{r.email || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+          </div>
+        )}
+
+        {rows.some((r) => r.ward && !r.wardMatched) && (
+          <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              {rows.filter((r) => r.ward && !r.wardMatched).length} row
+              {rows.filter((r) => r.ward && !r.wardMatched).length > 1 ? "s have" : " has"} an
+              unrecognised ward name (highlighted above). The nurse will be imported with that ward
+              string as-is — go to the <strong>Wards</strong> page to confirm the spelling, then fix
+              via the Edit nurse form.
+            </span>
           </div>
         )}
 
