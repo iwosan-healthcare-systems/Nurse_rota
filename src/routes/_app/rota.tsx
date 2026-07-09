@@ -340,7 +340,16 @@ function RotaPage() {
   const isLoading = windowLoading || assignmentsLoading;
 
   // True once at least one assignment exists for the current window.
-  const hasSchedule = !isLoading && assignments.length > 0;
+  // When a specific ward chip is selected, only count assignments for that ward's nurses —
+  // stale facility-wide drafts (matrons, coverage nurses, porters) must not hide the empty state.
+  const hasSchedule = useMemo(() => {
+    if (isLoading) return false;
+    if (selectedWard) {
+      const wardIds = new Set(filteredNurses.map((n) => n.id));
+      return assignments.some((a) => wardIds.has(a.nurse_id));
+    }
+    return assignments.length > 0;
+  }, [isLoading, assignments, filteredNurses, selectedWard]);
 
   // Filled locum requests for this window — used to highlight locum cells.
   const { data: locumFilled = [] } = useQuery({
@@ -634,16 +643,15 @@ function RotaPage() {
     const seen = new Map<string, number>();
     for (const n of nurses) {
       if (effectiveFacility && n.facility !== effectiveFacility) continue;
-      if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)) {
+      if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role)) {
         seen.set(n.role, (seen.get(n.role) ?? 0) + 1);
       }
     }
     const order = (role: string) => {
       if (isMatron(role)) return 0;
       if (isGlobalHead(role)) return 1;
-      if (isNADayType(role)) return 2;
-      if (isPorterType(role)) return 3;
-      return 4;
+      if (isPorterType(role)) return 2;
+      return 3;
     };
     return [...seen.entries()]
       .sort((a, b) => order(a[0]) - order(b[0]))
@@ -777,40 +785,44 @@ function RotaPage() {
     let internsHaveSubmittedAssignments = false;
 
     if (isWardRun) {
+      // Only non-draft (submitted/approved/published) assignments count as "already scheduled".
+      // Stale draft-only assignments are treated as if they don't exist — the generator will
+      // delete and regenerate them (via the scheduledIds delete step below).
+      const nonDraftParam = "status_in=submitted,approved_chief,approved_cno,published";
       const [matronsRows, headsRows, internsRows, portersRows, naDayRows] = await Promise.all([
         facilityMatrons.length > 0
           ? api
-              .get<
-                { id: string }[]
-              >(`/shift-assignments?nurse_ids=${facilityMatrons.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .get<{ id: string }[]>(
+                `/shift-assignments?nurse_ids=${facilityMatrons.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
+              )
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
         facilityHeads.length > 0
           ? api
-              .get<
-                { id: string }[]
-              >(`/shift-assignments?nurse_ids=${facilityHeads.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .get<{ id: string }[]>(
+                `/shift-assignments?nurse_ids=${facilityHeads.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
+              )
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
         facilityInterns.length > 0
           ? api
-              .get<
-                { id: string; status: string }[]
-              >(`/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .get<{ id: string }[]>(
+                `/shift-assignments?nurse_ids=${facilityInterns.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
+              )
               .catch(() => [])
-          : Promise.resolve([] as { id: string; status: string }[]),
+          : Promise.resolve([] as { id: string }[]),
         facilityPorters.length > 0
           ? api
-              .get<
-                { id: string }[]
-              >(`/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .get<{ id: string }[]>(
+                `/shift-assignments?nurse_ids=${facilityPorters.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
+              )
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
         wardNADay.length > 0
           ? api
-              .get<
-                { id: string }[]
-              >(`/shift-assignments?nurse_ids=${wardNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&limit=1`)
+              .get<{ id: string }[]>(
+                `/shift-assignments?nurse_ids=${wardNADay.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&${nonDraftParam}&limit=1`,
+              )
               .catch(() => [])
           : Promise.resolve([] as { id: string }[]),
       ]);
@@ -819,7 +831,8 @@ function RotaPage() {
       includeInterns = internsRows.length === 0 && facilityInterns.length > 0;
       includePorters = portersRows.length === 0 && facilityPorters.length > 0;
       includeNADay = naDayRows.length === 0 && wardNADay.length > 0;
-      internsHaveSubmittedAssignments = internsRows.some((r) => r.status !== "draft");
+      // Interns with non-draft assignments are "committed" — preserve rotation and don't regenerate.
+      internsHaveSubmittedAssignments = internsRows.length > 0;
     }
 
     // ── Period offset (epoch) ────────────────────────────────────────────────
@@ -1756,14 +1769,18 @@ function RotaPage() {
               </thead>
               <tbody>
                 {filteredNurses.flatMap((n, idx) => {
+                  // Hard guard: never render facility-wide roles in a ward-specific view.
+                  // They may slip into filteredNurses if their profile ward was accidentally set.
+                  if (selectedWard && (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))) {
+                    return [];
+                  }
                   const isNonWard =
-                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role);
+                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role);
                   const prevIsNonWard =
                     idx > 0 &&
                     (isGlobalHead(filteredNurses[idx - 1].role) ||
                       isMatron(filteredNurses[idx - 1].role) ||
-                      isPorterType(filteredNurses[idx - 1].role) ||
-                      isNADayType(filteredNurses[idx - 1].role));
+                      isPorterType(filteredNurses[idx - 1].role));
                   const showDivider =
                     !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
                   const rows = [];
