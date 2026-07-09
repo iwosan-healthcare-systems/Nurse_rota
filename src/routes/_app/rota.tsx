@@ -1823,18 +1823,22 @@ function RotaPage() {
                     return [];
                   }
                   const isNonWard =
-                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role);
+                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isInternType(n.role);
                   const prevIsNonWard =
                     idx > 0 &&
                     (isGlobalHead(filteredNurses[idx - 1].role) ||
                       isMatron(filteredNurses[idx - 1].role) ||
-                      isPorterType(filteredNurses[idx - 1].role));
+                      isPorterType(filteredNurses[idx - 1].role) ||
+                      isInternType(filteredNurses[idx - 1].role));
+                  // Only show the divider when viewing a specific facility's "all wards" grid.
+                  // In "All facilities" mode nurses are interleaved across facilities and the
+                  // transition fires multiple times, producing duplicate divider rows.
                   const showDivider =
-                    !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
+                    !!effectiveFacility && !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
                   const rows = [];
                   if (showDivider) {
                     rows.push(
-                      <tr key="divider-facility-wide" className="border-t-2 border-border/60">
+                      <tr key={`divider-fw-${n.id}`} className="border-t-2 border-border/60">
                         <td
                           colSpan={3 + days.length}
                           className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/40"
