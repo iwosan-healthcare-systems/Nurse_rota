@@ -59,7 +59,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "approve_leave",
     label: "Approve / Reject Leave",
-    roles: ["admin", "cno", "chief_matron"],
+    roles: ["admin", "chief_matron"],
   },
   {
     key: "approve_matron_leave",

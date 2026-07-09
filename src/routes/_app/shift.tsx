@@ -59,7 +59,7 @@ type ShiftLog = {
 
 type Assignment = {
   id: string;
-  shift: "M" | "N" | "OFF" | "LEAVE";
+  shift: "M" | "N" | "MWC" | "NC" | "OFF" | "LEAVE";
   shift_date: string;
   ward: string | null;
   status: string;
@@ -119,6 +119,30 @@ function fmtHHMM(d: Date) {
   return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
+function isMorningShift(shift: string) {
+  return shift === "M" || shift === "MWC";
+}
+function isNightShift(shift: string) {
+  return shift === "N" || shift === "NC";
+}
+function isWorkShift(shift: string) {
+  return isMorningShift(shift) || isNightShift(shift);
+}
+/** Maps MWC→M and NC→N for shift_log recording (DB only stores M/N). */
+function normalizeShiftType(shift: string): "M" | "N" {
+  return isMorningShift(shift) ? "M" : "N";
+}
+function shiftLabel(shift: string) {
+  if (shift === "M") return "Morning Shift";
+  if (shift === "N") return "Night Shift";
+  if (shift === "MWC") return "Morning Coverage";
+  if (shift === "NC") return "Night Coverage";
+  return "Shift";
+}
+function shiftTimeLabel(shift: string) {
+  return isMorningShift(shift) ? "08:00 – 17:00" : "17:00 – 08:00";
+}
+
 function ShiftPage() {
   const { nurseId, fullName, activeRole } = useAuth();
 
@@ -128,6 +152,7 @@ function ShiftPage() {
   const today = todayYmd();
   const [now, setNow] = useState(new Date());
   const autoEndingRef = useRef(false);
+  const missedRecordedRef = useRef(false);
   const pendingGeoRef = useRef<{ lat: number; lng: number; ip: string | null } | null>(null);
   const [geoChecking, setGeoChecking] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
@@ -313,6 +338,9 @@ function ShiftPage() {
   const leavePeriodHours = currentPeriodLogs
     .filter((l) => l.is_leave)
     .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const missedPeriodCount = currentPeriodLogs.filter(
+    (l) => l.late_reason === "Missed shift",
+  ).length;
 
   // ── Auto-end: check every minute whether the shift's expected end has passed ──
   useEffect(() => {
@@ -321,6 +349,68 @@ function ShiftPage() {
     if (now < expectedEnd) return;
     autoEndingRef.current = true;
     void endShift(shiftLog, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [now]);
+
+  // ── Auto-record missed shift (0 hours) once the shift window has closed ─────
+  useEffect(() => {
+    // Skip management roles and matrons (synthetic assignments)
+    if (activeRole && ["admin", "cno", "hr_admin"].includes(activeRole)) return;
+    if (isMatronNurse) return;
+    if (shiftLog || missedRecordedRef.current || !nurseId) return;
+
+    // Determine the effective shift from locum or published assignment
+    const effectiveShift = todayLocum?.shift ?? queryAssignment?.shift ?? null;
+    if (!effectiveShift || !isWorkShift(effectiveShift)) return;
+
+    // Schedule is only published when a real query-backed assignment (or locum) exists
+    const schedulePublished = !!(todayLocum ?? queryAssignment);
+    if (!schedulePublished) return;
+
+    const endHour = isMorningShift(effectiveShift) ? 17 : 8;
+    const endTime = new Date();
+    if (isNightShift(effectiveShift)) endTime.setDate(endTime.getDate() + 1);
+    endTime.setHours(endHour, 0, 0, 0);
+    if (now < endTime) return;
+
+    missedRecordedRef.current = true;
+    const shiftType = normalizeShiftType(effectiveShift);
+    const officialStart = new Date();
+    officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
+
+    void (async () => {
+      const lookback = new Date();
+      lookback.setDate(lookback.getDate() - 27);
+      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
+      const winRows = await api
+        .get<{ shift_date: string }[]>(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
+        .catch(() => []);
+      const periodStart = winRows[0]?.shift_date ?? today;
+      await api
+        .post("/shift-logs", {
+          nurse_id: nurseId,
+          shift_date: today,
+          shift_type: shiftType,
+          started_at: officialStart.toISOString(),
+          ended_at: officialStart.toISOString(),
+          expected_end_at: endTime.toISOString(),
+          hours_logged: 0,
+          period_start: periodStart,
+          is_late: false,
+          late_minutes: null,
+          late_reason: "Missed shift",
+          latitude: null,
+          longitude: null,
+          ip_address: null,
+          is_locum: !!todayLocum,
+          locum_request_id: todayLocum?.id ?? null,
+          is_swap: false,
+          swap_note: null,
+        })
+        .catch(() => { missedRecordedRef.current = false; });
+      qc.invalidateQueries({ queryKey: ["my-shift-log"] });
+      qc.invalidateQueries({ queryKey: ["my-period-logs"] });
+    })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now]);
 
@@ -347,9 +437,10 @@ function ShiftPage() {
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function startShift(lateReason?: string, lateMins?: number) {
-    if (!nurseId || !assignment || !["M", "N"].includes(assignment.shift)) return;
+    if (!nurseId || !assignment || !isWorkShift(assignment.shift)) return;
 
-    const shiftType = assignment.shift as "M" | "N";
+    // MWC records as M, NC records as N in shift_logs (DB only stores M/N).
+    const shiftType = normalizeShiftType(assignment.shift);
     const actualNow = new Date();
     // Clamp to the official start (8:00 / 17:00) so nurses who arrive during
     // the 15-minute early window don't accumulate hours before the shift begins.
@@ -452,11 +543,22 @@ function ShiftPage() {
 
   // ── Timing: when this shift is allowed to start ───────────────────────────
 
-  // The official start time for the nurse's shift today (08:00 M / 17:00 N).
+  // The official start time for the nurse's shift today.
+  // M / MWC → 08:00; N / NC → 17:00.
   const shiftStartTime = (() => {
-    if (!assignment || (assignment.shift !== "M" && assignment.shift !== "N")) return null;
+    if (!assignment || !isWorkShift(assignment.shift)) return null;
     const t = new Date();
-    t.setHours(assignment.shift === "M" ? 8 : 17, 0, 0, 0);
+    t.setHours(isMorningShift(assignment.shift) ? 8 : 17, 0, 0, 0);
+    return t;
+  })();
+
+  // The official end time (used to detect a missed shift).
+  // M / MWC → 17:00 today; N / NC → 08:00 tomorrow.
+  const shiftEndTime = (() => {
+    if (!assignment || !isWorkShift(assignment.shift)) return null;
+    const t = new Date();
+    if (isNightShift(assignment.shift)) t.setDate(t.getDate() + 1);
+    t.setHours(isNightShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
   })();
 
@@ -465,9 +567,9 @@ function ShiftPage() {
     ? Math.floor((now.getTime() - shiftStartTime.getTime()) / 60000)
     : -Infinity;
 
-  // Button is visible from 15 minutes before official start (7:45 AM / 4:45 PM).
+  // Button is visible from 15 minutes before official start.
   const canStartShift = minutesSinceStart >= -15;
-  // Late = any moment after the official start (08:00 / 17:00).
+  // Late = any moment after the official start.
   const isLate = minutesSinceStart > 0;
 
   // ── Derived state ─────────────────────────────────────────────────────────
@@ -475,9 +577,17 @@ function ShiftPage() {
   // Check published status directly from the DB-backed sources — never the matron fallback,
   // which has status:"published" hardcoded and would otherwise bypass the published gate.
   const isSchedulePublished = !!(locumAssignment ?? queryAssignment);
-  const hasShiftToday = assignment && (assignment.shift === "M" || assignment.shift === "N");
+  const hasShiftToday = !!(assignment && isWorkShift(assignment.shift));
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;
+  // Shift window closed without a log being started → missed
+  const isShiftMissed =
+    !shiftLog && hasShiftToday && isSchedulePublished && !!shiftEndTime && now >= shiftEndTime;
+  // 0-hour log created by auto-record (late_reason sentinel)
+  const isMissedLog =
+    !!shiftLog && !!shiftLog.ended_at &&
+    Number(shiftLog.hours_logged) === 0 &&
+    shiftLog.late_reason === "Missed shift";
   const elapsed = isActive
     ? fmtDuration(Math.max(0, now.getTime() - new Date(shiftLog.started_at).getTime()))
     : null;
@@ -505,9 +615,9 @@ function ShiftPage() {
             </p>
             {hasShiftToday ? (
               <p className="text-2xl font-bold mt-1">
-                {assignment.shift === "M" ? "Morning Shift" : "Night Shift"}
+                {shiftLabel(assignment.shift)}
                 <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  {assignment.shift === "M" ? "08:00 – 17:00" : "17:00 – 08:00"}
+                  {shiftTimeLabel(assignment.shift)}
                 </span>
                 {todayLocum && (
                   <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
@@ -541,10 +651,16 @@ function ShiftPage() {
               Active
             </span>
           )}
-          {isEnded && (
+          {isEnded && !isMissedLog && (
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-muted text-muted-foreground text-xs font-semibold border">
               <CheckCircle2 className="h-3 w-3" />
               Completed
+            </span>
+          )}
+          {(isShiftMissed || isMissedLog) && !isActive && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-red-50 text-red-600 text-xs font-semibold border border-red-200">
+              <AlertTriangle className="h-3 w-3" />
+              Missed
             </span>
           )}
         </div>
@@ -582,8 +698,18 @@ function ShiftPage() {
           </>
         )}
 
+        {/* Missed shift notice (log recorded but 0 hours) */}
+        {isMissedLog && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 mb-3 text-sm">
+            <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-red-700">
+              Missed shift — this shift was not started before the scheduled end time. No hours have been logged for this shift.
+            </p>
+          </div>
+        )}
+
         {/* Completed shift info */}
-        {isEnded && (
+        {isEnded && !isMissedLog && (
           <>
             <div className="grid grid-cols-3 gap-3 mb-3">
               <div className="rounded-lg border bg-muted/30 px-3 py-2.5 text-center">
@@ -617,8 +743,18 @@ function ShiftPage() {
           </>
         )}
 
+        {/* Missed shift — window closed before shift was started (log recording in progress) */}
+        {isShiftMissed && !isMissedLog && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-sm">
+            <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-red-700">
+              Missed shift — this shift was not started before the scheduled end time. No hours have been logged for this shift.
+            </p>
+          </div>
+        )}
+
         {/* Action buttons */}
-        {hasShiftToday && !isEnded && (
+        {hasShiftToday && !isEnded && !isShiftMissed && (
           <div className="space-y-3">
             {/* Late reason prompt — shown when nurse is overdue and clicks Start */}
             {lateDialog.open && (
@@ -753,7 +889,8 @@ function ShiftPage() {
           </div>
           <p className="text-3xl font-bold">{fmtHours(currentPeriodHours - swapPeriodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap).length} shifts completed
+            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap && l.late_reason !== "Missed shift").length} shifts completed
+            {missedPeriodCount > 0 && ` · ${missedPeriodCount} missed`}
           </p>
           {(swapPeriodHours > 0 || leavePeriodHours > 0) && (
             <div className="mt-2 flex flex-wrap gap-1.5">
@@ -835,26 +972,35 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
                       <ArrowLeftRight className="h-2.5 w-2.5" /> Additional Shift
                     </span>
                   )}
-                  {log.is_late && (
+                  {log.late_reason === "Missed shift" ? (
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      Missed
+                    </span>
+                  ) : log.is_late ? (
                     <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
                       <AlertTriangle className="h-2.5 w-2.5" />
                       {log.late_minutes}m late
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  {fmtTime(log.started_at)} → {log.ended_at ? fmtTime(log.ended_at) : "in progress"}
+                  {log.late_reason === "Missed shift"
+                    ? "Not started"
+                    : `${fmtTime(log.started_at)} → ${log.ended_at ? fmtTime(log.ended_at) : "in progress"}`}
                 </p>
                 {log.is_swap && log.swap_note && (
                   <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
                 )}
-                {log.is_late && log.late_reason && (
+                {log.is_late && log.late_reason && log.late_reason !== "Missed shift" && (
                   <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
                 )}
               </div>
             </div>
             <div className="text-right">
-              {log.hours_logged != null ? (
+              {log.late_reason === "Missed shift" ? (
+                <span className="text-red-500 text-xs font-medium">0h logged</span>
+              ) : log.hours_logged != null ? (
                 <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>
               ) : (
                 <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">

@@ -26,7 +26,7 @@ import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/lib/auth-context";
-import { isGlobalHead, isMatron, isPorterType, isInternType } from "@/lib/auto-schedule";
+import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
@@ -101,12 +101,13 @@ type ArchiveAssignment = {
   ward: string | null;
   shift: string;
 };
-type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
+type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 const FW_LABELS: Record<FacilityWideGroup, string> = {
   matron: "Matron",
   head: "Coverage Nurse",
   porter: "Porter",
   intern: "Nurse Intern",
+  naday: "Nursing Assistant - Day",
 };
 
 function roleGroupOf(role: string): FacilityWideGroup | null {
@@ -114,6 +115,7 @@ function roleGroupOf(role: string): FacilityWideGroup | null {
   if (isGlobalHead(role)) return "head";
   if (isPorterType(role)) return "porter";
   if (isInternType(role)) return "intern";
+  if (isNADayType(role)) return "naday";
   return null;
 }
 
@@ -1531,33 +1533,61 @@ ${sections}
                     </tr>
                   </thead>
                   <tbody>
-                    {leaveOnly.map((l) => (
-                      <tr key={l.id} className="border-t hover:bg-muted/30">
-                        <td className="px-4 py-3 font-medium">
-                          {nurses.find((n) => n.id === l.nurse_id)?.name ?? "Unknown"}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {fmtDate(l.from_date)}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {fmtDate(l.to_date)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                              l.status === "Approved"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : l.status === "Rejected"
-                                  ? "bg-rose-100 text-rose-700"
-                                  : "bg-amber-100 text-amber-700"
-                            }`}
-                          >
-                            {l.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {(() => {
+                      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+                      const renderLeaveRow = (l: (typeof leaveOnly)[0]) => (
+                        <tr key={l.id} className="border-t hover:bg-muted/30">
+                          <td className="px-4 py-3 font-medium">
+                            {(l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.name ?? "Unknown"}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {fmtDate(l.from_date)}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {fmtDate(l.to_date)}
+                          </td>
+                          <td className="px-4 py-3">
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                l.status === "Approved"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : l.status === "Rejected"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {l.status}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+
+                      if (!reportFacility) {
+                        // Group by facility for admin/cno/hr_admin
+                        const grouped = new Map<string, typeof leaveOnly>();
+                        for (const l of leaveOnly) {
+                          const f = (l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.facility ?? "Unknown";
+                          if (!grouped.has(f)) grouped.set(f, []);
+                          grouped.get(f)!.push(l);
+                        }
+                        return [...grouped.entries()]
+                          .sort(([a], [b]) => a.localeCompare(b))
+                          .flatMap(([facility, fRows]) => [
+                            <tr key={`hdr-${facility}`}>
+                              <td
+                                colSpan={5}
+                                className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                              >
+                                {facility}
+                              </td>
+                            </tr>,
+                            ...fRows.map(renderLeaveRow),
+                          ]);
+                      }
+
+                      return leaveOnly.map(renderLeaveRow);
+                    })()}
                   </tbody>
                 </table>
                 </div>

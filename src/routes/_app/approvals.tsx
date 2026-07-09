@@ -45,7 +45,7 @@ type PendingRow = {
 };
 
 type WindowStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
-type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
+type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 
 type RotaWindow = {
   startDate: string;
@@ -81,6 +81,7 @@ function roleGroupOf(role: string): FacilityWideGroup | null {
   if (isGlobalHead(role)) return "head";
   if (isPorterType(role)) return "porter";
   if (isInternType(role)) return "intern";
+  if (isNADayType(role)) return "naday";
   return null;
 }
 
@@ -205,6 +206,7 @@ const FW_LABELS: Record<FacilityWideGroup, string> = {
   head: "Coverage Nurse",
   porter: "Porter",
   intern: "Nurse Intern",
+  naday: "Nursing Assistant - Day",
 };
 
 const STATUS_LABELS: Record<WindowStatus, string> = {

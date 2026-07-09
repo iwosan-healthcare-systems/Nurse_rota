@@ -272,7 +272,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveCno: cap("approve_cno", ["admin", "cno"]),
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
-    canApproveLeave: cap("approve_leave", ["admin", "cno", "chief_matron"]),
+    canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),
     canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
     canRequestLeave: cap("request_leave", [
       "admin",

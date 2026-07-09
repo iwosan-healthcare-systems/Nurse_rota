@@ -125,11 +125,14 @@ function LeavePage() {
   // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope.
   const canSeeAll = canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave;
 
-  // Per-row approval gate: chief_matron's leave requires the CNO-level permission.
-  function canApproveRow(row: LeaveRow): boolean {
+  // Per-row approval info: determines both whether the user can approve AND what label to show.
+  function rowApprovalInfo(row: LeaveRow): { canApprove: boolean; blockedLabel: string } {
     const role = row.nurse_id ? (nurseToRole.get(row.nurse_id) ?? null) : null;
-    if (role === "chief_matron") return canApproveMatronLeave;
-    return canApproveLeave;
+    const isMatronLeave = role === "chief_matron";
+    return {
+      canApprove: isMatronLeave ? canApproveMatronLeave : canApproveLeave,
+      blockedLabel: isMatronLeave ? "CNO approval required" : "Chief Matron approval required",
+    };
   }
 
   // True if this user can approve ANY kind of leave (drives column visibility).
@@ -603,7 +606,7 @@ function LeavePage() {
         <LeaveTable
           rows={visibleRows}
           showApproverCols={isAnyLeaveApprover}
-          canApproveRow={canApproveRow}
+          rowApprovalInfo={rowApprovalInfo}
           onReview={reviewLeave}
           nurseToFacility={nurseToFacility}
           showFacility={isCnoOrAdmin}
@@ -629,14 +632,14 @@ function LeavePage() {
 function LeaveTable({
   rows,
   showApproverCols,
-  canApproveRow,
+  rowApprovalInfo,
   onReview,
   nurseToFacility,
   showFacility,
 }: {
   rows: LeaveRow[];
   showApproverCols: boolean;
-  canApproveRow: (row: LeaveRow) => boolean;
+  rowApprovalInfo: (row: LeaveRow) => { canApprove: boolean; blockedLabel: string };
   onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
   nurseToFacility?: Map<string, string | null>;
   showFacility?: boolean;
@@ -679,85 +682,108 @@ function LeaveTable({
                     No requests match the current filter.
                   </td>
                 </tr>
-              ) : null}
-              {rows.map((l) => {
-                const rowApprovable = canApproveRow(l);
-                return (
-                <tr key={l.id} className="border-t hover:bg-muted/30">
-                  {showApproverCols && (
-                    <td className="px-4 py-3">
-                      <p className="font-medium">{l.nurse_name}</p>
-                      {showFacility && l.nurse_id && nurseToFacility?.get(l.nurse_id) && (
-                        <p className="text-[10px] font-semibold text-primary/70 mt-0.5">
-                          {nurseToFacility.get(l.nurse_id)}
-                        </p>
+              ) : (() => {
+                // When showing all facilities, group rows by facility with a divider header.
+                const cols = showApproverCols ? 5 : 3;
+                const renderRow = (l: LeaveRow) => {
+                  const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
+                  return (
+                    <tr key={l.id} className="border-t hover:bg-muted/30">
+                      {showApproverCols && (
+                        <td className="px-4 py-3">
+                          <p className="font-medium">{l.nurse_name}</p>
+                        </td>
                       )}
-                    </td>
-                  )}
-                  <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
-                  <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                    {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
-                      ? fmtDateLeave(l.from_date)
-                      : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
-                  </td>
-                  <td className="px-4 py-3">
-                    <span
-                      className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
-                    >
-                      {l.status}
-                    </span>
-                    {l.review_note && (
-                      <p
-                        className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
-                        title={l.review_note}
-                      >
-                        {l.review_note}
-                      </p>
-                    )}
-                  </td>
-                  {showApproverCols && (
-                    <td className="px-4 py-3">
-                      {!rowApprovable ? (
-                        <p className="text-xs text-muted-foreground text-right italic">
-                          CNO approval required
-                        </p>
-                      ) : l.requested_by === user?.id ? (
-                        <p className="text-xs text-muted-foreground text-right italic">
-                          Own request
-                        </p>
-                      ) : (
-                        <div className="flex gap-1 justify-end">
-                          <button
-                            type="button"
-                            aria-label="Approve leave request"
-                            onClick={() => {
-                              setReviewing({ row: l, status: "Approved" });
-                              setReviewNote("");
-                            }}
-                            disabled={l.status !== "Pending"}
-                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                      <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                      <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                        {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
+                          ? fmtDateLeave(l.from_date)
+                          : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                        >
+                          {l.status}
+                        </span>
+                        {l.review_note && (
+                          <p
+                            className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
+                            title={l.review_note}
                           >
-                            <Check className="h-4 w-4" />
-                          </button>
-                          <button
-                            type="button"
-                            aria-label="Reject leave request"
-                            onClick={() => {
-                              setReviewing({ row: l, status: "Rejected" });
-                              setReviewNote("");
-                            }}
-                            disabled={l.status !== "Pending"}
-                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
+                            {l.review_note}
+                          </p>
+                        )}
+                      </td>
+                      {showApproverCols && (
+                        <td className="px-4 py-3">
+                          {!rowApprovable ? (
+                            <p className="text-xs text-muted-foreground text-right italic">
+                              {blockedLabel}
+                            </p>
+                          ) : l.requested_by === user?.id ? (
+                            <p className="text-xs text-muted-foreground text-right italic">
+                              Own request
+                            </p>
+                          ) : (
+                            <div className="flex gap-1 justify-end">
+                              <button
+                                type="button"
+                                aria-label="Approve leave request"
+                                onClick={() => {
+                                  setReviewing({ row: l, status: "Approved" });
+                                  setReviewNote("");
+                                }}
+                                disabled={l.status !== "Pending"}
+                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                              >
+                                <Check className="h-4 w-4" />
+                              </button>
+                              <button
+                                type="button"
+                                aria-label="Reject leave request"
+                                onClick={() => {
+                                  setReviewing({ row: l, status: "Rejected" });
+                                  setReviewNote("");
+                                }}
+                                disabled={l.status !== "Pending"}
+                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                              >
+                                <X className="h-4 w-4" />
+                              </button>
+                            </div>
+                          )}
+                        </td>
                       )}
-                    </td>
-                  )}
-                </tr>
-                );
-              })}
+                    </tr>
+                  );
+                };
+
+                if (showFacility && nurseToFacility) {
+                  // Group by facility, sort facility names, then render with divider rows.
+                  const grouped = new Map<string, LeaveRow[]>();
+                  for (const l of rows) {
+                    const f = (l.nurse_id && nurseToFacility.get(l.nurse_id)) || "Unknown";
+                    if (!grouped.has(f)) grouped.set(f, []);
+                    grouped.get(f)!.push(l);
+                  }
+                  return [...grouped.entries()]
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .flatMap(([facility, fRows]) => [
+                      <tr key={`hdr-${facility}`}>
+                        <td
+                          colSpan={cols}
+                          className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                        >
+                          {facility}
+                        </td>
+                      </tr>,
+                      ...fRows.map(renderRow),
+                    ]);
+                }
+
+                return rows.map(renderRow);
+              })()}
             </tbody>
           </table>
         </div>
