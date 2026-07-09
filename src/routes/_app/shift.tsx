@@ -184,20 +184,21 @@ function ShiftPage() {
     },
   });
 
-  // Fetch the nurse's job role and facility for matron detection and geo-fencing.
-  const { data: nurseInfo } = useQuery<{ role: string | null; facility: string | null } | null>({
+  // Fetch the nurse's facility for geo-fencing. Matron detection uses the system role directly.
+  const { data: nurseInfo } = useQuery<{ facility: string | null } | null>({
     queryKey: ["nurse-info", nurseId],
     enabled: !!nurseId,
     queryFn: async () => {
       const arr = await api
-        .get<{ role: string | null; facility: string | null }[]>(`/nurses?id=${nurseId}`)
+        .get<{ facility: string | null }[]>(`/nurses?id=${nurseId}`)
         .catch(() => []);
-      return arr[0] ? { role: arr[0].role ?? null, facility: arr[0].facility ?? null } : null;
+      return arr[0] ? { facility: arr[0].facility ?? null } : null;
     },
   });
-  const nurseJobRole = nurseInfo?.role ?? null;
   const nurseFacility = nurseInfo?.facility ?? null;
-  const isMatronNurse = /^matron$/i.test(nurseJobRole ?? "");
+  // Use system role (auth context) rather than nurses.role so matrons with any job-title spelling
+  // (matron, chief_matron, Chief Matron, etc.) are correctly detected.
+  const isMatronNurse = activeRole === "chief_matron";
 
   // Matrons have no auto-generated assignments. Synthesise a Mon–Fri morning shift
   // so they can use the tracker without a published rota entry.

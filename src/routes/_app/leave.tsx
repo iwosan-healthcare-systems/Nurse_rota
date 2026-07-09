@@ -121,10 +121,6 @@ function LeavePage() {
     () => new Map(nurses.map((n) => [n.id, n.facility])),
     [nurses],
   );
-  const nurseToRole = useMemo(
-    () => new Map(nurses.map((n) => [n.id, n.role])),
-    [nurses],
-  );
 
   // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope.
   const canSeeAll = canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave;
