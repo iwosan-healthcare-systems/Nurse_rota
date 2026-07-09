@@ -18,6 +18,7 @@ import {
   Lock,
   Clock,
   Building2,
+  Loader2,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1335,6 +1336,15 @@ function RotaPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
+      {/* Full-page busy overlay — shown while schedule generation / clear / submit is in flight */}
+      {busy && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-3 rounded-xl border bg-card px-8 py-6 shadow-lg">
+            <Loader2 className="h-8 w-8 animate-spin text-primary" />
+            <p className="text-sm font-medium text-muted-foreground">Please wait…</p>
+          </div>
+        </div>
+      )}
       <PageHeader
         title="Rota"
         subtitle={
@@ -1647,12 +1657,12 @@ function RotaPage() {
                     </span>
                   </div>
 
-                  {/* Action buttons — stop propagation so card click doesn't also fire */}
-                  <div className="flex gap-1 flex-wrap" onClick={(e) => e.stopPropagation()}>
+                  {/* Action buttons — each stops propagation individually so clicking a button doesn't also toggle the card */}
+                  <div className="flex gap-1 flex-wrap">
                     {canGenerate && !isLocked && (
                       <button
                         type="button"
-                        onClick={() => openFwDialog(key)}
+                        onClick={(e) => { e.stopPropagation(); openFwDialog(key); }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-primary/10 hover:bg-primary/20 text-primary border-primary/20 disabled:opacity-50"
                       >
@@ -1663,7 +1673,7 @@ function RotaPage() {
                     {status === "draft" && canEdit && (
                       <button
                         type="button"
-                        onClick={() => handleClearFacilityWide(key)}
+                        onClick={(e) => { e.stopPropagation(); handleClearFacilityWide(key); }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
                       >
@@ -1673,7 +1683,7 @@ function RotaPage() {
                     {status === "draft" && canSubmit && (
                       <button
                         type="button"
-                        onClick={() => handleSubmitFacilityWide(key)}
+                        onClick={(e) => { e.stopPropagation(); handleSubmitFacilityWide(key); }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
                       >
@@ -1835,24 +1845,7 @@ function RotaPage() {
                   if (selectedWard && isFacilityWide(n.role)) {
                     return [];
                   }
-                  const isNonWard = isFacilityWide(n.role);
-                  const prevIsNonWard = idx > 0 && isFacilityWide(displayList[idx - 1].role);
-                  // Divider appears once — at the first facility-wide nurse in the sorted list.
-                  const showDivider =
-                    !!effectiveFacility && !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
                   const rows = [];
-                  if (showDivider) {
-                    rows.push(
-                      <tr key={`divider-fw-${n.id}`} className="border-t-2 border-border/60">
-                        <td
-                          colSpan={3 + days.length}
-                          className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/40"
-                        >
-                          Facility-wide staff
-                        </td>
-                      </tr>,
-                    );
-                  }
                   rows.push(
                   <tr key={n.id} className="border-t hover:bg-muted/30">
                     <td className="px-3 py-2 sticky left-0 bg-card z-10">
