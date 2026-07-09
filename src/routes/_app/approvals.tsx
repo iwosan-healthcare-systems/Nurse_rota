@@ -992,16 +992,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
                         <div className="flex-1 h-px bg-border ml-1" />
                       </div>
 
-                      <div className="space-y-3">
-                        {/* Coverage Nurses — full width */}
-                        {coverageWins.map((win) => renderCard(win))}
-
-                        {/* Ward cards — 2-col grid */}
-                        {wardWins.length > 0 && (
-                          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                            {wardWins.map((win) => renderCard(win))}
-                          </div>
-                        )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                        {[...coverageWins, ...wardWins].map((win) => renderCard(win))}
                       </div>
                     </div>
                   );
