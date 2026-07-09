@@ -1104,19 +1104,81 @@ function RotaPage() {
     if (
       !confirm(
         `Clear draft shifts for ${wardLabel} in this 28-day window?\n\n` +
-          "Shifts that have already been submitted for approval, approved, or published will NOT be affected.",
+          (selectedWard
+            ? "Matrons, Coverage Nurses, Porters, and Nurse Interns will also be cleared if no other ward has been generated.\n\n"
+            : "") +
+          "Shifts already submitted for approval, approved, or published will NOT be affected.",
       )
     )
       return;
     setBusy(true);
     try {
-      // Delete draft assignments only for the currently filtered nurses (scoped to selectedWard).
-      // Only status = 'draft' is removed — submitted, approved and published rows are untouched.
-      const allIds = filteredNurses.map((n) => n.id);
+      const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
+
+      // Ward-specific nurses (excludes facility-wide roles)
+      const wardNurseIds = selectedWard
+        ? facilityNurseList
+            .filter(
+              (n) =>
+                !isGlobalHead(n.role) &&
+                !isMatron(n.role) &&
+                !isPorterType(n.role) &&
+                !isInternType(n.role) &&
+                !isNADayType(n.role) &&
+                parseWards(n.ward)[0] === selectedWard,
+            )
+            .map((n) => n.id)
+        : filteredNurses.map((n) => n.id);
+
+      // NA-Day assigned to this ward specifically (always cleared with the ward)
+      const wardNADayIds = selectedWard
+        ? facilityNurseList
+            .filter((n) => isNADayType(n.role) && parseWards(n.ward)[0] === selectedWard)
+            .map((n) => n.id)
+        : [];
+
+      // Facility-wide staff (matrons, coverage nurses, porters, interns) are cleared only
+      // when no other ward has draft assignments — they were generated on the first ward run.
+      let facilityWideIds: string[] = [];
+      if (selectedWard) {
+        const otherWardNurseIds = facilityNurseList
+          .filter(
+            (n) =>
+              !isGlobalHead(n.role) &&
+              !isMatron(n.role) &&
+              !isPorterType(n.role) &&
+              !isInternType(n.role) &&
+              !isNADayType(n.role) &&
+              parseWards(n.ward)[0] !== selectedWard,
+          )
+          .map((n) => n.id);
+        let otherWardHasAssignments = false;
+        if (otherWardNurseIds.length > 0) {
+          const check = await api
+            .get<{ id: string }[]>(
+              `/shift-assignments?nurse_ids=${otherWardNurseIds.slice(0, 200).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&limit=1`,
+            )
+            .catch(() => []);
+          otherWardHasAssignments = check.length > 0;
+        }
+        if (!otherWardHasAssignments) {
+          facilityWideIds = facilityNurseList
+            .filter(
+              (n) =>
+                isGlobalHead(n.role) ||
+                isMatron(n.role) ||
+                isPorterType(n.role) ||
+                isInternType(n.role),
+            )
+            .map((n) => n.id);
+        }
+      }
+
+      const allIdsToClear = [...new Set([...wardNurseIds, ...wardNADayIds, ...facilityWideIds])];
       const BATCH = 200;
-      for (let i = 0; i < allIds.length; i += BATCH) {
+      for (let i = 0; i < allIdsToClear.length; i += BATCH) {
         await api.del(
-          `/shift-assignments?nurse_ids=${allIds.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
+          `/shift-assignments?nurse_ids=${allIdsToClear.slice(i, i + BATCH).join(",")}&from=${ymd(startDate)}&to=${ymd(endDate)}&status=draft`,
         );
       }
       setExtraShifts([]);
