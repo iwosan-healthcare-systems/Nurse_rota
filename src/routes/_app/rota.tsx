@@ -17,6 +17,7 @@ import {
   X,
   Lock,
   Clock,
+  Building2,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -578,16 +579,46 @@ function RotaPage() {
 
   const isWindowLocked = windowLockStatus !== "draft";
 
+  // Per-ward dominant status — used by the ward chip strip.
+  // Only ward-specific nurses contribute (global heads, matrons, porters have ward = null
+  // and would otherwise pollute every ward's status reading).
+  const wardStatusMap = useMemo(() => {
+    const nurseWardMap = new Map<string, string>();
+    for (const n of nurses) {
+      if (effectiveFacility && n.facility !== effectiveFacility) continue;
+      const primaryWard = n.ward?.split("|")[0];
+      if (primaryWard && !isGlobalHead(n.role) && !isMatron(n.role) && !isPorterType(n.role)) {
+        nurseWardMap.set(n.id, primaryWard);
+      }
+    }
+    const wardStatuses = new Map<string, string[]>();
+    for (const a of assignments) {
+      const ward = nurseWardMap.get(a.nurse_id);
+      if (ward) {
+        if (!wardStatuses.has(ward)) wardStatuses.set(ward, []);
+        wardStatuses.get(ward)!.push(a.status);
+      }
+    }
+    const map = new Map<string, string>();
+    for (const w of facilityFilteredWards) {
+      const statuses = wardStatuses.get(w.name) ?? [];
+      if (statuses.length === 0) map.set(w.name, "none");
+      else if (statuses.includes("published")) map.set(w.name, "published");
+      else if (statuses.includes("approved_cno")) map.set(w.name, "approved_cno");
+      else if (statuses.includes("approved_chief")) map.set(w.name, "approved_chief");
+      else if (statuses.includes("submitted")) map.set(w.name, "submitted");
+      else map.set(w.name, "draft");
+    }
+    return map;
+  }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
+
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
-    // Always default to the start of the period currently being viewed.
-    // Admins generate ward-by-ward within the same period, so jumping to the next
-    // period automatically (when assignments exist) was wrong — it forced them to
-    // manually correct the date on every subsequent ward run.
+    // Facility and ward are pre-filled from the chip selections; only date is user-editable here.
     setGenForm({
       startDate: ymd(startDate),
-      facility: lockedFacility ?? "",
-      ward: "",
+      facility: effectiveFacility,
+      ward: selectedWard,
       rotateInterns: true,
     });
     setGenOpen(true);
@@ -1027,18 +1058,19 @@ function RotaPage() {
       toast.error("Date range not yet loaded — please wait a moment and try again.");
       return;
     }
+    const wardLabel = selectedWard || "all wards";
     if (
       !confirm(
-        "Clear ALL draft shifts in this 28-day window for every ward and job role?\n\n" +
+        `Clear draft shifts for ${wardLabel} in this 28-day window?\n\n` +
           "Shifts that have already been submitted for approval, approved, or published will NOT be affected.",
       )
     )
       return;
     setBusy(true);
     try {
-      // Delete every draft assignment in the period across all nurses / roles / wards.
+      // Delete draft assignments only for the currently filtered nurses (scoped to selectedWard).
       // Only status = 'draft' is removed — submitted, approved and published rows are untouched.
-      const allIds = nurses.map((n) => n.id);
+      const allIds = filteredNurses.map((n) => n.id);
       const BATCH = 200;
       for (let i = 0; i < allIds.length; i += BATCH) {
         await api.del(
@@ -1046,7 +1078,7 @@ function RotaPage() {
         );
       }
       setExtraShifts([]);
-      toast.success("All draft shifts cleared across all wards and roles");
+      toast.success(`Draft shifts cleared for ${wardLabel}`);
       await logAudit("Cleared all draft shifts", `${ymd(startDate)} → ${ymd(endDate)}`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
@@ -1257,48 +1289,13 @@ function RotaPage() {
           </div>
         )}
 
-        {/* Facility filter — locked for non-admin nurses */}
-        {lockedFacility ? (
-          <span className="h-9 px-3 rounded-md border bg-muted text-sm flex items-center font-medium text-muted-foreground">
-            {lockedFacility}
-          </span>
-        ) : (
-          <select
-            title="Facility"
-            value={selectedFacility}
-            onChange={(e) => {
-              setSelectedFacility(e.target.value);
-              setSelectedWard("");
-              setSelectedRole("");
-            }}
-            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">All Facilities</option>
-            {FACILITIES.map((f) => (
-              <option key={f}>{f}</option>
-            ))}
-          </select>
-        )}
+        {/* Facility and ward filters moved to card strips below the toolbar */}
 
-        {/* Ward filter — locked for nurse role */}
-        {lockedWard ? (
+        {/* Ward filter — locked for nurse role; otherwise handled by ward chips below */}
+        {lockedWard && (
           <span className="h-9 px-3 rounded-md border bg-muted text-sm flex items-center font-medium text-muted-foreground">
             {lockedWard}
           </span>
-        ) : (
-          <select
-            title="Ward"
-            value={selectedWard}
-            onChange={(e) => setSelectedWard(e.target.value)}
-            className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">All Wards</option>
-            {facilityFilteredWards.map((w) => (
-              <option key={w.name} value={w.name}>
-                {w.name}
-              </option>
-            ))}
-          </select>
         )}
 
         {/* Role filter — hidden for nurse role */}
@@ -1344,8 +1341,8 @@ function RotaPage() {
 
         <div className="flex-1" />
 
-        {/* Actions — generate is always visible; lock indicator and edit actions depend on ward status */}
-        {canGenerate && (
+        {/* Auto-generate — only available once facility + ward chips are both selected */}
+        {canGenerate && effectiveFacility && selectedWard && (
           <button
             type="button"
             onClick={openGenDialog}
@@ -1355,7 +1352,7 @@ function RotaPage() {
             <Wand2 className="h-4 w-4" /> Auto-generate
           </button>
         )}
-        {isWindowLocked ? (
+        {selectedWard && isWindowLocked ? (
           <span
             className={cn(
               "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
@@ -1378,7 +1375,7 @@ function RotaPage() {
             {windowLockStatus === "approved_chief" && "Approved (Chief Matron) — awaiting CNO"}
             {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
           </span>
-        ) : (
+        ) : selectedWard && !isWindowLocked ? (
           <>
             {canEdit && (
               <button
@@ -1401,8 +1398,113 @@ function RotaPage() {
               </button>
             )}
           </>
-        )}
+        ) : null}
       </div>
+
+      {/* Facility card strip — admin/CNO/HR see clickable cards; locked-facility users see a static selected card */}
+      {!isNurseTier && !lockedWard && (
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          {canFilterFacility ? (
+            <>
+              <button
+                type="button"
+                onClick={() => { setSelectedFacility(""); setSelectedWard(""); setSelectedRole(""); }}
+                className={cn(
+                  "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-xl border text-sm font-medium transition-all",
+                  effectiveFacility === ""
+                    ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                    : "bg-card text-muted-foreground border hover:bg-muted",
+                )}
+              >
+                All facilities
+              </button>
+              {FACILITIES.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => { setSelectedFacility(f); setSelectedWard(""); setSelectedRole(""); }}
+                  className={cn(
+                    "shrink-0 inline-flex items-center gap-2 h-9 px-4 rounded-xl border text-sm font-medium transition-all",
+                    effectiveFacility === f
+                      ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                      : "bg-card text-muted-foreground border hover:bg-muted",
+                  )}
+                >
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  {f}
+                </button>
+              ))}
+            </>
+          ) : lockedFacility ? (
+            <span className="shrink-0 inline-flex items-center gap-2 h-9 px-4 rounded-xl border text-sm font-medium bg-primary/10 text-primary border-primary/30">
+              <Building2 className="h-3.5 w-3.5 shrink-0" />
+              {lockedFacility}
+            </span>
+          ) : null}
+        </div>
+      )}
+
+      {/* Ward chip strip — visible once a specific facility is selected */}
+      {!lockedWard && !isNurseTier && effectiveFacility && facilityFilteredWards.length > 0 && (
+        <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-thin">
+          <button
+            type="button"
+            onClick={() => setSelectedWard("")}
+            className={cn(
+              "shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-xs font-medium transition-all",
+              selectedWard === ""
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card text-muted-foreground border hover:bg-muted",
+            )}
+          >
+            All wards
+          </button>
+          {facilityFilteredWards.map((w) => {
+            const status = wardStatusMap.get(w.name) ?? "none";
+            const isSelected = selectedWard === w.name;
+            const chipCls: Record<string, string> = {
+              none: "border-border bg-muted/50 text-muted-foreground",
+              draft: "border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300",
+              submitted: "border-sky-200 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:border-sky-700 dark:text-sky-300",
+              approved_chief: "border-blue-200 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-300",
+              approved_cno: "border-violet-200 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-300",
+              published: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-300",
+            };
+            const dotCls: Record<string, string> = {
+              none: "bg-muted-foreground/30",
+              draft: "bg-amber-400",
+              submitted: "bg-sky-400",
+              approved_chief: "bg-blue-400",
+              approved_cno: "bg-violet-400",
+              published: "bg-emerald-500",
+            };
+            const statusLabel: Record<string, string> = {
+              none: "No draft",
+              draft: "Draft",
+              submitted: "Submitted",
+              approved_chief: "Approved",
+              approved_cno: "CNO approved",
+              published: "Published",
+            };
+            return (
+              <button
+                key={w.name}
+                type="button"
+                onClick={() => setSelectedWard(isSelected ? "" : w.name)}
+                className={cn(
+                  "shrink-0 inline-flex items-center gap-1.5 h-8 px-3 rounded-full border text-xs font-medium transition-all",
+                  chipCls[status] ?? chipCls.none,
+                  isSelected && "ring-2 ring-offset-1 ring-primary shadow-sm",
+                )}
+              >
+                <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
+                {w.name}
+                <span className="opacity-60">{statusLabel[status] ?? ""}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {extraShifts.length > 0 && (
         <div className="mb-3 flex items-start gap-2.5 rounded-lg border border-orange-300 bg-orange-50 px-4 py-3 text-sm dark:border-orange-700 dark:bg-orange-950/30">
@@ -1731,6 +1833,14 @@ function RotaPage() {
           </DialogHeader>
 
           <div className="space-y-4 py-2">
+            {/* Facility + ward summary — pre-selected from chips, not editable here */}
+            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-muted/60 border text-sm">
+              <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="font-medium">{genForm.facility}</span>
+              <span className="text-muted-foreground">·</span>
+              <span>{genForm.ward}</span>
+            </div>
+
             {/* Start date */}
             <div>
               <label className="block text-sm font-medium mb-1.5">Start date</label>
@@ -1744,59 +1854,6 @@ function RotaPage() {
               <p className="mt-1 text-xs text-muted-foreground">
                 Schedule runs {DAYS} days from this date.
               </p>
-            </div>
-
-            {/* Facility */}
-            <div>
-              <label className="block text-sm font-medium mb-1.5">Facility</label>
-              {lockedFacility ? (
-                <p className="h-9 flex items-center px-3 rounded-md border bg-muted text-sm font-medium text-muted-foreground">
-                  {lockedFacility}
-                </p>
-              ) : (
-                <select
-                  title="Facility"
-                  value={genForm.facility}
-                  onChange={(e) =>
-                    setGenForm((f) => ({ ...f, facility: e.target.value, ward: "" }))
-                  }
-                  className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
-                >
-                  <option value="">Select facility…</option>
-                  {FACILITIES.map((f) => (
-                    <option key={f}>{f}</option>
-                  ))}
-                </select>
-              )}
-            </div>
-
-            {/* Ward */}
-            <div>
-              <label className="block text-sm font-medium mb-1.5">
-                Ward <span className="text-destructive">*</span>
-              </label>
-              <select
-                title="Ward"
-                value={genForm.ward}
-                onChange={(e) => setGenForm((f) => ({ ...f, ward: e.target.value }))}
-                disabled={!genForm.facility || isFetchingScheduledWards}
-                className="w-full h-9 px-2 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
-              >
-                <option value="">
-                  {isFetchingScheduledWards ? "Loading wards…" : "Select ward…"}
-                </option>
-                {availableGenWards.map((w) =>
-                  draftScheduledWards.includes(w.name) ? (
-                    <option key={w.name} value={w.name} disabled>
-                      {w.name} (schedule exists)
-                    </option>
-                  ) : (
-                    <option key={w.name} value={w.name}>
-                      {w.name}
-                    </option>
-                  ),
-                )}
-              </select>
             </div>
 
             {/* Rotate interns */}
@@ -1878,13 +1935,7 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={
-                !genForm.facility ||
-                !genForm.ward ||
-                !genForm.startDate ||
-                busy ||
-                isFetchingScheduledWards
-              }
+              disabled={!genForm.startDate || busy}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />
