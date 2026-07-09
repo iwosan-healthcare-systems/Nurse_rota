@@ -18,7 +18,6 @@ import {
   Lock,
   Clock,
   Building2,
-  Loader2,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -110,7 +109,7 @@ type GenForm = {
   ward: string;
 };
 
-type FacilityWideGroup = 'matron' | 'head' | 'porter' | 'intern';
+type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
 
 // Collapse per-day violations into a per-ward/shift/role worst-case summary.
 function summariseViolations(violations: SafetyViolation[]) {
@@ -199,7 +198,15 @@ function RotaPage() {
   const [dragging, setDragging] = useState<Assignment | null>(null);
 
   // Shift picker popover — opened by clicking a draft cell
-  type ShiftPicker = { nurseId: string; dateStr: string; ward: string | null; existingId: string | null; x: number; y: number; above: boolean };
+  type ShiftPicker = {
+    nurseId: string;
+    dateStr: string;
+    ward: string | null;
+    existingId: string | null;
+    x: number;
+    y: number;
+    above: boolean;
+  };
   const [shiftPicker, setShiftPicker] = useState<ShiftPicker | null>(null);
 
   // ── Auto-detect the active schedule window start ──────────────────────────
@@ -226,8 +233,7 @@ function RotaPage() {
       const facilityIds = effectiveFacility
         ? cachedNurses.filter((n) => n.facility === effectiveFacility).map((n) => n.id)
         : [];
-      const nurseFilter =
-        facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
+      const nurseFilter = facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
 
       // Run both window checks in parallel: current (last 27 days) and future (tomorrow+).
       // If a current window is found, we use it; otherwise fall back to the future one.
@@ -237,14 +243,14 @@ function RotaPage() {
       tomorrow.setDate(tomorrow.getDate() + 1);
       const [current, future] = await Promise.all([
         api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`)
           .catch(() => [] as { shift_date: string }[]),
         api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`)
           .catch(() => [] as { shift_date: string }[]),
       ]);
       if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
@@ -366,7 +372,8 @@ function RotaPage() {
   const locumCellSet = useMemo(() => {
     const s = new Set<string>();
     locumFilled.forEach((lr) => {
-      if (lr.accepted_by_nurse_id) s.add(`${lr.accepted_by_nurse_id}|${lr.shift_date.slice(0, 10)}`);
+      if (lr.accepted_by_nurse_id)
+        s.add(`${lr.accepted_by_nurse_id}|${lr.shift_date.slice(0, 10)}`);
     });
     return s;
   }, [locumFilled]);
@@ -392,7 +399,9 @@ function RotaPage() {
   // Used to lock the rotation checkbox when interns are already in the approval pipeline.
   const internsAreScheduled = useMemo(() => {
     const facilityInternIds = new Set(
-      nurses.filter((n) => isInternType(n.role) && n.facility === effectiveFacility).map((n) => n.id),
+      nurses
+        .filter((n) => isInternType(n.role) && n.facility === effectiveFacility)
+        .map((n) => n.id),
     );
     return assignments.some((a) => facilityInternIds.has(a.nurse_id) && a.status !== "draft");
   }, [assignments, nurses, effectiveFacility]);
@@ -610,7 +619,13 @@ function RotaPage() {
     for (const n of nurses) {
       if (effectiveFacility && n.facility !== effectiveFacility) continue;
       const primaryWard = n.ward?.split("|")[0];
-      if (primaryWard && !isGlobalHead(n.role) && !isMatron(n.role) && !isPorterType(n.role) && !isInternType(n.role)) {
+      if (
+        primaryWard &&
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isPorterType(n.role) &&
+        !isInternType(n.role)
+      ) {
         nurseWardMap.set(n.id, primaryWard);
       }
     }
@@ -638,7 +653,9 @@ function RotaPage() {
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
   const facilityWideCardGroups = useMemo(() => {
-    const scoped = effectiveFacility ? nurses.filter((n) => n.facility === effectiveFacility) : nurses;
+    const scoped = effectiveFacility
+      ? nurses.filter((n) => n.facility === effectiveFacility)
+      : nurses;
     const groups: { key: FacilityWideGroup; label: string; count: number }[] = [];
     const matronCount = scoped.filter((n) => isMatron(n.role)).length;
     const headCount = scoped.filter((n) => isGlobalHead(n.role)).length;
@@ -736,9 +753,9 @@ function RotaPage() {
       .filter(Boolean);
     if (facilityIds.length > 0) {
       const pending = await api
-        .get<{ nurse_name: string; from_date: string; to_date: string }[]>(
-          `/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`,
-        )
+        .get<
+          { nurse_name: string; from_date: string; to_date: string }[]
+        >(`/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
         .catch(() => []);
       if (pending.length > 0) {
         setGenPendingLeaves(
@@ -773,9 +790,9 @@ function RotaPage() {
     // Block regeneration if this ward's schedule is already in the approval pipeline.
     const wardIds = wardNurses.map((n) => n.id);
     const inApprovalRows = await api
-      .get<{ status: string }[]>(
-        `/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`,
-      )
+      .get<
+        { status: string }[]
+      >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -793,9 +810,9 @@ function RotaPage() {
         const dayBefore = new Date(genStart);
         dayBefore.setDate(dayBefore.getDate() - 1);
         const epochRows = await api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
           .catch(() => []);
         if (epochRows[0]?.shift_date) {
           const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
@@ -815,9 +832,9 @@ function RotaPage() {
         const prevFrom = new Date(genStart);
         prevFrom.setDate(prevFrom.getDate() - 5);
         previousAssignments = await api
-          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
-          )
+          .get<
+            { nurse_id: string; shift_date: string; shift: ShiftCode }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`)
           .catch(() => []);
       }
     }
@@ -871,9 +888,9 @@ function RotaPage() {
 
       const publishedKeys = new Set<string>();
       const pubRows = await api
-        .get<{ nurse_id: string; shift_date: string }[]>(
-          `/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`,
-        )
+        .get<
+          { nurse_id: string; shift_date: string }[]
+        >(`/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
         .catch(() => []);
       pubRows.forEach((r) => publishedKeys.add(`${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
 
@@ -903,7 +920,10 @@ function RotaPage() {
         // Also update the display's anchor key — it's keyed by effectiveFacility (the toolbar
         // filter), which can differ from genForm.facility when the admin has no facility selected.
         // Without this the anchor stays stale and the prefetched data lands in the wrong cache key.
-        qc.setQueryData(["schedule-window-start", activeRole, effectiveFacility], genForm.startDate);
+        qc.setQueryData(
+          ["schedule-window-start", activeRole, effectiveFacility],
+          genForm.startDate,
+        );
       }
 
       // 2. Force-refresh assignments and wait for the data to land before lifting
@@ -955,7 +975,10 @@ function RotaPage() {
       }
       setExtraShifts([]);
       toast.success(`Draft shifts cleared for ${selectedWard}`);
-      await logAudit("Cleared draft shifts", `${selectedWard} · ${ymd(startDate)} → ${ymd(endDate)}`);
+      await logAudit(
+        "Cleared draft shifts",
+        `${selectedWard} · ${ymd(startDate)} → ${ymd(endDate)}`,
+      );
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
       window.location.reload();
@@ -1025,9 +1048,9 @@ function RotaPage() {
     }
 
     const inApprovalRows = await api
-      .get<{ status: string }[]>(
-        `/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`,
-      )
+      .get<
+        { status: string }[]
+      >(`/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -1044,9 +1067,9 @@ function RotaPage() {
       const dayBefore = new Date(genStart);
       dayBefore.setDate(dayBefore.getDate() - 1);
       const epochRows = await api
-        .get<{ shift_date: string }[]>(
-          `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
-        )
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
         .catch(() => []);
       if (epochRows[0]?.shift_date) {
         const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
@@ -1063,14 +1086,19 @@ function RotaPage() {
       const prevFrom = new Date(genStart);
       prevFrom.setDate(prevFrom.getDate() - 5);
       previousAssignments = await api
-        .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
-          `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
-        )
+        .get<
+          { nurse_id: string; shift_date: string; shift: ShiftCode }[]
+        >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`)
         .catch(() => []);
     }
 
     // Intern rotation
-    if (fwRoleGroup === "intern" && fwRotateInterns && targetNurses.length > 0 && !internsAreScheduled) {
+    if (
+      fwRoleGroup === "intern" &&
+      fwRotateInterns &&
+      targetNurses.length > 0 &&
+      !internsAreScheduled
+    ) {
       const wardNames = freshWards.map((w) => w.name);
       if (wardNames.length > 0) {
         const sorted = [...targetNurses].sort((a, b) => a.name.localeCompare(b.name));
@@ -1081,7 +1109,9 @@ function RotaPage() {
           ward: wardNames[(nextBase + idx) % wardNames.length],
         }));
         try {
-          await Promise.all(targetNurses.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })));
+          await Promise.all(
+            targetNurses.map((n) => api.patch(`/nurses/${n.id}`, { ward: n.ward })),
+          );
         } catch (e: unknown) {
           toast.error(e instanceof Error ? e.message : "Failed to rotate intern ward assignments");
           return;
@@ -1092,7 +1122,11 @@ function RotaPage() {
     setFwDialogOpen(false);
     setBusy(true);
     try {
-      const { assignments: draft, violations, extraShifts: genExtra } = generateSchedule({
+      const {
+        assignments: draft,
+        violations,
+        extraShifts: genExtra,
+      } = generateSchedule({
         nurses: targetNurses,
         wards: freshWards.filter((w) => !w.facility || w.facility === effectiveFacility),
         leave,
@@ -1123,11 +1157,13 @@ function RotaPage() {
       }
 
       const pubRows = await api
-        .get<{ nurse_id: string; shift_date: string }[]>(
-          `/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`,
-        )
+        .get<
+          { nurse_id: string; shift_date: string }[]
+        >(`/shift-assignments?from=${ymd(genStart)}&to=${ymd(genEnd)}&status=published`)
         .catch(() => []);
-      const publishedKeys = new Set(pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
+      const publishedKeys = new Set(
+        pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`),
+      );
 
       const rows = draft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
@@ -1177,9 +1213,12 @@ function RotaPage() {
     try {
       const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
       const getIds = (k: FacilityWideGroup) => {
-        if (k === "matron") return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
-        if (k === "head") return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
-        if (k === "porter") return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
+        if (k === "matron")
+          return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+        if (k === "head")
+          return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+        if (k === "porter")
+          return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
         return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
       };
       const ids = getIds(key);
@@ -1209,9 +1248,12 @@ function RotaPage() {
     try {
       const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
       const getIds = (k: FacilityWideGroup) => {
-        if (k === "matron") return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
-        if (k === "head") return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
-        if (k === "porter") return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
+        if (k === "matron")
+          return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+        if (k === "head")
+          return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+        if (k === "porter")
+          return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
         return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
       };
       const ids = getIds(key);
@@ -1323,7 +1365,9 @@ function RotaPage() {
         api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
       ]);
       const dateNote =
-        a.shift_date.slice(0, 10) === b.shift_date.slice(0, 10) ? a.shift_date.slice(0, 10) : `${a.shift_date.slice(0, 10)} ↔ ${b.shift_date.slice(0, 10)}`;
+        a.shift_date.slice(0, 10) === b.shift_date.slice(0, 10)
+          ? a.shift_date.slice(0, 10)
+          : `${a.shift_date.slice(0, 10)} ↔ ${b.shift_date.slice(0, 10)}`;
       await logAudit("Swapped shifts", dateNote);
     } catch (e: unknown) {
       qc.invalidateQueries({ queryKey: ["assignments"] }); // rollback
@@ -1336,13 +1380,19 @@ function RotaPage() {
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div>
-      {/* Full-page busy overlay — shown while schedule generation / clear / submit is in flight */}
+      {/* Slim indeterminate bar — shown while generation / clear / submit is in flight */}
       {busy && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/60 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-3 rounded-xl border bg-card px-8 py-6 shadow-lg">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="text-sm font-medium text-muted-foreground">Please wait…</p>
-          </div>
+        <div
+          className="fixed inset-x-0 top-0 z-60 h-0.75 overflow-hidden bg-primary/15"
+          aria-hidden
+        >
+          <div
+            className="absolute inset-y-0 w-2/5 rounded-full bg-primary"
+            style={{
+              boxShadow: "0 0 10px 2px hsl(var(--primary) / 0.45)",
+              animation: "busy-bar 1.4s ease-in-out infinite",
+            }}
+          />
         </div>
       )}
       <PageHeader
@@ -1434,7 +1484,6 @@ function RotaPage() {
             )}
           </div>
         )}
-
       </div>
 
       {/* Facility card strip — admin/CNO/HR see clickable cards; locked-facility users see a static selected card */}
@@ -1444,7 +1493,11 @@ function RotaPage() {
             <>
               <button
                 type="button"
-                onClick={() => { setSelectedFacility(""); setSelectedWard(""); setSelectedRole(""); }}
+                onClick={() => {
+                  setSelectedFacility("");
+                  setSelectedWard("");
+                  setSelectedRole("");
+                }}
                 className={cn(
                   "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-xl border text-sm font-medium transition-all",
                   effectiveFacility === ""
@@ -1458,7 +1511,11 @@ function RotaPage() {
                 <button
                   key={f}
                   type="button"
-                  onClick={() => { setSelectedFacility(f); setSelectedWard(""); setSelectedRole(""); }}
+                  onClick={() => {
+                    setSelectedFacility(f);
+                    setSelectedWard("");
+                    setSelectedRole("");
+                  }}
                   className={cn(
                     "shrink-0 inline-flex items-center gap-2 h-9 px-4 rounded-xl border text-sm font-medium transition-all",
                     effectiveFacility === f
@@ -1483,64 +1540,79 @@ function RotaPage() {
       {/* Ward chip strip — visible once a specific facility is selected */}
       {!lockedWard && !isNurseTier && effectiveFacility && facilityFilteredWards.length > 0 && (
         <div className="border-t pt-3 pb-1">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Wards</p>
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+            Wards
+          </p>
           <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-thin">
-          <button
-            type="button"
-            onClick={() => { setSelectedWard(""); setSelectedFacilityWide(""); }}
-            className={cn(
-              "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
-              selectedWard === "" && selectedFacilityWide === ""
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card text-muted-foreground border hover:bg-muted",
-            )}
-          >
-            All wards
-          </button>
-          {facilityFilteredWards.map((w) => {
-            const status = wardStatusMap.get(w.name) ?? "none";
-            const isSelected = selectedWard === w.name;
-            const chipCls: Record<string, string> = {
-              none: "border-border bg-muted/50 text-muted-foreground",
-              draft: "border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300",
-              submitted: "border-sky-200 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:border-sky-700 dark:text-sky-300",
-              approved_chief: "border-blue-200 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-300",
-              approved_cno: "border-violet-200 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-300",
-              published: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-300",
-            };
-            const dotCls: Record<string, string> = {
-              none: "bg-muted-foreground/30",
-              draft: "bg-amber-400",
-              submitted: "bg-sky-400",
-              approved_chief: "bg-blue-400",
-              approved_cno: "bg-violet-400",
-              published: "bg-emerald-500",
-            };
-            const statusLabel: Record<string, string> = {
-              none: "No draft",
-              draft: "Draft",
-              submitted: "Submitted",
-              approved_chief: "Chief ✓",
-              approved_cno: "CNO ✓",
-              published: "Published",
-            };
-            return (
-              <button
-                key={w.name}
-                type="button"
-                onClick={() => { setSelectedWard(isSelected ? "" : w.name); setSelectedFacilityWide(""); }}
-                className={cn(
-                  "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
-                  chipCls[status] ?? chipCls.none,
-                  isSelected && "ring-2 ring-offset-1 ring-primary shadow-sm",
-                )}
-              >
-                <span className={cn("h-2 w-2 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
-                {w.name}
-                <span className="opacity-60 text-[11px]">{statusLabel[status] ?? ""}</span>
-              </button>
-            );
-          })}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedWard("");
+                setSelectedFacilityWide("");
+              }}
+              className={cn(
+                "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
+                selectedWard === "" && selectedFacilityWide === ""
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card text-muted-foreground border hover:bg-muted",
+              )}
+            >
+              All wards
+            </button>
+            {facilityFilteredWards.map((w) => {
+              const status = wardStatusMap.get(w.name) ?? "none";
+              const isSelected = selectedWard === w.name;
+              const chipCls: Record<string, string> = {
+                none: "border-border bg-muted/50 text-muted-foreground",
+                draft:
+                  "border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300",
+                submitted:
+                  "border-sky-200 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:border-sky-700 dark:text-sky-300",
+                approved_chief:
+                  "border-blue-200 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-300",
+                approved_cno:
+                  "border-violet-200 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-300",
+                published:
+                  "border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-300",
+              };
+              const dotCls: Record<string, string> = {
+                none: "bg-muted-foreground/30",
+                draft: "bg-amber-400",
+                submitted: "bg-sky-400",
+                approved_chief: "bg-blue-400",
+                approved_cno: "bg-violet-400",
+                published: "bg-emerald-500",
+              };
+              const statusLabel: Record<string, string> = {
+                none: "No draft",
+                draft: "Draft",
+                submitted: "Submitted",
+                approved_chief: "Chief ✓",
+                approved_cno: "CNO ✓",
+                published: "Published",
+              };
+              return (
+                <button
+                  key={w.name}
+                  type="button"
+                  onClick={() => {
+                    setSelectedWard(isSelected ? "" : w.name);
+                    setSelectedFacilityWide("");
+                  }}
+                  className={cn(
+                    "shrink-0 inline-flex items-center gap-1.5 h-9 px-4 rounded-full border text-xs font-medium transition-all",
+                    chipCls[status] ?? chipCls.none,
+                    isSelected && "ring-2 ring-offset-1 ring-primary shadow-sm",
+                  )}
+                >
+                  <span
+                    className={cn("h-2 w-2 rounded-full shrink-0", dotCls[status] ?? dotCls.none)}
+                  />
+                  {w.name}
+                  <span className="opacity-60 text-[11px]">{statusLabel[status] ?? ""}</span>
+                </button>
+              );
+            })}
           </div>
           {selectedWard && (
             <div className="flex items-center gap-2 mt-3 flex-wrap">
@@ -1606,7 +1678,12 @@ function RotaPage() {
             {facilityWideCardGroups.map(({ key, label, count }) => {
               const status = facilityWideStatusMap[key];
               const isSelected = selectedFacilityWide === key;
-              const isLocked = ["submitted", "approved_chief", "approved_cno", "published"].includes(status);
+              const isLocked = [
+                "submitted",
+                "approved_chief",
+                "approved_cno",
+                "published",
+              ].includes(status);
               const chipCls: Record<string, string> = {
                 none: "border-border",
                 draft: "border-amber-200 dark:border-amber-700",
@@ -1641,9 +1718,7 @@ function RotaPage() {
                   className={cn(
                     "rounded-xl border p-3 cursor-pointer transition-all select-none",
                     chipCls[status] ?? chipCls.none,
-                    isSelected
-                      ? "ring-2 ring-primary bg-primary/5"
-                      : "bg-card hover:bg-muted/40",
+                    isSelected ? "ring-2 ring-primary bg-primary/5" : "bg-card hover:bg-muted/40",
                   )}
                 >
                   <div className="flex items-start justify-between gap-1 mb-2">
@@ -1652,28 +1727,38 @@ function RotaPage() {
                       <p className="text-[11px] text-muted-foreground">{count} staff</p>
                     </div>
                     <span className="inline-flex items-center gap-1 text-[10px] font-medium shrink-0">
-                      <span className={cn("h-1.5 w-1.5 rounded-full shrink-0", dotCls[status] ?? dotCls.none)} />
+                      <span
+                        className={cn(
+                          "h-1.5 w-1.5 rounded-full shrink-0",
+                          dotCls[status] ?? dotCls.none,
+                        )}
+                      />
                       {statusLabel[status] ?? ""}
                     </span>
                   </div>
 
                   {/* Action buttons — each stops propagation individually so clicking a button doesn't also toggle the card */}
                   <div className="flex gap-1 flex-wrap">
-                    {canGenerate && !isLocked && (
+                    {canGenerate && status === "none" && (
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); openFwDialog(key); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openFwDialog(key);
+                        }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-primary/10 hover:bg-primary/20 text-primary border-primary/20 disabled:opacity-50"
                       >
-                        <Wand2 className="h-3 w-3" />
-                        {status === "draft" ? "Regenerate" : "Generate"}
+                        <Wand2 className="h-3 w-3" /> Generate
                       </button>
                     )}
                     {status === "draft" && canEdit && (
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); handleClearFacilityWide(key); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleClearFacilityWide(key);
+                        }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
                       >
@@ -1683,7 +1768,10 @@ function RotaPage() {
                     {status === "draft" && canSubmit && (
                       <button
                         type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSubmitFacilityWide(key); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleSubmitFacilityWide(key);
+                        }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
                       >
@@ -1785,7 +1873,9 @@ function RotaPage() {
                 <CalendarDays className="h-4 w-4" /> Auto-generate
               </button>
             ) : canGenerate ? (
-              <p className="text-xs text-muted-foreground">Select a facility and ward to generate a schedule.</p>
+              <p className="text-xs text-muted-foreground">
+                Select a facility and ward to generate a schedule.
+              </p>
             ) : undefined
           }
         />
@@ -1832,7 +1922,10 @@ function RotaPage() {
                   // and facility-wide nurses last. The alphabetical API order scatters
                   // facility-wide roles throughout the list, causing multiple dividers.
                   const isFacilityWide = (role: string) =>
-                    isGlobalHead(role) || isMatron(role) || isPorterType(role) || isInternType(role);
+                    isGlobalHead(role) ||
+                    isMatron(role) ||
+                    isPorterType(role) ||
+                    isInternType(role);
                   const displayList =
                     effectiveFacility && !selectedWard && !selectedFacilityWide && !lockedWard
                       ? [
@@ -1841,132 +1934,136 @@ function RotaPage() {
                         ]
                       : filteredNurses;
                   return displayList.flatMap((n, idx) => {
-                  // Hard guard: never render facility-wide roles in a ward-specific view.
-                  if (selectedWard && isFacilityWide(n.role)) {
-                    return [];
-                  }
-                  const rows = [];
-                  rows.push(
-                  <tr key={n.id} className="border-t hover:bg-muted/30">
-                    <td className="px-3 py-2 sticky left-0 bg-card z-10">
-                      <div className="font-medium">{n.name}</div>
-                      <div className="text-[11px] text-muted-foreground">{n.role}</div>
-                    </td>
-                    <td className="px-2 py-2 text-muted-foreground text-xs">
-                      {(() => {
-                        if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))
-                          return "—";
-                        const ws = parseWards(n.ward);
-                        if (!ws.length) return "—";
-                        return (
-                          <>
-                            {ws[0]}
-                            {ws.length > 1 && (
-                              <span className="ml-0.5 text-[10px] opacity-60">
-                                +{ws.length - 1}
-                              </span>
-                            )}
-                          </>
-                        );
-                      })()}
-                    </td>
-                    <td className="px-2 py-2 text-center text-xs font-medium tabular-nums">
-                      <span
-                        className={cn(
-                          extraShiftIds.has(n.id)
-                            ? "text-orange-600 dark:text-orange-400"
-                            : "text-muted-foreground",
-                        )}
-                      >
-                        {nurseScheduledHours.get(n.id) ?? 0}h
-                      </span>
-                    </td>
-                    {days.map((dt) => {
-                      const dateStr = ymd(dt);
-                      const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
-                      const cell = cellMap.get(`${n.id}|${dateStr}`);
-                      const isLocum = locumCellSet.has(`${n.id}|${dateStr}`);
-                      // Visual-only: uses state (safe to lag one render behind)
-                      const isDragOver =
-                        dragging &&
-                        cell &&
-                        dragging.id !== cell.id &&
-                        cell.status === "draft";
-                      return (
-                        <td
-                          key={dateStr}
-                          className={cn(
-                            "px-0.5 py-1 text-center",
-                            isWeekend && "bg-red-50/60 dark:bg-red-950/10",
-                          )}
-                        >
-                          <button
-                            type="button"
-                            draggable={!!cell && canEdit && cell.status === "draft"}
-                            onClick={(e) => openShiftPicker(e, n.id, dateStr, n.ward)}
-                            onDragStart={(e) => {
-                              if (!cell || !canEdit || cell.status !== "draft") return;
-                              // Write to ref immediately — visible to all handlers this frame
-                              draggingRef.current = cell;
-                              setDragging(cell);
-                              e.dataTransfer.effectAllowed = "move";
-                              e.dataTransfer.setData("text/plain", cell.id);
-                            }}
-                            onDragEnd={() => {
-                              draggingRef.current = null;
-                              setDragging(null);
-                            }}
-                            onDragOver={(e) => {
-                              // Use ref — guaranteed current even before React re-renders.
-                              // Allow dropping on any OTHER draft cell (any date, any nurse row).
-                              const src = draggingRef.current;
-                              if (src && cell && src.id !== cell.id && cell.status === "draft") {
-                                e.preventDefault();
-                                e.dataTransfer.dropEffect = "move";
-                              }
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              const src = draggingRef.current;
-                              if (src && cell && src.id !== cell.id) {
-                                swapCells(src, cell);
-                              }
-                              draggingRef.current = null;
-                              setDragging(null);
-                            }}
-                            className={cn(
-                              "block w-full text-[10px] font-bold py-1.5 rounded border transition",
-                              cell
-                                ? isLocum
-                                  ? "bg-black text-white border-black"
-                                  : shiftStyles[cell.shift]
-                                : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
-                              isDragOver && cell?.status === "draft" && "ring-2 ring-primary scale-105",
-                              dragging && dragging.id === cell?.id && "opacity-40",
-                              isWindowLocked
-                                ? "cursor-not-allowed opacity-80"
-                                : !canEdit
-                                  ? "cursor-default"
-                                  : "",
-                            )}
-                            title={
-                              isWindowLocked
-                                ? windowLockStatus === "published"
-                                  ? "Published — this schedule is locked"
-                                  : "Submitted for approval — return to draft to edit"
-                                : canEdit
-                                  ? "Click to cycle · drag to swap with same-day shift"
-                                  : "View only"
-                            }
-                          >
-                            {cell ? (isLocum ? "LO" : cell.shift) : "—"}
-                          </button>
+                    // Hard guard: never render facility-wide roles in a ward-specific view.
+                    if (selectedWard && isFacilityWide(n.role)) {
+                      return [];
+                    }
+                    const rows = [];
+                    rows.push(
+                      <tr key={n.id} className="border-t hover:bg-muted/30">
+                        <td className="px-3 py-2 sticky left-0 bg-card z-10">
+                          <div className="font-medium">{n.name}</div>
+                          <div className="text-[11px] text-muted-foreground">{n.role}</div>
                         </td>
-                      );
-                    })}
-                  </tr>,
-                  );
-                  return rows;
+                        <td className="px-2 py-2 text-muted-foreground text-xs">
+                          {(() => {
+                            if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))
+                              return "—";
+                            const ws = parseWards(n.ward);
+                            if (!ws.length) return "—";
+                            return (
+                              <>
+                                {ws[0]}
+                                {ws.length > 1 && (
+                                  <span className="ml-0.5 text-[10px] opacity-60">
+                                    +{ws.length - 1}
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </td>
+                        <td className="px-2 py-2 text-center text-xs font-medium tabular-nums">
+                          <span
+                            className={cn(
+                              extraShiftIds.has(n.id)
+                                ? "text-orange-600 dark:text-orange-400"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {nurseScheduledHours.get(n.id) ?? 0}h
+                          </span>
+                        </td>
+                        {days.map((dt) => {
+                          const dateStr = ymd(dt);
+                          const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                          const cell = cellMap.get(`${n.id}|${dateStr}`);
+                          const isLocum = locumCellSet.has(`${n.id}|${dateStr}`);
+                          // Visual-only: uses state (safe to lag one render behind)
+                          const isDragOver =
+                            dragging && cell && dragging.id !== cell.id && cell.status === "draft";
+                          return (
+                            <td
+                              key={dateStr}
+                              className={cn(
+                                "px-0.5 py-1 text-center",
+                                isWeekend && "bg-red-50/60 dark:bg-red-950/10",
+                              )}
+                            >
+                              <button
+                                type="button"
+                                draggable={!!cell && canEdit && cell.status === "draft"}
+                                onClick={(e) => openShiftPicker(e, n.id, dateStr, n.ward)}
+                                onDragStart={(e) => {
+                                  if (!cell || !canEdit || cell.status !== "draft") return;
+                                  // Write to ref immediately — visible to all handlers this frame
+                                  draggingRef.current = cell;
+                                  setDragging(cell);
+                                  e.dataTransfer.effectAllowed = "move";
+                                  e.dataTransfer.setData("text/plain", cell.id);
+                                }}
+                                onDragEnd={() => {
+                                  draggingRef.current = null;
+                                  setDragging(null);
+                                }}
+                                onDragOver={(e) => {
+                                  // Use ref — guaranteed current even before React re-renders.
+                                  // Allow dropping on any OTHER draft cell (any date, any nurse row).
+                                  const src = draggingRef.current;
+                                  if (
+                                    src &&
+                                    cell &&
+                                    src.id !== cell.id &&
+                                    cell.status === "draft"
+                                  ) {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                  }
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  const src = draggingRef.current;
+                                  if (src && cell && src.id !== cell.id) {
+                                    swapCells(src, cell);
+                                  }
+                                  draggingRef.current = null;
+                                  setDragging(null);
+                                }}
+                                className={cn(
+                                  "block w-full text-[10px] font-bold py-1.5 rounded border transition",
+                                  cell
+                                    ? isLocum
+                                      ? "bg-black text-white border-black"
+                                      : shiftStyles[cell.shift]
+                                    : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
+                                  isDragOver &&
+                                    cell?.status === "draft" &&
+                                    "ring-2 ring-primary scale-105",
+                                  dragging && dragging.id === cell?.id && "opacity-40",
+                                  isWindowLocked
+                                    ? "cursor-not-allowed opacity-80"
+                                    : !canEdit
+                                      ? "cursor-default"
+                                      : "",
+                                )}
+                                title={
+                                  isWindowLocked
+                                    ? windowLockStatus === "published"
+                                      ? "Published — this schedule is locked"
+                                      : "Submitted for approval — return to draft to edit"
+                                    : canEdit
+                                      ? "Click to cycle · drag to swap with same-day shift"
+                                      : "View only"
+                                }
+                              >
+                                {cell ? (isLocum ? "LO" : cell.shift) : "—"}
+                              </button>
+                            </td>
+                          );
+                        })}
+                      </tr>,
+                    );
+                    return rows;
                   });
                 })()}
               </tbody>
@@ -2027,7 +2124,7 @@ function RotaPage() {
                 type="button"
                 onClick={() => applyShift(s)}
                 className={cn(
-                  "min-w-[38px] rounded border px-2 py-1 text-[11px] font-bold transition hover:opacity-75",
+                  "min-w-9.5 rounded border px-2 py-1 text-[11px] font-bold transition hover:opacity-75",
                   shiftStyles[s],
                 )}
               >
@@ -2076,7 +2173,6 @@ function RotaPage() {
                 Schedule runs {DAYS} days from this date.
               </p>
             </div>
-
           </div>
 
           {/* Pending leave warning — hard block, no bypass */}
@@ -2096,12 +2192,15 @@ function RotaPage() {
               </ul>
               <p className="text-red-600 dark:text-red-500">
                 Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
-                before the schedule can be generated, so the system knows whether to mark those
-                days as leave or keep the nurse on shift.
+                before the schedule can be generated, so the system knows whether to mark those days
+                as leave or keep the nurse on shift.
               </p>
               <Link
                 to="/leave"
-                onClick={() => { setGenOpen(false); setGenPendingLeaves([]); }}
+                onClick={() => {
+                  setGenOpen(false);
+                  setGenPendingLeaves([]);
+                }}
                 className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
               >
                 Go to Leave requests
@@ -2168,7 +2267,9 @@ function RotaPage() {
                 onChange={(e) => setFwStartDate(e.target.value)}
                 className="w-full h-9 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
               />
-              <p className="mt-1 text-xs text-muted-foreground">Schedule runs {DAYS} days from this date.</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Schedule runs {DAYS} days from this date.
+              </p>
             </div>
 
             {fwRoleGroup === "intern" && (

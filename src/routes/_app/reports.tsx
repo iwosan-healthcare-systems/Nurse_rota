@@ -26,6 +26,7 @@ import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/lib/auth-context";
+import { isGlobalHead, isMatron, isPorterType, isInternType } from "@/lib/auto-schedule";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
@@ -100,6 +101,22 @@ type ArchiveAssignment = {
   ward: string | null;
   shift: string;
 };
+type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
+const FW_LABELS: Record<FacilityWideGroup, string> = {
+  matron: "Matron",
+  head: "Coverage Nurse",
+  porter: "Porter",
+  intern: "Nurse Intern",
+};
+
+function roleGroupOf(role: string): FacilityWideGroup | null {
+  if (isMatron(role)) return "matron";
+  if (isGlobalHead(role)) return "head";
+  if (isPorterType(role)) return "porter";
+  if (isInternType(role)) return "intern";
+  return null;
+}
+
 type ArchiveWindow = {
   startDate: string;
   endDate: string;
@@ -107,6 +124,7 @@ type ArchiveWindow = {
   facility: string | null;
   nurseCount: number;
   assignmentCount: number;
+  roleGroup: FacilityWideGroup | null;
 };
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
@@ -148,20 +166,38 @@ function scheduleEndDate(startDate: string): string {
 function groupArchiveWindows(
   rows: ArchiveAssignment[],
   nurseToFacility: Map<string, string | null>,
+  nurseToRole: Map<string, string>,
 ): ArchiveWindow[] {
   if (!rows.length) return [];
   const byKey = new Map<string, ArchiveAssignment[]>();
+  const keyMeta = new Map<string, { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }>();
+
   for (const row of rows) {
     const fac = nurseToFacility.get(row.nurse_id) ?? null;
-    const key = `${fac ?? "__NONE__"}||${row.ward ?? "__NONE__"}`;
-    if (!byKey.has(key)) byKey.set(key, []);
+    let key: string;
+    let ward: string | null;
+    let roleGroup: FacilityWideGroup | null = null;
+
+    if (row.ward !== null) {
+      ward = row.ward;
+      key = `${fac ?? "__NONE__"}|ward|${row.ward}`;
+    } else {
+      ward = null;
+      const role = nurseToRole.get(row.nurse_id) ?? "";
+      roleGroup = roleGroupOf(role);
+      key = `${fac ?? "__NONE__"}|fw|${roleGroup ?? "other"}`;
+    }
+
+    if (!byKey.has(key)) {
+      byKey.set(key, []);
+      keyMeta.set(key, { ward, facility: fac, roleGroup });
+    }
     byKey.get(key)!.push(row);
   }
+
   const windows: ArchiveWindow[] = [];
   for (const [key, keyRows] of byKey) {
-    const [facPart, wardPart] = key.split("||");
-    const facility = facPart === "__NONE__" ? null : facPart;
-    const ward = wardPart === "__NONE__" ? null : wardPart;
+    const { ward, facility, roleGroup } = keyMeta.get(key)!;
     const sorted = [...keyRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
     let cluster: ArchiveAssignment[] = [sorted[0]];
     for (let i = 1; i < sorted.length; i++) {
@@ -170,18 +206,18 @@ function groupArchiveWindows(
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
       if (diff > 14) {
-        windows.push(makeArchiveWindow(cluster, ward, facility));
+        windows.push(makeArchiveWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
       cluster.push(sorted[i]);
     }
-    if (cluster.length) windows.push(makeArchiveWindow(cluster, ward, facility));
+    if (cluster.length) windows.push(makeArchiveWindow(cluster, ward, facility, roleGroup));
   }
   return windows.sort(
     (a, b) =>
       b.startDate.localeCompare(a.startDate) ||
       (a.facility ?? "").localeCompare(b.facility ?? "") ||
-      (a.ward ?? "").localeCompare(b.ward ?? ""),
+      (a.ward ?? a.roleGroup ?? "").localeCompare(b.ward ?? b.roleGroup ?? ""),
   );
 }
 
@@ -189,6 +225,7 @@ function makeArchiveWindow(
   rows: ArchiveAssignment[],
   ward: string | null,
   facility: string | null,
+  roleGroup: FacilityWideGroup | null,
 ): ArchiveWindow {
   const dates = rows.map((r) => r.shift_date).sort();
   return {
@@ -198,6 +235,7 @@ function makeArchiveWindow(
     facility,
     nurseCount: new Set(rows.map((r) => r.nurse_id)).size,
     assignmentCount: rows.length,
+    roleGroup,
   };
 }
 
@@ -412,16 +450,20 @@ function ReportsContent() {
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [facilityNurses]);
 
-  // nurse_id → facility lookup for archive grouping
+  // nurse_id → facility / role lookups for archive grouping
   const archiveNurseToFacility = useMemo(
     () => new Map(nurses.map((n) => [n.id, n.facility])),
     [nurses],
   );
+  const archiveNurseToRole = useMemo(
+    () => new Map(nurses.map((n) => [n.id, n.role])),
+    [nurses],
+  );
 
-  // Archive: group published assignments into facility+ward windows
+  // Archive: group published assignments into facility+ward/roleGroup windows
   const allArchiveWindows = useMemo(
-    () => groupArchiveWindows(archiveAssignments, archiveNurseToFacility),
-    [archiveAssignments, archiveNurseToFacility],
+    () => groupArchiveWindows(archiveAssignments, archiveNurseToFacility, archiveNurseToRole),
+    [archiveAssignments, archiveNurseToFacility, archiveNurseToRole],
   );
 
   // Filter archive windows by selected facility tab
@@ -444,13 +486,13 @@ function ReportsContent() {
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
   }, [archiveWindows]);
 
-  // Precompute roles per archive window key (startDate|facility|ward)
+  // Precompute roles per archive window (key = startDate|facility|ward-or-roleGroup)
   const archiveWindowRoles = useMemo(() => {
     const nurseRoleMap = new Map(nurses.map((n) => [n.id, n.role]));
     const facilityNurseIds = new Map(nurses.map((n) => [n.id, n.facility]));
     const result = new Map<string, string[]>();
     for (const win of allArchiveWindows) {
-      const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
+      const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
       const nurseIds = new Set(
         archiveAssignments
           .filter(
@@ -751,9 +793,14 @@ ${staffToPrint
 
   // ── Schedule archive download ─────────────────────────────────────────────
   async function fetchScheduleData(win: ArchiveWindow) {
-    const facilityNurseIds = win.facility
-      ? nurses.filter((n) => n.facility === win.facility).map((n) => n.id)
-      : nurses.map((n) => n.id);
+    // Scope to the right set of nurses for this window.
+    let facilityNurses = win.facility
+      ? nurses.filter((n) => n.facility === win.facility)
+      : nurses;
+    if (win.ward === null && win.roleGroup) {
+      facilityNurses = facilityNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
+    }
+    const facilityNurseIds = facilityNurses.map((n) => n.id);
 
     const wardParam =
       win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
@@ -772,12 +819,12 @@ ${staffToPrint
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
-    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
+    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-pdf");
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns / Porter-Day / NA-Day";
+      const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
@@ -843,12 +890,12 @@ td.sm{text-align:left;color:#444;min-width:55px}
   }
 
   async function downloadScheduleExcel(win: ArchiveWindow) {
-    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
+    const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
       const { activeNurses, assignMap } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : " — Matron / Coverage / Interns / Porter-Day / NA-Day";
+      const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
@@ -874,6 +921,86 @@ td.sm{text-align:left;color:#444;min-width:55px}
       XLSX.writeFile(wb, `rota-archive-${win.startDate}-to-${win.endDate}${slug}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
+    } finally {
+      setArchiveDownloading(null);
+    }
+  }
+
+  // ── Unified facility report (all wards + role groups in one PDF) ─────────
+  async function downloadUnifiedPdf(periodStart: string, periodWins: ArchiveWindow[]) {
+    const uKey = `unified-${periodStart}`;
+    setArchiveDownloading(uKey + "-pdf");
+    try {
+      const allData = await Promise.all(
+        periodWins.map(async (win) => {
+          const { activeNurses, assignMap } = await fetchScheduleData(win);
+          const label = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+          return { label, activeNurses, assignMap };
+        }),
+      );
+      const endDate = scheduleEndDate(periodStart);
+      const dates = dateRange(periodStart, endDate);
+      const shiftBg: Record<string, string> = {
+        M: "#fef3c7",
+        N: "#e0e7ff",
+        OFF: "#f3f4f6",
+        LEAVE: "#fee2e2",
+      };
+      const dateHeaders = dates
+        .map((d) => {
+          const dt = new Date(d + "T00:00:00");
+          return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
+        })
+        .join("");
+      const facility = periodWins[0]?.facility ?? "";
+      const sections = allData
+        .filter(({ activeNurses }) => activeNurses.length > 0)
+        .map(({ label, activeNurses, assignMap }) => {
+          const bodyRows = activeNurses
+            .map((n) => {
+              const cells = dates
+                .map((d) => {
+                  const s = assignMap.get(`${n.id}|${d}`) ?? "";
+                  return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
+                })
+                .join("");
+              return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
+            })
+            .join("");
+          return `<h2>${label}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+        })
+        .join("<br/>");
+      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+<title>Unified Rota — ${facility} — ${fmtDate(periodStart)}</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
+h1{font-size:11pt;margin-bottom:4px}
+h2{font-size:9pt;font-weight:600;margin:14px 0 4px;color:#374151;border-bottom:1px solid #e5e7eb;padding-bottom:2px;page-break-before:auto}
+p{font-size:8pt;color:#555;margin-bottom:8px}
+table{border-collapse:collapse;width:100%;margin-bottom:6px}
+th,td{border:1px solid #ccc;padding:2px 3px;text-align:center;white-space:nowrap}
+th{background:#e5e7eb;font-size:6pt;font-weight:600}
+td.nm{text-align:left;font-weight:500;min-width:80px}
+td.sm{text-align:left;color:#444;min-width:55px}
+.legend{display:flex;gap:12px;margin-top:8px;font-size:7pt}
+.lb{display:inline-block;width:10px;height:10px;border:1px solid #aaa;margin-right:2px;vertical-align:middle}
+@media print{@page{size:A3 landscape;margin:1cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head><body>
+<h1>Unified Rota — ${facility}</h1>
+<p>${fmtDate(periodStart)} — ${fmtDate(endDate)}</p>
+${sections}
+<div class="legend">
+<span><span class="lb" style="background:#fef3c7"></span>M Morning</span>
+<span><span class="lb" style="background:#e0e7ff"></span>N Night</span>
+<span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
+<span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
+</div>
+<script>window.onload=()=>{window.print()}</script>
+</body></html>`;
+      openPrintWindow(html);
+    } catch {
+      toast.error("Failed to generate unified report");
     } finally {
       setArchiveDownloading(null);
     }
@@ -1665,7 +1792,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     periodWins.flatMap(
                       (w) =>
                         archiveWindowRoles.get(
-                          `${w.startDate}|${w.facility ?? ""}|${w.ward ?? ""}`,
+                          `${w.startDate}|${w.facility ?? ""}|${w.ward ?? w.roleGroup ?? ""}`,
                         ) ?? [],
                     ),
                   ),
@@ -1673,9 +1800,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 return (
                   <div key={periodStart}>
                     {/* Period header */}
-                    <div className="flex items-start gap-2 mb-3">
-                      <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                      <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-3">
+                      <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="min-w-0 flex-1">
                         <h2 className="text-sm font-semibold">
                           {fmtDate(periodStart)} — {fmtDate(periodEnd)}
                         </h2>
@@ -1689,13 +1816,25 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           {allPeriodRoles.join(", ")}
                         </p>
                       </div>
-                      <div className="flex-1 h-px bg-border ml-1 mt-2.5" />
+                      {canPrintSchedule && (
+                        <button
+                          type="button"
+                          disabled={!!archiveDownloading?.startsWith(`unified-${periodStart}`)}
+                          onClick={() => downloadUnifiedPdf(periodStart, periodWins)}
+                          className="shrink-0 inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border bg-card text-xs font-medium hover:bg-muted disabled:opacity-50"
+                          title="Download a single PDF with all wards for this period"
+                        >
+                          <Printer className="h-3.5 w-3.5" />
+                          Print All
+                        </button>
+                      )}
+                      <div className="h-px bg-border w-6 shrink-0" />
                     </div>
 
                     {/* Ward cards */}
                     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                       {periodWins.map((win) => {
-                        const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
+                        const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
                         const isDownloading = archiveDownloading?.startsWith(key);
                         const winRoles = archiveWindowRoles.get(key) ?? [];
                         return (
@@ -1705,7 +1844,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                           >
                             <div>
                               <p className="text-sm font-semibold">
-                                {win.ward ?? "Matron / Coverage / Interns / Porter-Day / NA-Day"}
+                                {win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff")}
                               </p>
                               {win.facility && (
                                 <p className="text-xs font-medium text-primary/80 mt-0.5">

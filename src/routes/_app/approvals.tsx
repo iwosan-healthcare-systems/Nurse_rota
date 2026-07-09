@@ -45,6 +45,7 @@ type PendingRow = {
 };
 
 type WindowStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
 
 type RotaWindow = {
   startDate: string;
@@ -54,6 +55,7 @@ type RotaWindow = {
   nurseCount: number;
   ward: string | null;
   facility: string | null;
+  roleGroup: FacilityWideGroup | null;
 };
 
 type ApprovalStep = { key: string; label: string; status: string };
@@ -74,26 +76,51 @@ function dominantStatus(statuses: string[]): WindowStatus {
   return "draft";
 }
 
+function roleGroupOf(role: string): FacilityWideGroup | null {
+  if (isMatron(role)) return "matron";
+  if (isGlobalHead(role)) return "head";
+  if (isPorterType(role)) return "porter";
+  if (isInternType(role)) return "intern";
+  return null;
+}
+
 function groupIntoWindows(
   rows: PendingRow[],
   nurseToFacility: Map<string, string | null>,
+  nurseToRole: Map<string, string>,
 ): RotaWindow[] {
   if (!rows.length) return [];
 
-  // Group by facility+ward so same-ward-name across facilities stay separate.
+  // Group by facility + ward (for ward nurses) or facility + roleGroup (for facility-wide nurses).
   const byKey = new Map<string, PendingRow[]>();
+  const keyMeta = new Map<string, { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }>();
+
   for (const row of rows) {
     const fac = nurseToFacility.get(row.nurse_id) ?? null;
-    const key = `${fac ?? "__NONE__"}||${row.ward ?? "__NONE__"}`;
-    if (!byKey.has(key)) byKey.set(key, []);
+    let key: string;
+    let ward: string | null;
+    let roleGroup: FacilityWideGroup | null = null;
+
+    if (row.ward !== null) {
+      ward = row.ward;
+      key = `${fac ?? "__NONE__"}|ward|${row.ward}`;
+    } else {
+      ward = null;
+      const role = nurseToRole.get(row.nurse_id) ?? "";
+      roleGroup = roleGroupOf(role);
+      key = `${fac ?? "__NONE__"}|fw|${roleGroup ?? "other"}`;
+    }
+
+    if (!byKey.has(key)) {
+      byKey.set(key, []);
+      keyMeta.set(key, { ward, facility: fac, roleGroup });
+    }
     byKey.get(key)!.push(row);
   }
 
   const windows: RotaWindow[] = [];
   for (const [key, keyRows] of byKey) {
-    const [facPart, wardPart] = key.split("||");
-    const facility = facPart === "__NONE__" ? null : facPart;
-    const ward = wardPart === "__NONE__" ? null : wardPart;
+    const { ward, facility, roleGroup } = keyMeta.get(key)!;
     const sorted = [...keyRows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
     let cluster: PendingRow[] = [sorted[0]];
 
@@ -104,23 +131,28 @@ function groupIntoWindows(
           86400000,
       );
       if (diff > 14) {
-        windows.push(makeWindow(cluster, ward, facility));
+        windows.push(makeWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
       cluster.push(sorted[i]);
     }
-    if (cluster.length) windows.push(makeWindow(cluster, ward, facility));
+    if (cluster.length) windows.push(makeWindow(cluster, ward, facility, roleGroup));
   }
 
   return windows.sort(
     (a, b) =>
       b.startDate.localeCompare(a.startDate) ||
       (a.facility ?? "").localeCompare(b.facility ?? "") ||
-      (a.ward ?? "").localeCompare(b.ward ?? ""),
+      (a.ward ?? a.roleGroup ?? "").localeCompare(b.ward ?? b.roleGroup ?? ""),
   );
 }
 
-function makeWindow(rows: PendingRow[], ward: string | null, facility: string | null): RotaWindow {
+function makeWindow(
+  rows: PendingRow[],
+  ward: string | null,
+  facility: string | null,
+  roleGroup: FacilityWideGroup | null,
+): RotaWindow {
   const dates = rows.map((r) => r.shift_date).sort();
   return {
     startDate: dates[0],
@@ -130,11 +162,12 @@ function makeWindow(rows: PendingRow[], ward: string | null, facility: string | 
     nurseCount: new Set(rows.map((r) => r.nurse_id)).size,
     ward,
     facility,
+    roleGroup,
   };
 }
 
 function winKey(win: RotaWindow): string {
-  return `${win.startDate}|${win.facility ?? ""}|${win.ward ?? ""}`;
+  return `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
 }
 
 function fmtDate(d: string) {
@@ -166,6 +199,13 @@ function dateRange(start: string, end: string): string[] {
   }
   return out;
 }
+
+const FW_LABELS: Record<FacilityWideGroup, string> = {
+  matron: "Matron",
+  head: "Coverage Nurse",
+  porter: "Porter",
+  intern: "Nurse Intern",
+};
 
 const STATUS_LABELS: Record<WindowStatus, string> = {
   draft: "Draft",
@@ -244,24 +284,31 @@ function ApprovalsPage() {
     },
   });
 
-  // nurse_id → facility map (built once from allNurses).
+  // nurse_id → facility / role maps (built once from allNurses).
   const nurseToFacility = useMemo(
     () => new Map(allNurses.map((n) => [n.id, n.facility])),
     [allNurses],
   );
+  const nurseToRole = useMemo(
+    () => new Map(allNurses.map((n) => [n.id, n.role])),
+    [allNurses],
+  );
 
   const windows = useMemo(
-    () => groupIntoWindows(rows, nurseToFacility),
-    [rows, nurseToFacility],
+    () => groupIntoWindows(rows, nurseToFacility, nurseToRole),
+    [rows, nurseToFacility, nurseToRole],
   );
 
   // Precompute per-window metadata (extraStaff). Facility is now on the window itself.
   const windowMeta = useMemo(() => {
     return new Map(
       windows.map((win) => {
-        const facilityIdSet = new Set(
-          allNurses.filter((n) => n.facility === win.facility).map((n) => n.id),
-        );
+        // For facility-wide cards, scope to only the nurses in that role group.
+        let facilityNurses = allNurses.filter((n) => n.facility === win.facility);
+        if (win.ward === null && win.roleGroup) {
+          facilityNurses = facilityNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
+        }
+        const facilityIdSet = new Set(facilityNurses.map((n) => n.id));
         const winRows = rows.filter(
           (r) =>
             r.shift_date >= win.startDate &&
@@ -330,7 +377,7 @@ function ApprovalsPage() {
     const latestByWard = new Map<string, RotaWindow>();
     for (const win of facilityWindows) {
       if (win.status === "published" && win.endDate < cutoffYmd) continue;
-      const wardKey = `${win.facility ?? ""}|${win.ward ?? "__COVERAGE__"}`;
+      const wardKey = `${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? "__COVERAGE__"}`;
       const existing = latestByWard.get(wardKey);
       if (!existing || win.startDate > existing.startDate) {
         latestByWard.set(wardKey, win);
@@ -361,7 +408,12 @@ function ApprovalsPage() {
     fromStatus?: AssignStatus,
     neqStatus?: AssignStatus,
   ): Promise<string | null> {
-    const facilityIds = allNurses.filter((n) => n.facility === win.facility).map((n) => n.id);
+    let candidates = allNurses.filter((n) => n.facility === win.facility);
+    // For facility-wide role group cards, narrow to just that group's nurses.
+    if (win.ward === null && win.roleGroup) {
+      candidates = candidates.filter((n) => roleGroupOf(n.role) === win.roleGroup);
+    }
+    const facilityIds = candidates.map((n) => n.id);
     if (!facilityIds.length) return null;
     try {
       const qs = new URLSearchParams({
@@ -383,38 +435,15 @@ function ApprovalsPage() {
   async function submitDraft(win: RotaWindow) {
     setBusy(winKey(win));
     const err = await scopedStatusUpdate(win, "submitted", "draft");
-    if (err) {
-      setBusy(null);
-      return toast.error(err);
-    }
-
-    // When a ward window is submitted, co-submit coverage nurses and interns for
-    // the same facility whose assignments still sit at draft (ward = null in DB).
-    if (win.ward !== null) {
-      const globalIds = allNurses
-        .filter(
-          (n) =>
-            n.facility === win.facility &&
-            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)),
-        )
-        .map((n) => n.id);
-      if (globalIds.length) {
-        await api
-          .patch(
-            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate.slice(0, 10)}&shift_date_to=${win.endDate.slice(0, 10)}&status=draft`,
-            { status: "submitted" },
-          )
-          .catch(() => {});
-      }
-    }
-
     setBusy(null);
+    if (err) return toast.error(err);
+    const targetLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Submitted rota for approval",
-        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+        target: `${targetLabel} · ${win.startDate} → ${win.endDate}`,
       })
       .catch(() => {});
     toast.success("Submitted to Chief Matron");
@@ -429,33 +458,9 @@ function ApprovalsPage() {
     const err = await (nextStatus === "published"
       ? scopedStatusUpdate(win, nextStatus, undefined, "published")
       : scopedStatusUpdate(win, nextStatus, win.status));
-    if (err) {
-      setBusy(null);
-      return toast.error(err);
-    }
-
-    // When publishing a ward window, also publish the coverage nurses and intern
-    // assignments (ward = null) for the same facility so they become available
-    // for print and export alongside the ward schedule.
-    if (nextStatus === "published" && win.ward !== null) {
-      const globalIds = allNurses
-        .filter(
-          (n) =>
-            n.facility === win.facility &&
-            (isGlobalHead(n.role) || isInternType(n.role) || isMatron(n.role) || isPorterType(n.role) || isNADayType(n.role)),
-        )
-        .map((n) => n.id);
-      if (globalIds.length) {
-        await api
-          .patch(
-            `/shift-assignments?nurse_ids=${globalIds.join(",")}&shift_date_from=${win.startDate.slice(0, 10)}&shift_date_to=${win.endDate.slice(0, 10)}&neq_status=published`,
-            { status: "published" },
-          )
-          .catch(() => {});
-      }
-    }
-
     setBusy(null);
+    if (err) return toast.error(err);
+    const targetLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
@@ -464,7 +469,7 @@ function ApprovalsPage() {
           nextStatus === "published"
             ? "Rota published"
             : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
-        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+        target: `${targetLabel} · ${win.startDate} → ${win.endDate}`,
       })
       .catch(() => {});
     if (nextStatus === "published") {
@@ -491,12 +496,13 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", win.status);
     setBusy(null);
     if (err) return toast.error(err);
+    const rejectLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Rota returned to draft",
-        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+        target: `${rejectLabel} · ${win.startDate} → ${win.endDate}`,
       })
       .catch(() => {});
     toast.success("Returned to draft");
@@ -515,12 +521,13 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", "published");
     setBusy(null);
     if (err) return toast.error(err);
+    const revertLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Unpublished rota — returned to Draft",
-        target: `${win.ward ?? "Matron / Coverage Nurses / Nurse Intern"} · ${win.startDate} → ${win.endDate}`,
+        target: `${revertLabel} · ${win.startDate} → ${win.endDate}`,
       })
       .catch(() => {});
     toast.success("Rota unpublished — schedule is unchanged and now editable");
@@ -548,8 +555,11 @@ function ApprovalsPage() {
           !isNADayType(n.role) &&
           parseWards(n.ward).includes(win.ward!),
       );
+    } else if (win.roleGroup) {
+      // Facility-wide role group card: show only nurses in that specific group.
+      scopedNurses = scopedNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
     } else {
-      // Coverage card: all facility-level roles whose assignments are stored with ward = null.
+      // Fallback: all facility-wide roles (shouldn't occur with current grouping).
       scopedNurses = scopedNurses.filter(
         (n) =>
           isGlobalHead(n.role) ||
@@ -584,9 +594,9 @@ function ApprovalsPage() {
       const dates = dateRange(win.startDate, endDate);
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const wardLabel =
-        win.ward === null
-          ? " — Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day"
-          : ` — ${win.ward}`;
+        win.ward !== null
+          ? ` — ${win.ward}`
+          : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
         "Nurse",
@@ -652,9 +662,9 @@ function ApprovalsPage() {
         .join("");
       const pdfFacilityLabel = win.facility ? ` · ${win.facility}` : "";
       const pdfWardLabel =
-        win.ward === null
-          ? " — Matron / Coverage Nurses / Nurse Intern / Porter-Day / NA-Day"
-          : ` — ${win.ward}`;
+        win.ward !== null
+          ? ` — ${win.ward}`
+          : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
@@ -749,7 +759,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Header */}
         <div className="px-4 py-3.5 border-b flex flex-wrap items-start justify-between gap-2">
           <div className="min-w-0">
-            <p className="text-sm font-semibold leading-snug">{win.ward ?? "Matron / Coverage / Interns / Porter-Day / NA-Day"}</p>
+            <p className="text-sm font-semibold leading-snug">
+              {win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff")}
+            </p>
             {win.facility && (
               <p className="text-xs font-medium text-primary/80 mt-0.5">{win.facility}</p>
             )}
