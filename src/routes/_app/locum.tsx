@@ -33,7 +33,7 @@ export const Route = createFileRoute("/_app/locum")({
 });
 
 // Wards eligible for locum across all facilities
-const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & CathLab"];
+const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & CathLab", "IP Ward"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 

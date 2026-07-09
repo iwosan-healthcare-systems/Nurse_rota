@@ -406,12 +406,26 @@ function RotaPage() {
     return assignments.some((a) => facilityInternIds.has(a.nurse_id) && a.status !== "draft");
   }, [assignments, nurses, effectiveFacility]);
 
-  // Unique role values scoped to the selected facility (for the role filter dropdown).
+  // Unique role values for the dropdown — exclude facility-wide groups (Matron, Coverage Nurse,
+  // Porter, Nurse Intern) since those are filtered via their own cards, not the role dropdown.
   const availableRoles = useMemo(() => {
     const scoped = effectiveFacility
       ? nurses.filter((n) => n.facility === effectiveFacility)
       : nurses;
-    return [...new Set(scoped.map((n) => n.role).filter(Boolean))].sort();
+    return [
+      ...new Set(
+        scoped
+          .filter(
+            (n) =>
+              !isGlobalHead(n.role) &&
+              !isMatron(n.role) &&
+              !isPorterType(n.role) &&
+              !isInternType(n.role),
+          )
+          .map((n) => n.role)
+          .filter(Boolean),
+      ),
+    ].sort();
   }, [nurses, effectiveFacility]);
 
   // View: nurses filtered by toolbar selects + search
@@ -1472,7 +1486,7 @@ function RotaPage() {
               placeholder="Search nurse…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="h-9 pl-8 pr-7 w-44 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+              className="h-9 pl-8 pr-7 w-64 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
             />
             {searchQuery && (
               <button
