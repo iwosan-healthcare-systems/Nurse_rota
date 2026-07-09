@@ -10,68 +10,81 @@ router.get(
     const params = [];
 
     if (req.query.nurse_id) {
-      conditions.push(`nurse_id = $${params.length + 1}`);
+      conditions.push(`lr.nurse_id = $${params.length + 1}`);
       params.push(req.query.nurse_id);
     }
     if (req.query.status) {
-      conditions.push(`status = $${params.length + 1}`);
+      conditions.push(`lr.status = $${params.length + 1}`);
       params.push(req.query.status);
     }
     // from_date >= value
     if (req.query.from) {
-      conditions.push(`from_date >= $${params.length + 1}`);
+      conditions.push(`lr.from_date >= $${params.length + 1}`);
       params.push(req.query.from);
     }
     // to_date <= value
     if (req.query.to) {
-      conditions.push(`to_date <= $${params.length + 1}`);
+      conditions.push(`lr.to_date <= $${params.length + 1}`);
       params.push(req.query.to);
     }
     // to_date >= value (rota: leaves not yet finished before cutoff)
     if (req.query.to_date_gte) {
-      conditions.push(`to_date >= $${params.length + 1}`);
+      conditions.push(`lr.to_date >= $${params.length + 1}`);
       params.push(req.query.to_date_gte);
     }
     // from_date <= value (overlap: leave started on or before end of period)
     if (req.query.from_date_lte) {
-      conditions.push(`from_date <= $${params.length + 1}`);
+      conditions.push(`lr.from_date <= $${params.length + 1}`);
       params.push(req.query.from_date_lte);
     }
     if (req.query.type) {
-      conditions.push(`type = $${params.length + 1}`);
+      conditions.push(`lr.type = $${params.length + 1}`);
       params.push(req.query.type);
     }
     if (req.query.requested_by) {
-      conditions.push(`requested_by = $${params.length + 1}`);
+      conditions.push(`lr.requested_by = $${params.length + 1}`);
       params.push(req.query.requested_by);
     }
     if (req.query.switch_nurse_b) {
-      conditions.push(`switch_nurse_b = $${params.length + 1}`);
+      conditions.push(`lr.switch_nurse_b = $${params.length + 1}`);
       params.push(req.query.switch_nurse_b);
     }
     if (req.query.nurse_ids) {
       const ids = req.query.nurse_ids.split(",");
-      conditions.push(`nurse_id = ANY($${params.length + 1})`);
+      conditions.push(`lr.nurse_id = ANY($${params.length + 1})`);
       params.push(ids);
     }
     if (req.query.from_date) {
-      conditions.push(`from_date = $${params.length + 1}`);
+      conditions.push(`lr.from_date = $${params.length + 1}`);
       params.push(req.query.from_date);
     }
     if (req.query.reason_like) {
-      conditions.push(`reason LIKE $${params.length + 1}`);
+      conditions.push(`lr.reason LIKE $${params.length + 1}`);
       params.push(req.query.reason_like + "%");
     }
     // Filter to only leave requests belonging to nurses at a specific facility.
     if (req.query.facility) {
-      conditions.push(`nurse_id IN (SELECT id FROM nurses WHERE facility = $${params.length + 1})`);
+      conditions.push(`lr.nurse_id IN (SELECT id FROM nurses WHERE facility = $${params.length + 1})`);
       params.push(req.query.facility);
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    // Include the nurse's current role so the frontend can route approval correctly
+    // Include the nurse's system role so the frontend can route approval correctly
     // (chief_matron leave → CNO approves; all others → chief_matron approves).
-    let query = `SELECT lr.*, n.role AS nurse_role FROM leave_requests lr LEFT JOIN nurses n ON lr.nurse_id = n.id ${where} ORDER BY lr.created_at DESC`;
+    // We prefer user_roles (authoritative) over nurses.role (may be stale/mis-entered).
+    let query = `
+      SELECT lr.*,
+        CASE
+          WHEN EXISTS (
+            SELECT 1 FROM user_roles ur
+            WHERE ur.user_id = n.profile_id AND ur.role = 'chief_matron'
+          ) THEN 'chief_matron'
+          ELSE COALESCE(n.role, '')
+        END AS nurse_role
+      FROM leave_requests lr
+      LEFT JOIN nurses n ON lr.nurse_id = n.id
+      ${where}
+      ORDER BY lr.created_at DESC`;
     if (req.query.limit) {
       query += ` LIMIT $${params.length + 1}`;
       params.push(parseInt(req.query.limit, 10));
