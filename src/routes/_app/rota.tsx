@@ -416,8 +416,10 @@ function RotaPage() {
 
   // View: nurses filtered by toolbar selects + search
   // For nurse role: derive which ward this user belongs to so we can lock the view.
+  // All ward-specific nurse-tier roles are locked to their primary ward (not just "nurse").
+  // Porter and other facility-wide roles have ward=null, so lockedWard stays null for them.
   const lockedWard =
-    activeRole === "nurse" && nurseId
+    isNurseTier && nurseId
       ? (nurses.find((n) => n.id === nurseId)?.ward?.split("|")[0] ?? null)
       : null;
 

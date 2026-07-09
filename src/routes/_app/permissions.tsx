@@ -36,26 +36,30 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "edit_rota",
     label: "Edit Rota (manual cell changes)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "chief_matron", "head_nurse"],
   },
   { key: "auto_generate", label: "Run Auto-Schedule", roles: ["admin", "head_nurse"] },
   {
     key: "manage_staff",
     label: "Manage Staff (create / edit)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "hr_admin"],
   },
   { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
-  { key: "edit_target_hours", label: "Set Staff Target Hours", roles: ["admin"] },
+  { key: "edit_target_hours", label: "Set Staff Target Hours", roles: ["admin", "cno"] },
   {
     key: "manage_wards",
     label: "Manage Wards & Staffing Ratios",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno"],
   },
-  { key: "request_leave", label: "Request Leave", roles: ROLES },
+  {
+    key: "request_leave",
+    label: "Request Leave",
+    roles: ["admin", "chief_matron", "head_nurse", "nurse", "surgical_nurse", "porter", "nursing_assistant"],
+  },
   {
     key: "approve_leave",
     label: "Approve / Reject Leave",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron"],
   },
   {
     key: "request_shift_switch",
@@ -70,7 +74,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "submit_approval",
     label: "Submit Rota for Approval",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "head_nurse"],
   },
   {
     key: "approve_chief_matron",
@@ -94,9 +98,9 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "view_reports",
     label: "View Reports",
-    roles: ["admin", "cno", "chief_matron", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-  { key: "view_audit", label: "View Audit Log", roles: ["admin", "cno"] },
+  { key: "view_audit", label: "View Audit Log", roles: ["admin"] },
   { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin"] },
   {
     key: "request_locum",
@@ -117,7 +121,12 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "view_locum_hours",
     label: "View Locum Hours Tracking",
-    roles: ["admin", "cno", "chief_matron"],
+    roles: ["admin", "cno", "chief_matron", "hr_admin"],
+  },
+  {
+    key: "view_locum_requests",
+    label: "View Locum Request Status",
+    roles: ["admin", "cno", "chief_matron", "head_nurse"],
   },
 ];
 
