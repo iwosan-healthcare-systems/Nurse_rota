@@ -750,15 +750,17 @@ function RotaPage() {
     const genEnd = new Date(genStart);
     genEnd.setDate(genEnd.getDate() + DAYS - 1);
 
-    // Force-refresh nurse and ward data before building any scheduling inputs.
-    // The nurses query caches for 10 minutes, so without this a ward reassignment
-    // or role change made on the Staff page would be silently ignored.
+    // Force-refresh nurse, ward, and leave data before building any scheduling inputs.
+    // The nurses query caches for 10 minutes and leave caches for 5 minutes, so without
+    // this a ward reassignment or an approved leave would be silently ignored.
     await Promise.all([
       qc.refetchQueries({ queryKey: ["nurses"] }),
       qc.refetchQueries({ queryKey: ["gen-wards", genForm.facility] }),
+      qc.refetchQueries({ queryKey: ["leave"] }),
     ]);
     const nurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
     const genWards = qc.getQueryData<WardInput[]>(["gen-wards", genForm.facility]) ?? [];
+    const freshLeave = qc.getQueryData<LeaveInput[]>(["leave"]) ?? leave;
 
     // Pre-flight: block generation when any nurse in this facility has a Pending
     // leave request that overlaps the period. They must be Approved or Rejected first
@@ -869,7 +871,7 @@ function RotaPage() {
       } = generateSchedule({
         nurses: wardNurses,
         wards: facilityWards,
-        leave,
+        leave: freshLeave,
         startDate: genStart,
         days: DAYS,
         facility: genForm.facility,
@@ -1045,9 +1047,11 @@ function RotaPage() {
     await Promise.all([
       qc.refetchQueries({ queryKey: ["nurses"] }),
       qc.refetchQueries({ queryKey: ["wards-by-facility", effectiveFacility] }),
+      qc.refetchQueries({ queryKey: ["leave"] }),
     ]);
     const freshNurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
     const freshWards = qc.getQueryData<WardInput[]>(["wards-by-facility", effectiveFacility]) ?? [];
+    const freshLeavefw = qc.getQueryData<LeaveInput[]>(["leave"]) ?? leave;
 
     const facilityNurses = freshNurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
@@ -1145,7 +1149,7 @@ function RotaPage() {
       } = generateSchedule({
         nurses: targetNurses,
         wards: freshWards.filter((w) => !w.facility || w.facility === effectiveFacility),
-        leave,
+        leave: freshLeavefw,
         startDate: genStart,
         days: DAYS,
         facility: effectiveFacility,
