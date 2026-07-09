@@ -7,7 +7,7 @@
 CREATE TYPE app_role AS ENUM ('cno', 'chief_matron', 'head_nurse', 'ward_manager', 'hr_admin', 'nurse', 'admin');
 CREATE TYPE assignment_status AS ENUM ('draft', 'submitted', 'approved_chief', 'approved_cno', 'published');
 CREATE TYPE leave_status AS ENUM ('Pending', 'Approved', 'Rejected');
-CREATE TYPE leave_type AS ENUM ('Sick', 'Annual', 'Emergency', 'Public Holiday', 'Swap');
+CREATE TYPE leave_type AS ENUM ('Sick', 'Annual', 'Emergency', 'Public Holiday', 'Swap', 'Study Leave', 'Compassionate Leave');
 CREATE TYPE shift_code AS ENUM ('M', 'N', 'OFF', 'LEAVE', 'MWC', 'NC');
 
 -- profiles (central auth/user table — replaces Supabase auth.users)

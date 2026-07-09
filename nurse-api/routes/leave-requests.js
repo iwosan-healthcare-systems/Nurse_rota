@@ -80,8 +80,8 @@ router.get(
 );
 
 // Leave types exempt from the 21-day pre-period closure window.
-// Sick, Emergency, Maternity, and Leave of Absence can always be submitted; Swap is a shift switch (not leave).
-const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Maternity", "Swap", "Leave of Absence"];
+// Sick, Emergency, and Compassionate Leave can always be submitted; Swap is a shift switch (not leave).
+const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Compassionate Leave", "Swap"];
 
 router.post(
   "/",
@@ -108,7 +108,7 @@ router.post(
       // Only enforce when the next period is still in the future
       if (nextStart && closureDate && nextStart > today && today >= closureDate) {
         return res.status(422).json({
-          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick, Emergency, Maternity, and Leave of Absence can be submitted now.`,
+          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick, Emergency, and Compassionate Leave can be submitted now.`,
           code: "LEAVE_WINDOW_CLOSED",
         });
       }
@@ -190,6 +190,23 @@ router.patch(
       values,
     );
     if (!rows[0]) return res.status(404).json({ error: "Leave request not found" });
+
+    // When a leave request is approved, flip the nurse's shift cells to LEAVE
+    // for every date in the leave window that already exists in shift_assignments.
+    // This covers leave approved on an already-generated rota (auto-generate handles
+    // the case where leave is approved before the schedule is built).
+    const leave = rows[0];
+    if (leave.status === "Approved" && leave.nurse_id && leave.from_date && leave.to_date) {
+      await pool.query(
+        `UPDATE shift_assignments
+            SET shift = 'LEAVE'
+          WHERE nurse_id = $1
+            AND shift_date BETWEEN $2 AND $3
+            AND shift != 'LEAVE'`,
+        [leave.nurse_id, leave.from_date, leave.to_date],
+      );
+    }
+
     res.json(rows[0]);
   }),
 );

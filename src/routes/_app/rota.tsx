@@ -180,11 +180,10 @@ function RotaPage() {
     ward: "",
     rotateInterns: true,
   });
-  // Pending leave warning: null = not checked yet, [] = checked + clear, [...] = warning shown
+  // Pending leave warning — populated by the pre-flight check in handleGenerate.
   const [genPendingLeaves, setGenPendingLeaves] = useState<
     { name: string; from: string; to: string }[]
   >([]);
-  const [genLeaveChecked, setGenLeaveChecked] = useState(false);
 
   // Extra shifts added by safety enforcement during the last auto-generate run.
   const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
@@ -653,6 +652,7 @@ function RotaPage() {
       ward: selectedWard,
       rotateInterns: true,
     });
+    setGenPendingLeaves([]); // reset so re-opening always re-checks
     setGenOpen(true);
   }
 
@@ -680,30 +680,28 @@ function RotaPage() {
     const nurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
     const genWards = qc.getQueryData<WardInput[]>(["gen-wards", genForm.facility]) ?? [];
 
-    // Pre-flight: check for pending leave requests that overlap this period.
-    // Skip if the user already confirmed ("Continue anyway").
-    if (!genLeaveChecked) {
-      const facilityIds = nurses
-        .filter((n) => n.facility === genForm.facility)
-        .map((n) => n.id)
-        .filter(Boolean);
-      if (facilityIds.length > 0) {
-        const pending = await api
-          .get<
-            { nurse_name: string; from_date: string; to_date: string }[]
-          >(`/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
-          .catch(() => []);
-        if (pending.length > 0) {
-          setGenPendingLeaves(
-            pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
-          );
-          return; // Wait for user decision in the dialog
-        }
+    // Pre-flight: block generation when any nurse in this facility has a Pending
+    // leave request that overlaps the period. They must be Approved or Rejected first
+    // so the schedule knows whether to mark those days as LEAVE.
+    const facilityIds = nurses
+      .filter((n) => n.facility === genForm.facility)
+      .map((n) => n.id)
+      .filter(Boolean);
+    if (facilityIds.length > 0) {
+      const pending = await api
+        .get<{ nurse_name: string; from_date: string; to_date: string }[]>(
+          `/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`,
+        )
+        .catch(() => []);
+      if (pending.length > 0) {
+        setGenPendingLeaves(
+          pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
+        );
+        setBusy(false);
+        return; // Block until resolved
       }
     }
 
-    // Reset the leave check state so subsequent opens re-check
-    setGenLeaveChecked(false);
     setGenPendingLeaves([]);
 
     const isWardRun = !!genForm.ward;
@@ -1371,66 +1369,6 @@ function RotaPage() {
           </div>
         )}
 
-        <div className="flex-1" />
-
-        {/* Auto-generate — only available once facility + ward chips are both selected */}
-        {canGenerate && effectiveFacility && selectedWard && (
-          <button
-            type="button"
-            onClick={openGenDialog}
-            disabled={busy}
-            className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-          >
-            <Wand2 className="h-4 w-4" /> Auto-generate
-          </button>
-        )}
-        {selectedWard && isWindowLocked ? (
-          <span
-            className={cn(
-              "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
-              windowLockStatus === "published"
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-400"
-                : windowLockStatus === "approved_cno"
-                  ? "border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-400"
-                  : windowLockStatus === "approved_chief"
-                    ? "border-blue-300 bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-400"
-                    : "border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-400",
-            )}
-          >
-            {windowLockStatus === "published" ? (
-              <Lock className="h-3.5 w-3.5" />
-            ) : (
-              <Clock className="h-3.5 w-3.5" />
-            )}
-            {windowLockStatus === "published" && "Published — read only"}
-            {windowLockStatus === "approved_cno" && "Approved (CNO) — awaiting publication"}
-            {windowLockStatus === "approved_chief" && "Approved (Chief Matron) — awaiting CNO"}
-            {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
-          </span>
-        ) : selectedWard && !isWindowLocked ? (
-          <>
-            {canEdit && (
-              <button
-                type="button"
-                onClick={handleClear}
-                disabled={busy}
-                className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-              >
-                <Trash2 className="h-4 w-4" /> Clear draft
-              </button>
-            )}
-            {canSubmit && (
-              <button
-                type="button"
-                onClick={handleSubmitRota}
-                disabled={busy}
-                className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-              >
-                <Send className="h-4 w-4" /> Submit for approval
-              </button>
-            )}
-          </>
-        ) : null}
       </div>
 
       {/* Facility card strip — admin/CNO/HR see clickable cards; locked-facility users see a static selected card */}
@@ -1478,9 +1416,9 @@ function RotaPage() {
 
       {/* Ward chip strip — visible once a specific facility is selected */}
       {!lockedWard && !isNurseTier && effectiveFacility && facilityFilteredWards.length > 0 && (
-        <div className="border-t pt-3 pb-2">
+        <div className="border-t pt-3 pb-1">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground mb-2">Wards</p>
-          <div className="flex gap-2.5 overflow-x-auto pb-1 scrollbar-thin">
+          <div className="flex gap-2.5 overflow-x-auto pb-2 scrollbar-thin">
           <button
             type="button"
             onClick={() => { setSelectedWard(""); setSelectedFacilityWide(""); }}
@@ -1516,8 +1454,8 @@ function RotaPage() {
               none: "No draft",
               draft: "Draft",
               submitted: "Submitted",
-              approved_chief: "Approved",
-              approved_cno: "CNO approved",
+              approved_chief: "Chief ✓",
+              approved_cno: "CNO ✓",
               published: "Published",
             };
             return (
@@ -1538,6 +1476,67 @@ function RotaPage() {
             );
           })}
           </div>
+          {selectedWard && (
+            <div className="flex items-center gap-2 mt-3 flex-wrap">
+              {canGenerate && !isWindowLocked && (
+                <button
+                  type="button"
+                  onClick={openGenDialog}
+                  disabled={busy}
+                  className="h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <Wand2 className="h-4 w-4" /> Auto-generate
+                </button>
+              )}
+              {isWindowLocked ? (
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
+                    windowLockStatus === "published"
+                      ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
+                      : windowLockStatus === "approved_cno"
+                        ? "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
+                        : windowLockStatus === "approved_chief"
+                          ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300"
+                          : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
+                  )}
+                >
+                  {windowLockStatus === "published" ? (
+                    <Lock className="h-3.5 w-3.5" />
+                  ) : (
+                    <Clock className="h-3.5 w-3.5" />
+                  )}
+                  {windowLockStatus === "published" && "Published — read only"}
+                  {windowLockStatus === "approved_cno" && "CNO Approved — awaiting publication"}
+                  {windowLockStatus === "approved_chief" && "Chief Matron Approved — awaiting CNO"}
+                  {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
+                </span>
+              ) : (
+                <>
+                  {canEdit && wardStatusMap.get(selectedWard) === "draft" && (
+                    <button
+                      type="button"
+                      onClick={handleClear}
+                      disabled={busy}
+                      className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" /> Clear draft
+                    </button>
+                  )}
+                  {canSubmit && wardStatusMap.get(selectedWard) === "draft" && (
+                    <button
+                      type="button"
+                      onClick={handleSubmitRota}
+                      disabled={busy}
+                      className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                    >
+                      <Send className="h-4 w-4" /> Submit for approval
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1914,7 +1913,6 @@ function RotaPage() {
           setGenOpen(open);
           if (!open) {
             setGenPendingLeaves([]);
-            setGenLeaveChecked(false);
           }
         }}
       >
@@ -1972,48 +1970,33 @@ function RotaPage() {
             </label>
           </div>
 
-          {/* Pending leave warning */}
+          {/* Pending leave warning — hard block, no bypass */}
           {genPendingLeaves.length > 0 && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 dark:border-amber-700 p-3 text-xs space-y-2">
-              <p className="font-semibold text-amber-800 dark:text-amber-300">
-                {genPendingLeaves.length} pending leave request
+            <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-700 p-3 text-xs space-y-2">
+              <p className="font-semibold text-red-800 dark:text-red-300 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Cannot generate — {genPendingLeaves.length} pending leave request
                 {genPendingLeaves.length > 1 ? "s" : ""} in this period
               </p>
-              <ul className="space-y-0.5 text-amber-700 dark:text-amber-400">
+              <ul className="space-y-0.5 text-red-700 dark:text-red-400">
                 {genPendingLeaves.map((l, i) => (
                   <li key={i}>
                     • {l.name} — {l.from} → {l.to}
                   </li>
                 ))}
               </ul>
-              <p className="text-amber-600 dark:text-amber-500">
-                Approve or reject these leaves before generating so the schedule reflects their
-                availability correctly.
+              <p className="text-red-600 dark:text-red-500">
+                Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
+                before the schedule can be generated, so the system knows whether to mark those
+                days as leave or keep the nurse on shift.
               </p>
-              <div className="flex gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGenLeaveChecked(true);
-                    setGenPendingLeaves([]);
-                    void handleGenerate();
-                  }}
-                  className="h-7 px-3 rounded-md bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium"
-                >
-                  Continue anyway
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGenOpen(false);
-                    setGenPendingLeaves([]);
-                    setGenLeaveChecked(false);
-                  }}
-                  className="h-7 px-3 rounded-md border bg-card text-xs hover:bg-muted"
-                >
-                  Review leaves first
-                </button>
-              </div>
+              <Link
+                to="/leave"
+                onClick={() => { setGenOpen(false); setGenPendingLeaves([]); }}
+                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
+              >
+                Go to Leave requests
+              </Link>
             </div>
           )}
 
@@ -2026,7 +2009,7 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerate}
-              disabled={!genForm.startDate || busy}
+              disabled={!genForm.startDate || busy || genPendingLeaves.length > 0}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />
