@@ -253,6 +253,7 @@ function ShiftPage() {
     requestId: string;
     nurseAName: string;
     shiftType: "M" | "N";
+    isDirect: boolean;
   } | null>({
     queryKey: ["my-swap-today", nurseId, today],
     enabled: !!nurseId,
@@ -266,10 +267,12 @@ function ShiftPage() {
       const row = rows[0];
       const parts = (row.reason ?? "").slice("SHIFT_SWITCH|".length).split("|");
       const shiftA = parts[2] ?? "";
+      const isDirect = parts.includes("DIRECT");
       return {
         requestId: row.id,
         nurseAName: row.nurse_name,
         shiftType: (shiftA === "M" ? "M" : "N") as "M" | "N",
+        isDirect,
       };
     },
   });
@@ -478,8 +481,8 @@ function ShiftPage() {
         ip_address: geo?.ip ?? null,
         is_locum: !!todayLocum,
         locum_request_id: todayLocum?.id ?? null,
-        is_swap: !!todaySwap,
-        swap_note: todaySwap
+        is_swap: !!todaySwap && !todaySwap.isDirect,
+        swap_note: todaySwap && !todaySwap.isDirect
           ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
           : null,
       });

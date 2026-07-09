@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import * as XLSX from "xlsx";
 import { useAuth } from "@/lib/auth-context";
 import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
+import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
@@ -277,6 +278,13 @@ function ReportsContent() {
     "overview" | "hours" | "locum" | "periods" | "leave" | "staff-dir" | "schedules"
   >("overview");
   const [closingPeriod, setClosingPeriod] = useState(false);
+  // Pagination state per heavy table tab
+  const [hoursPage, setHoursPage] = useState(1);
+  const [hoursPageSize, setHoursPageSize] = useState(20);
+  const [locumPage, setLocumPage] = useState(1);
+  const [locumPageSize, setLocumPageSize] = useState(20);
+  const [leavePage, setLeavePage] = useState(1);
+  const [leavePageSize, setLeavePageSize] = useState(20);
   const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
@@ -367,6 +375,26 @@ function ReportsContent() {
         ? leave.filter((l) => l.nurse_id && scopedNurseIds.has(l.nurse_id))
         : leave,
     [leave, scopedNurseIds, reportFacility],
+  );
+  const reportLeaveOnly = useMemo(
+    () => scopedLeave.filter((l) => l.type !== "Swap"),
+    [scopedLeave],
+  );
+  // Paginate the three heavy tables (hooks must be unconditional)
+  const { pageItems: pagedShiftLogs, totalPages: hoursTotalPages } = usePagination(
+    shiftLogs,
+    hoursPageSize,
+    hoursPage,
+  );
+  const { pageItems: pagedLocumRequests, totalPages: locumTotalPages } = usePagination(
+    scopedLocumRequests,
+    locumPageSize,
+    locumPage,
+  );
+  const { pageItems: pagedLeaveOnly, totalPages: leaveTotalPages } = usePagination(
+    reportLeaveOnly,
+    leavePageSize,
+    leavePage,
   );
 
   // Build per-nurse hours for current period (locum and swap-coverage excluded from regular total).
@@ -1179,7 +1207,7 @@ ${sections}
                   </tr>
                 </thead>
                 <tbody>
-                  {shiftLogs.map((log) => {
+                  {pagedShiftLogs.map((log) => {
                     const nurse = nurses.find((n) => n.id === log.nurse_id);
                     return (
                       <tr
@@ -1256,6 +1284,17 @@ ${sections}
                 </tbody>
               </table>
               </div>
+              <Pagination
+                page={hoursPage}
+                totalPages={hoursTotalPages}
+                pageSize={hoursPageSize}
+                totalItems={shiftLogs.length}
+                onPage={setHoursPage}
+                onPageSize={(s) => {
+                  setHoursPageSize(s);
+                  setHoursPage(1);
+                }}
+              />
             </div>
           )}
         </div>
@@ -1342,7 +1381,7 @@ ${sections}
                     </tr>
                   </thead>
                   <tbody>
-                    {scopedLocumRequests.map((r) => {
+                    {pagedLocumRequests.map((r) => {
                       const log = r.accepted_by_nurse_id
                         ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
                         : undefined;
@@ -1412,6 +1451,17 @@ ${sections}
                   </tbody>
                 </table>
                 </div>
+                <Pagination
+                  page={locumPage}
+                  totalPages={locumTotalPages}
+                  pageSize={locumPageSize}
+                  totalItems={scopedLocumRequests.length}
+                  onPage={setLocumPage}
+                  onPageSize={(s) => {
+                    setLocumPageSize(s);
+                    setLocumPage(1);
+                  }}
+                />
               </div>
             </>
           )}
@@ -1421,7 +1471,8 @@ ${sections}
       {/* ── Leave & Requests ─────────────────────────────────────────────── */}
       {tab === "leave" &&
         (() => {
-          const leaveOnly = scopedLeave.filter((l: { type: string }) => l.type !== "Swap");
+          // Use component-level reportLeaveOnly / pagedLeaveOnly so pagination state is stable
+          const leaveOnly = reportLeaveOnly;
           const switches = scopedLeave.filter((l: { type: string }) => l.type === "Swap");
           const pending = leaveOnly.filter((l: { status: string }) => l.status === "Pending");
           const approved = leaveOnly.filter((l: { status: string }) => l.status === "Approved");
@@ -1535,7 +1586,7 @@ ${sections}
                   <tbody>
                     {(() => {
                       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-                      const renderLeaveRow = (l: (typeof leaveOnly)[0]) => (
+                      const renderLeaveRow = (l: (typeof pagedLeaveOnly)[0]) => (
                         <tr key={l.id} className="border-t hover:bg-muted/30">
                           <td className="px-4 py-3 font-medium">
                             {(l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.name ?? "Unknown"}
@@ -1564,9 +1615,9 @@ ${sections}
                       );
 
                       if (!reportFacility) {
-                        // Group by facility for admin/cno/hr_admin
-                        const grouped = new Map<string, typeof leaveOnly>();
-                        for (const l of leaveOnly) {
+                        // Group by facility for admin/cno/hr_admin (applied to current page slice)
+                        const grouped = new Map<string, typeof pagedLeaveOnly>();
+                        for (const l of pagedLeaveOnly) {
                           const f = (l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.facility ?? "Unknown";
                           if (!grouped.has(f)) grouped.set(f, []);
                           grouped.get(f)!.push(l);
@@ -1586,11 +1637,22 @@ ${sections}
                           ]);
                       }
 
-                      return leaveOnly.map(renderLeaveRow);
+                      return pagedLeaveOnly.map(renderLeaveRow);
                     })()}
                   </tbody>
                 </table>
                 </div>
+                <Pagination
+                  page={leavePage}
+                  totalPages={leaveTotalPages}
+                  pageSize={leavePageSize}
+                  totalItems={leaveOnly.length}
+                  onPage={setLeavePage}
+                  onPageSize={(s) => {
+                    setLeavePageSize(s);
+                    setLeavePage(1);
+                  }}
+                />
               </div>
             </>
           );

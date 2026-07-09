@@ -69,7 +69,9 @@ router.get(
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    let query = `SELECT * FROM leave_requests ${where} ORDER BY created_at DESC`;
+    // Include the nurse's current role so the frontend can route approval correctly
+    // (chief_matron leave → CNO approves; all others → chief_matron approves).
+    let query = `SELECT lr.*, n.role AS nurse_role FROM leave_requests lr LEFT JOIN nurses n ON lr.nurse_id = n.id ${where} ORDER BY lr.created_at DESC`;
     if (req.query.limit) {
       query += ` LIMIT $${params.length + 1}`;
       params.push(parseInt(req.query.limit, 10));

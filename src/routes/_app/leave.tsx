@@ -9,6 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
+import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/leave")({
   component: LeavePage,
@@ -18,6 +19,7 @@ type LeaveRow = {
   id: string;
   nurse_id: string | null;
   nurse_name: string;
+  nurse_role: string | null;
   requested_by: string | null;
   type: string;
   from_date: string;
@@ -40,12 +42,14 @@ function parseSwitch(row: LeaveRow) {
   const shiftA = parts[2] ?? "";
   const shiftB = parts[3] ?? "";
   let interWard = false;
+  let isDirect = false;
   let note = "";
   for (let i = 4; i < parts.length; i++) {
     if (parts[i] === "INTER_WARD") interWard = true;
+    else if (parts[i] === "DIRECT") isDirect = true;
     else if (parts[i].startsWith("NOTE:")) note = parts.slice(i).join("|").slice(5);
   }
-  return { nurseBId, nurseBName, shiftA, shiftB, date: row.from_date, interWard, note };
+  return { nurseBId, nurseBName, shiftA, shiftB, date: row.from_date, interWard, isDirect, note };
 }
 
 function isShiftSwitch(row: LeaveRow) {
@@ -126,9 +130,9 @@ function LeavePage() {
   const canSeeAll = canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave;
 
   // Per-row approval info: determines both whether the user can approve AND what label to show.
+  // nurse_role comes directly from the API (LEFT JOIN nurses), so it's always current.
   function rowApprovalInfo(row: LeaveRow): { canApprove: boolean; blockedLabel: string } {
-    const role = row.nurse_id ? (nurseToRole.get(row.nurse_id) ?? null) : null;
-    const isMatronLeave = role === "chief_matron";
+    const isMatronLeave = row.nurse_role === "chief_matron";
     return {
       canApprove: isMatronLeave ? canApproveMatronLeave : canApproveLeave,
       blockedLabel: isMatronLeave ? "CNO approval required" : "Chief Matron approval required",
@@ -650,6 +654,9 @@ function LeaveTable({
     status: "Approved" | "Rejected";
   } | null>(null);
   const [reviewNote, setReviewNote] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const { pageItems: pagedRows, totalPages } = usePagination(rows, pageSize, page);
 
   function submitReview() {
     if (!reviewing) return;
@@ -673,7 +680,7 @@ function LeaveTable({
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {pagedRows.length === 0 ? (
                 <tr>
                   <td
                     colSpan={showApproverCols ? 5 : 3}
@@ -762,7 +769,7 @@ function LeaveTable({
                 if (showFacility && nurseToFacility) {
                   // Group by facility, sort facility names, then render with divider rows.
                   const grouped = new Map<string, LeaveRow[]>();
-                  for (const l of rows) {
+                  for (const l of pagedRows) {
                     const f = (l.nurse_id && nurseToFacility.get(l.nurse_id)) || "Unknown";
                     if (!grouped.has(f)) grouped.set(f, []);
                     grouped.get(f)!.push(l);
@@ -782,11 +789,22 @@ function LeaveTable({
                     ]);
                 }
 
-                return rows.map(renderRow);
+                return pagedRows.map(renderRow);
               })()}
             </tbody>
           </table>
         </div>
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          pageSize={pageSize}
+          totalItems={rows.length}
+          onPage={(p) => setPage(p)}
+          onPageSize={(s) => {
+            setPageSize(s);
+            setPage(1);
+          }}
+        />
       </div>
 
       {reviewing && (
@@ -1255,6 +1273,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   });
 
   const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
+  const [exchangeMode, setExchangeMode] = useState<"coverage" | "direct">("coverage");
   const [facility, setFacility] = useState(lockedFacility ?? "");
   const [nurseAId, setNurseAId] = useState("");
   const [nurseBId, setNurseBId] = useState("");
@@ -1275,10 +1294,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const facilityNurseIds = useMemo(() => facilityNurses.map((n) => n.id), [facilityNurses]);
 
   // Fetch nurses who have an OFF published shift on the selected date in this facility.
-  // Always required for Nurse B eligibility — only off-duty nurses can be selected.
+  // Used for coverage mode — only off-duty nurses can be selected as Nurse B.
   const { data: offDutyIds = [], isLoading: loadingOffDuty } = useQuery({
     queryKey: ["off-duty-nurses", date, facility],
-    enabled: !!date && facilityNurseIds.length > 0,
+    enabled: !!date && facilityNurseIds.length > 0 && exchangeMode === "coverage",
     queryFn: () =>
       api
         .get<
@@ -1288,23 +1307,39 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   });
   const offDutyIdSet = useMemo(() => new Set(offDutyIds), [offDutyIds]);
 
+  // Fetch nurses who have a work shift on the selected date — used for direct exchange mode.
+  const { data: onDutyAssignments = [], isLoading: loadingOnDuty } = useQuery({
+    queryKey: ["on-duty-nurses", date, facility],
+    enabled: !!date && facilityNurseIds.length > 0 && exchangeMode === "direct",
+    queryFn: () =>
+      api
+        .get<{ nurse_id: string; shift: string }[]>(
+          `/shift-assignments?shift_date=${date}&status=published&nurse_ids=${facilityNurseIds.join(",")}`,
+        )
+        .then((arr) => arr.filter((a) => ["M", "N", "MWC", "NC"].includes(a.shift))),
+  });
+  const onDutyShiftMap = useMemo(
+    () => new Map(onDutyAssignments.map((a) => [a.nurse_id, a.shift])),
+    [onDutyAssignments],
+  );
+
   const nurseBList = useMemo(() => {
     if (!nurseAId || !date) return [];
     const nurseARole = nurseA?.role ?? "";
-    // Nurse B must share the same job role as Nurse A and be off duty on the date.
+    // Coverage mode: Nurse B must be off duty. Direct mode: Nurse B must be working a different shift.
     const eligible = (n: (typeof facilityNurses)[number]) =>
       n.id !== nurseAId &&
       (!nurseARole || n.role === nurseARole) &&
-      offDutyIdSet.has(n.id);
+      (exchangeMode === "direct" ? onDutyShiftMap.has(n.id) : offDutyIdSet.has(n.id));
     if (switchType === "inter-ward") {
       if (!wardB) return [];
       return facilityNurses.filter((n) => eligible(n) && splitWards(n.ward).includes(wardB));
     }
-    // Same-ward: if Nurse A has no ward (coverage nurse), any same-role OFF nurse in the facility can cover.
+    // Same-ward: if Nurse A has no ward (coverage nurse), any same-role nurse in the facility can cover.
     const inWard = (n: (typeof facilityNurses)[number]) =>
       nurseAWards.length === 0 ? true : splitWards(n.ward).some((w) => nurseAWards.includes(w));
     return facilityNurses.filter((n) => eligible(n) && inWard(n));
-  }, [nurseAId, date, switchType, wardB, facilityNurses, nurseA, nurseAWards, offDutyIdSet]);
+  }, [nurseAId, date, switchType, wardB, facilityNurses, nurseA, nurseAWards, offDutyIdSet, exchangeMode, onDutyShiftMap]);
 
   async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
     if (!nurseId || !forDate) {
@@ -1340,11 +1375,22 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       );
     }
 
+    const workShiftCodes = ["M", "N", "MWC", "NC"];
+    if (exchangeMode === "direct") {
+      if (!workShiftCodes.includes(shiftA))
+        return toast.error("Nurse A must be on a scheduled work shift for a direct exchange");
+      if (!workShiftCodes.includes(shiftB))
+        return toast.error("Nurse B must be on a scheduled work shift for a direct exchange");
+    }
+
     setBusy(true);
     try {
       const nurseB = nurses.find((n) => n.id === nurseBId);
       const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
-      const flags = switchType === "inter-ward" ? "|INTER_WARD" : "";
+      const flagParts: string[] = [];
+      if (switchType === "inter-ward") flagParts.push("INTER_WARD");
+      if (exchangeMode === "direct") flagParts.push("DIRECT");
+      const flags = flagParts.length ? `|${flagParts.join("|")}` : "";
       const reasonEncoded = `${SWITCH_PREFIX}${nurseBId}|${nurseB?.name ?? ""}|${effectiveShiftA}|${shiftB}${flags}|NOTE:${reason.trim()}`;
 
       await api.post("/leave-requests", {
@@ -1378,9 +1424,39 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
         Requests must be submitted at least <strong>24 hours</strong> before the shift.
       </p>
       <form onSubmit={submit} className="space-y-4">
+        {/* Exchange mode */}
+        <div>
+          <p className="text-sm font-medium mb-1.5">Exchange type</p>
+          <div className="flex gap-2 flex-wrap">
+            {(["coverage", "direct"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setExchangeMode(m);
+                  setNurseBId("");
+                  setShiftB("");
+                }}
+                className={`h-9 px-4 rounded-md text-sm font-medium border transition-colors ${
+                  exchangeMode === m
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card border-border hover:bg-muted text-muted-foreground"
+                }`}
+              >
+                {m === "coverage" ? "Coverage (OFF nurse covers)" : "Direct Exchange"}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            {exchangeMode === "coverage"
+              ? "Nurse B is off duty and takes on Nurse A's shift — counts as additional hours for Nurse B."
+              : "Both nurses swap their scheduled shifts — hours count as regular for both."}
+          </p>
+        </div>
+
         {/* Switch type */}
         <div>
-          <p className="text-sm font-medium mb-1.5">Switch type</p>
+          <p className="text-sm font-medium mb-1.5">Ward scope</p>
           <div className="flex gap-2">
             {(["same-ward", "inter-ward"] as const).map((t) => (
               <button
@@ -1560,7 +1636,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-b"
             required
-            disabled={loadingOffDuty || (switchType === "inter-ward" ? !wardB : !nurseAId) || !date}
+            disabled={
+              (exchangeMode === "coverage" ? loadingOffDuty : loadingOnDuty) ||
+              (switchType === "inter-ward" ? !wardB : !nurseAId) ||
+              !date
+            }
             value={nurseBId}
             onChange={(e) => {
               setNurseBId(e.target.value);
@@ -1570,7 +1650,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             className={inputCls}
           >
             <option value="">
-              {loadingOffDuty
+              {exchangeMode === "coverage" ? loadingOffDuty : loadingOnDuty
                 ? "Loading available nurses…"
                 : switchType === "inter-ward"
                   ? wardB
@@ -1583,14 +1663,19 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             {nurseBList.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name}
+                {exchangeMode === "direct" && onDutyShiftMap.get(n.id)
+                  ? ` — ${onDutyShiftMap.get(n.id)} shift`
+                  : ""}
               </option>
             ))}
           </select>
-          {nurseAId && date && !loadingOffDuty && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
+          {nurseAId && date && !loadingOffDuty && !loadingOnDuty && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
             <p className="mt-1 text-xs text-muted-foreground">
-              {switchType === "inter-ward"
-                ? `No off-duty ${nurseA?.role ?? "nurse"} found in the selected ward on this date.`
-                : `No off-duty ${nurseA?.role ?? "nurse"} found in the same ward on this date.`}
+              {exchangeMode === "direct"
+                ? `No ${nurseA?.role ?? "nurse"} found on a work shift on this date.`
+                : switchType === "inter-ward"
+                  ? `No off-duty ${nurseA?.role ?? "nurse"} found in the selected ward on this date.`
+                  : `No off-duty ${nurseA?.role ?? "nurse"} found in the same ward on this date.`}
             </p>
           )}
           {shiftB && (

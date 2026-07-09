@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import * as XLSX from "xlsx";
+import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/staff")({
   head: () => ({
@@ -304,6 +305,14 @@ function StaffPage() {
     [nurses, search, filterRole, effectiveFilterFacility, filterWard, filterStatus, profileInfo],
   );
 
+  const [staffPage, setStaffPage] = useState(1);
+  const [staffPageSize, setStaffPageSize] = useState(20);
+  const { pageItems: pagedStaff, totalPages: staffTotalPages } = usePagination(
+    filtered,
+    staffPageSize,
+    staffPage,
+  );
+
   const activeFilters = [filterRole, filterFacility, filterWard, filterStatus].filter(
     Boolean,
   ).length;
@@ -535,7 +544,7 @@ function StaffPage() {
                 </tr>
               </thead>
               <tbody>
-                {filtered.map((n) => (
+                {pagedStaff.map((n) => (
                   <tr key={n.id} className="border-t hover:bg-muted/30">
                     <td className="px-4 py-3 font-medium">
                       <div className="flex items-center gap-3">
@@ -709,6 +718,17 @@ function StaffPage() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={staffPage}
+            totalPages={staffTotalPages}
+            pageSize={staffPageSize}
+            totalItems={filtered.length}
+            onPage={(p) => setStaffPage(p)}
+            onPageSize={(s) => {
+              setStaffPageSize(s);
+              setStaffPage(1);
+            }}
+          />
         </div>
       )}
 
