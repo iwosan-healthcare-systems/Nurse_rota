@@ -83,6 +83,7 @@ function LeavePage() {
     user,
     nurseId,
     canApproveLeave,
+    canApproveMatronLeave,
     canRequestLeave,
     canRequestShiftSwitch,
     canApproveShiftSwitch,
@@ -106,8 +107,8 @@ function LeavePage() {
   const isCnoOrAdmin = isAdmin || activeRole === "cno";
   const facilityScope: string | null = isCnoOrAdmin ? null : (nurseFacility ?? null);
 
-  // Fetch nurses so we can show a facility badge when CNO/admin views all facilities.
-  const { data: nurses = [] } = useQuery<{ id: string; name: string; facility: string | null }[]>({
+  // Fetch nurses to build facility + role maps (used for column badges and matron-leave gating).
+  const { data: nurses = [] } = useQuery<{ id: string; name: string; facility: string | null; role: string | null }[]>({
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
     queryFn: () => api.get("/nurses"),
@@ -116,9 +117,23 @@ function LeavePage() {
     () => new Map(nurses.map((n) => [n.id, n.facility])),
     [nurses],
   );
+  const nurseToRole = useMemo(
+    () => new Map(nurses.map((n) => [n.id, n.role])),
+    [nurses],
+  );
 
-  // Any approval role (leave OR shift-switch) gets the full list for their scope.
-  const canSeeAll = canApproveLeave || canApproveShiftSwitch;
+  // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope.
+  const canSeeAll = canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave;
+
+  // Per-row approval gate: chief_matron's leave requires the CNO-level permission.
+  function canApproveRow(row: LeaveRow): boolean {
+    const role = row.nurse_id ? (nurseToRole.get(row.nurse_id) ?? null) : null;
+    if (role === "chief_matron") return canApproveMatronLeave;
+    return canApproveLeave;
+  }
+
+  // True if this user can approve ANY kind of leave (drives column visibility).
+  const isAnyLeaveApprover = canApproveLeave || canApproveMatronLeave;
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: canSeeAll ? ["leave", facilityScope] : ["leave", "mine", user?.id, nurseId],
@@ -587,7 +602,8 @@ function LeavePage() {
       ) : activeTab === "leave" ? (
         <LeaveTable
           rows={visibleRows}
-          canApprove={canApproveLeave}
+          showApproverCols={isAnyLeaveApprover}
+          canApproveRow={canApproveRow}
           onReview={reviewLeave}
           nurseToFacility={nurseToFacility}
           showFacility={isCnoOrAdmin}
@@ -612,13 +628,15 @@ function LeavePage() {
 
 function LeaveTable({
   rows,
-  canApprove,
+  showApproverCols,
+  canApproveRow,
   onReview,
   nurseToFacility,
   showFacility,
 }: {
   rows: LeaveRow[];
-  canApprove: boolean;
+  showApproverCols: boolean;
+  canApproveRow: (row: LeaveRow) => boolean;
   onReview: (l: LeaveRow, s: "Approved" | "Rejected", note: string) => void;
   nurseToFacility?: Map<string, string | null>;
   showFacility?: boolean;
@@ -644,27 +662,29 @@ function LeaveTable({
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                {canApprove && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
+                {showApproverCols && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
                 <th className="text-left font-semibold px-4 py-3">Type</th>
                 <th className="text-left font-semibold px-4 py-3">Period</th>
                 <th className="text-left font-semibold px-4 py-3">Status</th>
-                {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
+                {showApproverCols && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={canApprove ? 5 : 3}
+                    colSpan={showApproverCols ? 5 : 3}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     No requests match the current filter.
                   </td>
                 </tr>
               ) : null}
-              {rows.map((l) => (
+              {rows.map((l) => {
+                const rowApprovable = canApproveRow(l);
+                return (
                 <tr key={l.id} className="border-t hover:bg-muted/30">
-                  {canApprove && (
+                  {showApproverCols && (
                     <td className="px-4 py-3">
                       <p className="font-medium">{l.nurse_name}</p>
                       {showFacility && l.nurse_id && nurseToFacility?.get(l.nurse_id) && (
@@ -695,9 +715,13 @@ function LeaveTable({
                       </p>
                     )}
                   </td>
-                  {canApprove && (
+                  {showApproverCols && (
                     <td className="px-4 py-3">
-                      {l.requested_by === user?.id ? (
+                      {!rowApprovable ? (
+                        <p className="text-xs text-muted-foreground text-right italic">
+                          CNO approval required
+                        </p>
+                      ) : l.requested_by === user?.id ? (
                         <p className="text-xs text-muted-foreground text-right italic">
                           Own request
                         </p>
@@ -732,7 +756,8 @@ function LeaveTable({
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

@@ -14,6 +14,7 @@ VALUES (
     {"key":"manage_wards",          "roles":["admin","cno"]},
     {"key":"request_leave",         "roles":["admin","chief_matron","head_nurse","nurse","surgical_nurse","porter","nursing_assistant"]},
     {"key":"approve_leave",         "roles":["admin","cno","chief_matron"]},
+    {"key":"approve_matron_leave",  "roles":["admin","cno"]},
     {"key":"request_shift_switch",  "roles":["admin","chief_matron"]},
     {"key":"approve_shift_switch",  "roles":["admin","cno"]},
     {"key":"submit_approval",       "roles":["admin","head_nurse"]},

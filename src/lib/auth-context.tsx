@@ -65,6 +65,7 @@ interface AuthCtx {
   canPublishRota: boolean;
   canRevertPublished: boolean;
   canApproveLeave: boolean;
+  canApproveMatronLeave: boolean;
   canRequestLeave: boolean;
   canRequestShiftSwitch: boolean;
   canApproveShiftSwitch: boolean;
@@ -272,6 +273,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "cno", "chief_matron"]),
+    canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
     canRequestLeave: cap("request_leave", [
       "admin",
       "chief_matron",

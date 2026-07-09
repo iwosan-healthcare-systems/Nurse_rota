@@ -62,6 +62,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     roles: ["admin", "cno", "chief_matron"],
   },
   {
+    key: "approve_matron_leave",
+    label: "Approve / Reject Matron's Leave",
+    roles: ["admin", "cno"],
+  },
+  {
     key: "request_shift_switch",
     label: "Request Shift Switch (Chief Matron initiates)",
     roles: ["admin", "chief_matron"],
