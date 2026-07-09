@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouterState } from "@tanstack/react-router";
+import { useIsFetching } from "@tanstack/react-query";
 
 export function TopProgressBar() {
-  const isLoading = useRouterState({ select: (s) => s.isLoading });
+  const routerLoading = useRouterState({ select: (s) => s.isLoading });
+  const fetchingCount = useIsFetching();
+  const isLoading = routerLoading || fetchingCount > 0;
   const [width, setWidth] = useState(0);
   const [visible, setVisible] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
