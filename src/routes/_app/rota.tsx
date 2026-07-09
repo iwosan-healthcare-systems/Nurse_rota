@@ -1817,22 +1817,27 @@ function RotaPage() {
                 </tr>
               </thead>
               <tbody>
-                {filteredNurses.flatMap((n, idx) => {
+                {(() => {
+                  // When showing "all wards" for a specific facility, sort ward nurses first
+                  // and facility-wide nurses last. The alphabetical API order scatters
+                  // facility-wide roles throughout the list, causing multiple dividers.
+                  const isFacilityWide = (role: string) =>
+                    isGlobalHead(role) || isMatron(role) || isPorterType(role) || isInternType(role);
+                  const displayList =
+                    effectiveFacility && !selectedWard && !selectedFacilityWide && !lockedWard
+                      ? [
+                          ...filteredNurses.filter((n) => !isFacilityWide(n.role)),
+                          ...filteredNurses.filter((n) => isFacilityWide(n.role)),
+                        ]
+                      : filteredNurses;
+                  return displayList.flatMap((n, idx) => {
                   // Hard guard: never render facility-wide roles in a ward-specific view.
-                  if (selectedWard && (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isInternType(n.role))) {
+                  if (selectedWard && isFacilityWide(n.role)) {
                     return [];
                   }
-                  const isNonWard =
-                    isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role) || isInternType(n.role);
-                  const prevIsNonWard =
-                    idx > 0 &&
-                    (isGlobalHead(filteredNurses[idx - 1].role) ||
-                      isMatron(filteredNurses[idx - 1].role) ||
-                      isPorterType(filteredNurses[idx - 1].role) ||
-                      isInternType(filteredNurses[idx - 1].role));
-                  // Only show the divider when viewing a specific facility's "all wards" grid.
-                  // In "All facilities" mode nurses are interleaved across facilities and the
-                  // transition fires multiple times, producing duplicate divider rows.
+                  const isNonWard = isFacilityWide(n.role);
+                  const prevIsNonWard = idx > 0 && isFacilityWide(displayList[idx - 1].role);
+                  // Divider appears once — at the first facility-wide nurse in the sorted list.
                   const showDivider =
                     !!effectiveFacility && !selectedWard && !selectedFacilityWide && !lockedWard && isNonWard && !prevIsNonWard;
                   const rows = [];
@@ -1969,7 +1974,8 @@ function RotaPage() {
                   </tr>,
                   );
                   return rows;
-                })}
+                  });
+                })()}
               </tbody>
             </table>
           </div>
