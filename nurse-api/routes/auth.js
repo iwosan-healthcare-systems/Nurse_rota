@@ -14,7 +14,8 @@ router.post(
 
     const { rows } = await pool.query(
       `SELECT id, email, full_name, password_hash, is_active, must_change_password
-     FROM profiles WHERE lower(email) = lower($1)`,
+     FROM profiles WHERE lower(email) = lower($1)
+     ORDER BY created_at DESC LIMIT 1`,
       [email.trim()],
     );
 
@@ -159,15 +160,54 @@ router.post(
   requireAuth,
   requireRole("admin", "cno"),
   wrap(async (req, res) => {
-    const { email, password, full_name } = req.body;
+    const { email, password, full_name, role, nurse_id } = req.body;
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
-    const hash = await bcrypt.hash(password, 12);
-    const { rows } = await pool.query(
-      "INSERT INTO profiles (email, full_name, password_hash, must_change_password) VALUES (lower($1), $2, $3, true) RETURNING id",
-      [email.trim(), full_name || null, hash],
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Prevent duplicate profiles for the same email
+    const { rows: existing } = await pool.query(
+      "SELECT id FROM profiles WHERE lower(email) = $1",
+      [normalizedEmail],
     );
-    res.json({ id: rows[0].id });
+    if (existing.length > 0) {
+      return res.status(409).json({ error: "An account with this email already exists" });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      const { rows } = await client.query(
+        "INSERT INTO profiles (email, full_name, password_hash, must_change_password) VALUES ($1, $2, $3, true) RETURNING id",
+        [normalizedEmail, full_name || null, hash],
+      );
+      const userId = rows[0].id;
+
+      if (role) {
+        await client.query(
+          "INSERT INTO user_roles (user_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [userId, role],
+        );
+      }
+
+      if (nurse_id) {
+        await client.query(
+          "UPDATE nurses SET email = $1, profile_id = $2 WHERE id = $3",
+          [normalizedEmail, userId, nurse_id],
+        );
+      }
+
+      await client.query("COMMIT");
+      res.json({ id: userId });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   }),
 );
 

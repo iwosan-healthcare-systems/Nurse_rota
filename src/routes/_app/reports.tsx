@@ -28,6 +28,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "@/lib/auth-context";
 import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
 import { Pagination, usePagination } from "@/components/Pagination";
+import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
@@ -271,8 +272,10 @@ function ReportsContent() {
   const { canPrintStaff, canPrintSchedule, nurseFacility, isAdmin, activeRole } = useAuth();
 
   // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
-  const reportFacility: string | null =
-    isAdmin || activeRole === "cno" || activeRole === "hr_admin" ? null : (nurseFacility ?? null);
+  const canFilterReportFacility = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const lockedReportFacility: string | null = canFilterReportFacility ? null : (nurseFacility ?? null);
+  const [selectedReportFacility, setSelectedReportFacility] = useState("");
+  const reportFacility: string | null = lockedReportFacility ?? (selectedReportFacility || null);
 
   const [tab, setTab] = useState<
     "overview" | "hours" | "locum" | "periods" | "leave" | "staff-dir" | "schedules"
@@ -1059,6 +1062,16 @@ ${sections}
           </button>
         }
       />
+
+      {/* Facility chip strip */}
+      <div className="mb-4">
+        <FacilityChips
+          value={lockedReportFacility ?? selectedReportFacility}
+          onChange={(f) => { setSelectedReportFacility(f); }}
+          locked={!!lockedReportFacility}
+          showAll={canFilterReportFacility}
+        />
+      </div>
 
       {/* Tabs */}
       <div className="flex gap-1 bg-muted/50 rounded-lg p-1 mb-6 w-fit flex-wrap">

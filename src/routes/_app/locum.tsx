@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { cn } from "@/lib/utils";
 import { Modal } from "./staff";
+import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/locum")({
   component: LocumPage,
@@ -164,7 +165,10 @@ function LocumPage() {
 
   // CNO (and admin, since admin is in approve_locum defaults) see all facilities.
   // Chief Matron / Head Nurse are scoped to their own facility.
-  const locumFacility: string | null = isCNO ? null : (nurseFacility ?? null);
+  const canFilterLocumFacility = isCNO;
+  const lockedLocumFacility: string | null = canFilterLocumFacility ? null : (nurseFacility ?? null);
+  const [selectedLocumFacility, setSelectedLocumFacility] = useState("");
+  const locumFacility: string | null = lockedLocumFacility ?? (selectedLocumFacility || null);
   const isNurse = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
   // Only ward-level roles (nurse, porter, nursing_assistant, surgical_nurse) see the invites tab.
   // Head nurses / matrons are excluded — they manage requests, not receive them.
@@ -585,6 +589,16 @@ function LocumPage() {
             {w}
           </span>
         ))}
+      </div>
+
+      {/* Facility chip strip */}
+      <div>
+        <FacilityChips
+          value={lockedLocumFacility ?? selectedLocumFacility}
+          onChange={(f) => { setSelectedLocumFacility(f); }}
+          locked={!!lockedLocumFacility}
+          showAll={canFilterLocumFacility}
+        />
       </div>
 
       {tabs.length > 1 && (

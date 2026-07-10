@@ -10,7 +10,6 @@ import {
   FileSpreadsheet,
   FileDown,
   Undo2,
-  Building2,
   CalendarRange,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -21,6 +20,7 @@ import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { isGlobalHead, isInternType, isMatron, isPorterType, isNADayType } from "@/lib/auto-schedule";
+import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -940,29 +940,13 @@ td.sm{text-align:left;color:#444;min-width:55px}
         />
       ) : (
         <>
-          {/* Facility tab bar */}
-          {availableFacilities.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
-              {availableFacilities.map((f) => (
-                <button
-                  key={f}
-                  type="button"
-                  disabled={!!lockedFacility && lockedFacility !== f}
-                  onClick={() => setSelectedFacility(f)}
-                  className={cn(
-                    "px-4 py-1.5 rounded-full text-sm font-medium border transition",
-                    effectiveFacility === f
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-card hover:bg-muted border-border",
-                    !!lockedFacility && lockedFacility !== f && "opacity-40 cursor-not-allowed",
-                  )}
-                >
-                  {f}
-                </button>
-              ))}
-            </div>
-          )}
+          {/* Facility chip strip */}
+          <FacilityChips
+            value={effectiveFacility}
+            onChange={setSelectedFacility}
+            locked={!!lockedFacility}
+            showAll={false}
+          />
 
           {/* Periods for the selected facility */}
           {windowsByPeriod.length === 0 ? (

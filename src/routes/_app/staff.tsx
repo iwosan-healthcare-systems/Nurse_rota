@@ -31,6 +31,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import * as XLSX from "xlsx";
 import { Pagination, usePagination } from "@/components/Pagination";
+import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/staff")({
   head: () => ({
@@ -383,6 +384,16 @@ function StaffPage() {
         }
       />
 
+      {/* Facility chip strip */}
+      <div className="mb-4">
+        <FacilityChips
+          value={lockedFacility ?? filterFacility}
+          onChange={(f) => { setFilterFacility(f); setFilterWard(""); }}
+          locked={!!lockedFacility}
+          showAll={canSeeAllFacilities}
+        />
+      </div>
+
       <div className="bg-card border rounded-xl shadow-soft mb-4 p-3 space-y-2">
         {/* Name search — full width on all sizes */}
         <div className="relative">
@@ -414,25 +425,6 @@ function StaffPage() {
             ))}
           </select>
 
-          {/* Facility filter — hidden for roles locked to a single facility */}
-          {canSeeAllFacilities && (
-            <select
-              aria-label="Filter by facility"
-              value={filterFacility}
-              onChange={(e) => {
-                setFilterFacility(e.target.value);
-                setFilterWard("");
-              }}
-              className="h-9 px-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring w-full sm:w-auto"
-            >
-              <option value="">All facilities</option>
-              {FACILITIES.map((f) => (
-                <option key={f} value={f}>
-                  {f}
-                </option>
-              ))}
-            </select>
-          )}
 
           {/* Ward filter */}
           <select
@@ -1565,16 +1557,13 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
     }
     setBusy(true);
     try {
-      const { id: userId } = await api.post<{ id: string }>("/auth/admin/create-user", {
+      await api.post<{ id: string }>("/auth/admin/create-user", {
         email,
         password,
         full_name: nurse.name,
+        role,
+        nurse_id: nurse.id,
       });
-
-      await Promise.all([
-        api.post("/user-roles", { user_id: userId, role }),
-        api.patch(`/nurses/${nurse.id}`, { email }),
-      ]);
 
       logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
       toast.success(`Login created for ${nurse.name} — can log in immediately`);

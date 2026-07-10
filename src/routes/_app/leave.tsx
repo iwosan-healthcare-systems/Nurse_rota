@@ -10,6 +10,7 @@ import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { Pagination, usePagination } from "@/components/Pagination";
+import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/leave")({
   component: LeavePage,
@@ -109,7 +110,11 @@ function LeavePage() {
 
   // CNO and admin see all facilities; every other approver is scoped to their own facility.
   const isCnoOrAdmin = isAdmin || activeRole === "cno";
-  const facilityScope: string | null = isCnoOrAdmin ? null : (nurseFacility ?? null);
+  const canFilterFacility = isCnoOrAdmin || activeRole === "hr_admin";
+  const lockedFacility: string | null = canFilterFacility ? null : (nurseFacility ?? null);
+  const [selectedFacility, setSelectedFacility] = useState("");
+  // When locked to a facility, ignore the chip selection.
+  const facilityScope: string | null = lockedFacility ?? (selectedFacility || null);
 
   // Fetch nurses to build facility + role maps (used for column badges and matron-leave gating).
   const { data: nurses = [] } = useQuery<{ id: string; name: string; facility: string | null; role: string | null }[]>({
@@ -139,7 +144,7 @@ function LeavePage() {
   const isAnyLeaveApprover = canApproveLeave || canApproveMatronLeave;
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: canSeeAll ? ["leave", facilityScope] : ["leave", "mine", user?.id, nurseId],
+    queryKey: canSeeAll ? ["leave", facilityScope] : ["leave", "mine", user?.id, nurseId, facilityScope],
     refetchInterval: 30 * 1000,
     queryFn: async () => {
       if (canSeeAll) {
@@ -510,6 +515,16 @@ function LeavePage() {
           </div>
         </div>
       )}
+
+      {/* Facility chip strip */}
+      <div className="mb-4">
+        <FacilityChips
+          value={lockedFacility ?? selectedFacility}
+          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); }}
+          locked={!!lockedFacility}
+          showAll={canFilterFacility}
+        />
+      </div>
 
       {/* Tabs */}
       <div className="flex border-b mb-4">
