@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Download,
   FileSpreadsheet,
@@ -70,6 +70,7 @@ type ShiftLog = {
   is_swap: boolean;
   swap_note: string | null;
   is_leave: boolean;
+  is_missed: boolean;
 };
 type LocumFilledRequest = {
   id: string;
@@ -278,7 +279,7 @@ function ReportsContent() {
   const reportFacility: string | null = lockedReportFacility ?? (selectedReportFacility || null);
 
   const [tab, setTab] = useState<
-    "overview" | "hours" | "locum" | "periods" | "leave" | "staff-dir" | "schedules"
+    "overview" | "hours" | "locum" | "periods" | "leave" | "missed" | "staff-dir" | "schedules"
   >("overview");
   const [closingPeriod, setClosingPeriod] = useState(false);
   // Pagination state per heavy table tab
@@ -288,6 +289,8 @@ function ReportsContent() {
   const [locumPageSize, setLocumPageSize] = useState(20);
   const [leavePage, setLeavePage] = useState(1);
   const [leavePageSize, setLeavePageSize] = useState(20);
+  const [missedPage, setMissedPage] = useState(1);
+  const [missedPageSize, setMissedPageSize] = useState(20);
   const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
@@ -308,7 +311,7 @@ function ReportsContent() {
     queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
-  // Current period regular shift logs (last 28 days) — locum excluded
+  // Current period regular shift logs (last 28 days) — locum and missed excluded
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["shift-logs-current"],
     staleTime: 2 * 60 * 1000,
@@ -316,8 +319,16 @@ function ReportsContent() {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-      return api.get<ShiftLog[]>(`/shift-logs?is_locum=false&from=${lb}`);
+      return api.get<ShiftLog[]>(`/shift-logs?is_locum=false&is_missed=false&from=${lb}`);
     },
+  });
+
+  // Missed shift logs — all time, facility-scoped
+  const { data: missedShiftLogs = [] } = useQuery<ShiftLog[]>({
+    queryKey: ["missed-shift-logs", reportFacility],
+    staleTime: 2 * 60 * 1000,
+    enabled: tab === "missed",
+    queryFn: () => api.get<ShiftLog[]>("/shift-logs?is_missed=true"),
   });
 
   // Locum shift logs — separate from regular hours
@@ -383,9 +394,31 @@ function ReportsContent() {
     () => scopedLeave.filter((l) => l.type !== "Swap"),
     [scopedLeave],
   );
+  const scopedShiftLogs = useMemo(
+    () => shiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id)),
+    [shiftLogs, scopedNurseIds],
+  );
+  const scopedPeriodSummaries = useMemo(
+    () => periodSummaries.filter((p) => scopedNurseIds.has(p.nurse_id)),
+    [periodSummaries, scopedNurseIds],
+  );
+
+  const scopedMissedLogs = useMemo(
+    () => missedShiftLogs.filter((l) => scopedNurseIds.has(l.nurse_id)),
+    [missedShiftLogs, scopedNurseIds],
+  );
+
+  // Reset all paginated tables to page 1 when the facility filter changes
+  useEffect(() => {
+    setHoursPage(1);
+    setLocumPage(1);
+    setLeavePage(1);
+    setMissedPage(1);
+  }, [reportFacility]);
+
   // Paginate the three heavy tables (hooks must be unconditional)
   const { pageItems: pagedShiftLogs, totalPages: hoursTotalPages } = usePagination(
-    shiftLogs,
+    scopedShiftLogs,
     hoursPageSize,
     hoursPage,
   );
@@ -398,6 +431,11 @@ function ReportsContent() {
     reportLeaveOnly,
     leavePageSize,
     leavePage,
+  );
+  const { pageItems: pagedMissedLogs, totalPages: missedTotalPages } = usePagination(
+    scopedMissedLogs,
+    missedPageSize,
+    missedPage,
   );
 
   // Build per-nurse hours for current period (locum and swap-coverage excluded from regular total).
@@ -460,10 +498,12 @@ function ReportsContent() {
     [locumHoursMap],
   );
 
-  // Staff directory: nurses by selected facility, grouped by ward
+  // Staff directory: nurses by selected facility, grouped by ward.
+  // When a top-level facility chip is active, it takes priority over the tab's own sub-chip.
+  const effectiveDirFacility = reportFacility || dirFacility;
   const facilityNurses = useMemo(
-    () => scopedNurses.filter((n) => n.facility === dirFacility),
-    [scopedNurses, dirFacility],
+    () => scopedNurses.filter((n) => n.facility === effectiveDirFacility),
+    [scopedNurses, effectiveDirFacility],
   );
   const nursesByWard = useMemo(() => {
     const map = new Map<string, Nurse[]>();
@@ -499,13 +539,15 @@ function ReportsContent() {
     [archiveAssignments, archiveNurseToFacility, archiveNurseToRole],
   );
 
-  // Filter archive windows by selected facility tab
+  // Filter archive windows by selected facility.
+  // Top-level chip (reportFacility) takes priority over the tab's own sub-chip (archiveFacility).
+  const effectiveArchiveFacility = reportFacility || archiveFacility;
   const archiveWindows = useMemo(
     () =>
-      archiveFacility
-        ? allArchiveWindows.filter((w) => w.facility === archiveFacility)
+      effectiveArchiveFacility
+        ? allArchiveWindows.filter((w) => w.facility === effectiveArchiveFacility)
         : allArchiveWindows,
-    [allArchiveWindows, archiveFacility],
+    [allArchiveWindows, effectiveArchiveFacility],
   );
 
   // Group archive windows by period start date
@@ -596,7 +638,7 @@ function ReportsContent() {
   // ── Exports ───────────────────────────────────────────────────────────────
   function exportCurrentHours() {
     if (activeNurses.length === 0) return toast.error("No hours logged yet");
-    const rows = nurses.map((n) => ({
+    const rows = scopedNurses.map((n) => ({
       Name: n.name,
       Role: n.role,
       Ward: n.ward ?? "",
@@ -613,9 +655,9 @@ function ReportsContent() {
   }
 
   function exportDetailedLogs() {
-    if (shiftLogs.length === 0) return toast.error("No shift logs to export");
+    if (scopedShiftLogs.length === 0) return toast.error("No shift logs to export");
     const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-    const rows = shiftLogs.map((l) => {
+    const rows = scopedShiftLogs.map((l) => {
       const nurse = nurseMap.get(l.nurse_id);
       return {
         Name: nurse?.name ?? "Unknown",
@@ -640,9 +682,9 @@ function ReportsContent() {
   }
 
   function exportPeriodArchive() {
-    if (periodSummaries.length === 0) return toast.error("No archived periods yet");
+    if (scopedPeriodSummaries.length === 0) return toast.error("No archived periods yet");
     const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-    const rows = periodSummaries.map((p) => {
+    const rows = scopedPeriodSummaries.map((p) => {
       const nurse = nurseMap.get(p.nurse_id);
       return {
         Name: nurse?.name ?? "Unknown",
@@ -766,7 +808,7 @@ function ReportsContent() {
     const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Staff Directory — ${dirFacility}${wardLabel}</title>
+<title>Staff Directory — ${effectiveDirFacility}${wardLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:10pt;padding:1.5cm}
@@ -778,7 +820,7 @@ th{background:#e5e7eb;font-weight:600;font-size:8pt;text-transform:uppercase;let
 tr:nth-child(even){background:#f9fafb}
 @media print{@page{size:A4;margin:1.5cm}body{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head><body>
-<h1>Staff Directory — ${dirFacility}${wardLabel}</h1>
+<h1>Staff Directory — ${effectiveDirFacility}${wardLabel}</h1>
 <p>Generated: ${today} &nbsp;·&nbsp; ${staffToPrint.length} staff</p>
 <table>
 <thead><tr><th>#</th><th>Name</th><th>Role</th><th>Ward</th></tr></thead>
@@ -820,7 +862,7 @@ ${staffToPrint
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Staff");
     const slug = ward ? `-${ward.replace(/\s+/g, "-").toLowerCase()}` : "";
-    XLSX.writeFile(wb, `staff-${dirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
+    XLSX.writeFile(wb, `staff-${effectiveDirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
     toast.success("Exported");
   }
 
@@ -1090,6 +1132,9 @@ ${sections}
         <button type="button" className={tabCls("leave")} onClick={() => setTab("leave")}>
           Leave & Requests
         </button>
+        <button type="button" className={tabCls("missed")} onClick={() => setTab("missed")}>
+          Missed Shifts
+        </button>
         {canPrintStaff && (
           <button type="button" className={tabCls("staff-dir")} onClick={() => setTab("staff-dir")}>
             Staff Directory
@@ -1197,7 +1242,7 @@ ${sections}
             </button>
           </div>
 
-          {shiftLogs.length === 0 ? (
+          {scopedShiftLogs.length === 0 ? (
             <EmptyState
               icon={<Clock className="h-6 w-6" />}
               title="No shift logs"
@@ -1301,7 +1346,7 @@ ${sections}
                 page={hoursPage}
                 totalPages={hoursTotalPages}
                 pageSize={hoursPageSize}
-                totalItems={shiftLogs.length}
+                totalItems={scopedShiftLogs.length}
                 onPage={setHoursPage}
                 onPageSize={(s) => {
                   setHoursPageSize(s);
@@ -1684,7 +1729,7 @@ ${sections}
             </button>
           </div>
 
-          {periodSummaries.length === 0 ? (
+          {scopedPeriodSummaries.length === 0 ? (
             <EmptyState
               icon={<Archive className="h-6 w-6" />}
               title="No archived periods"
@@ -1703,7 +1748,7 @@ ${sections}
                   </tr>
                 </thead>
                 <tbody>
-                  {periodSummaries.map((p) => {
+                  {scopedPeriodSummaries.map((p) => {
                     const nurse = nurses.find((n) => n.id === p.nurse_id);
                     return (
                       <tr key={p.nurse_id + p.period_start} className="border-t hover:bg-muted/30">
@@ -1726,6 +1771,77 @@ ${sections}
         </div>
       )}
 
+      {/* ── Missed Shifts ────────────────────────────────────────────────── */}
+      {tab === "missed" && (() => {
+        const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+        const fmtDate = (d: string) =>
+          new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+        return (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <p className="text-sm text-muted-foreground">
+                Shifts where no clock-in was recorded.{" "}
+                <span className="font-medium text-foreground">{scopedMissedLogs.length}</span> missed{" "}
+                {reportFacility ? `in ${reportFacility}` : "across all facilities"}.
+              </p>
+            </div>
+            {scopedMissedLogs.length === 0 ? (
+              <div className="py-16 text-center text-sm text-muted-foreground">No missed shifts recorded.</div>
+            ) : (
+              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/40 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                        <th className="px-4 py-3 text-left">Date</th>
+                        <th className="px-4 py-3 text-left">Nurse</th>
+                        <th className="px-4 py-3 text-left hidden sm:table-cell">Facility</th>
+                        <th className="px-4 py-3 text-left hidden md:table-cell">Ward</th>
+                        <th className="px-4 py-3 text-left">Shift</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {pagedMissedLogs.map((l, i) => {
+                        const nurse = nurseMap.get(l.nurse_id);
+                        return (
+                          <tr key={i} className="hover:bg-muted/30">
+                            <td className="px-4 py-3 font-medium">{fmtDate(l.shift_date)}</td>
+                            <td className="px-4 py-3">{nurse?.name ?? "Unknown"}</td>
+                            <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
+                              {nurse?.facility ?? "—"}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                              {nurse?.ward?.split("|")[0] ?? "—"}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                l.shift_type === "M"
+                                  ? "bg-amber-100 text-amber-800"
+                                  : "bg-indigo-100 text-indigo-800"
+                              }`}>
+                                {l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <Pagination
+                  page={missedPage}
+                  totalPages={missedTotalPages}
+                  pageSize={missedPageSize}
+                  total={scopedMissedLogs.length}
+                  onPageChange={setMissedPage}
+                  onPageSizeChange={(s) => { setMissedPageSize(s); setMissedPage(1); }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── Staff Directory ───────────────────────────────────────────────── */}
       {tab === "staff-dir" && (
         <div className="space-y-5">
@@ -1743,7 +1859,7 @@ ${sections}
                   type="button"
                   onClick={() => setDirFacility(f)}
                   className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                    dirFacility === f
+                    effectiveDirFacility === f
                       ? "bg-primary text-primary-foreground border-primary"
                       : "bg-card hover:bg-muted border-border"
                   }`}
@@ -1773,7 +1889,7 @@ ${sections}
           {facilityNurses.length === 0 ? (
             <EmptyState
               icon={<Users className="h-6 w-6" />}
-              title={`No staff in ${dirFacility}`}
+              title={`No staff in ${effectiveDirFacility}`}
               description="Assign nurses to this facility from the Staff page."
             />
           ) : (

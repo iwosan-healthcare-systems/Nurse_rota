@@ -66,6 +66,11 @@ router.get(
     if (req.query.hours_not_null === "true") {
       conditions.push("hours_logged IS NOT NULL");
     }
+    if (req.query.is_missed === "true") {
+      conditions.push("is_missed = true");
+    } else if (req.query.is_missed === "false") {
+      conditions.push("is_missed = false");
+    }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     let query = `SELECT * FROM shift_logs ${where} ORDER BY started_at DESC`;

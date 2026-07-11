@@ -67,7 +67,7 @@ const nav = [
     to: "/reports",
     label: "Reports",
     icon: BarChart3,
-    roles: ["admin", "cno", "chief_matron", "hr_admin"] as AppRole[],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"] as AppRole[],
   },
   { to: "/audit", label: "Audit Log", icon: ShieldCheck, roles: ["admin", "cno"] as AppRole[] },
   { to: "/users", label: "User Profiles", icon: UserCog, roles: ["admin"] as AppRole[] },
@@ -115,12 +115,21 @@ export function AppShell() {
         "/rpc/auto-close-period",
       )
       .then((result) => {
-        if (result?.closed) {
-          toast.success(
-            `Period ${result.period_start} → ${result.period_end} has been automatically closed and archived.`,
-            { duration: 8000 },
-          );
-        }
+        if (!result?.closed || !result.period_end) return;
+        // Only show the toast once per completed period — skip if already shown this session.
+        const seenKey = "lastClosedPeriod";
+        if (localStorage.getItem(seenKey) === result.period_end) return;
+        localStorage.setItem(seenKey, result.period_end);
+        const fmt = (d: string) =>
+          new Date(d.slice(0, 10) + "T12:00:00").toLocaleDateString("en-GB", {
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+          });
+        toast.success(
+          `Period ${fmt(result.period_start!)} — ${fmt(result.period_end)} has been automatically closed and archived.`,
+          { duration: 8000 },
+        );
       })
       .catch(() => {
         /* non-critical */

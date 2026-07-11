@@ -98,6 +98,10 @@ router.get(
 // Sick, Emergency, and Compassionate Leave can always be submitted; Swap is a shift switch (not leave).
 const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Compassionate Leave", "Swap"];
 
+// Roles allowed to create a shift-switch (type "Swap") on someone else's behalf.
+// Mirrors canRequestShiftSwitch in auth-context.tsx (admin bypass is implicit via requireRole-style check below).
+const SWITCH_INITIATOR_ROLES = ["admin", "cno", "chief_matron"];
+
 router.post(
   "/",
   wrap(async (req, res) => {
@@ -105,6 +109,23 @@ router.post(
       req.body;
     if (!nurse_name || !type || !from_date || !to_date)
       return res.status(400).json({ error: "Missing required fields" });
+
+    // ── Ownership / initiator enforcement ─────────────────────────────────
+    // A "Swap" (shift switch) may be raised by a manager on another nurse's
+    // behalf. Every other leave type is self-service only.
+    const userRoles = req.user?.roles || [];
+    const isPrivileged = userRoles.some((r) => SWITCH_INITIATOR_ROLES.includes(r));
+    if (type === "Swap") {
+      if (!isPrivileged) return res.status(403).json({ error: "Forbidden" });
+    } else if (!userRoles.includes("admin") && !userRoles.includes("cno") && nurse_id) {
+      const { rows: ownNurse } = await pool.query(
+        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        [req.user.userId],
+      );
+      if (!ownNurse[0] || ownNurse[0].id !== nurse_id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    }
 
     // ── Leave closure window enforcement ──────────────────────────────────
     // Once the first rota has been published, all non-exempt leave types are
@@ -179,6 +200,22 @@ router.patch(
     const managerOnlyFields = ["status", "reviewed_by", "reviewed_at", "review_note"];
     if (!isManager && Object.keys(req.body).some((k) => managerOnlyFields.includes(k))) {
       return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // Non-managers may only edit their own leave request.
+    if (!isManager) {
+      const { rows: existing } = await pool.query(
+        "SELECT nurse_id FROM leave_requests WHERE id = $1",
+        [req.params.id],
+      );
+      if (!existing[0]) return res.status(404).json({ error: "Leave request not found" });
+      const { rows: ownNurse } = await pool.query(
+        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        [req.user.userId],
+      );
+      if (!ownNurse[0] || ownNurse[0].id !== existing[0].nurse_id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
     }
 
     const allowed = isManager

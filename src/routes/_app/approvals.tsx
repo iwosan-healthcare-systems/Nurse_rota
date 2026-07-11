@@ -445,7 +445,7 @@ function ApprovalsPage() {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Submitted rota for approval",
-        target: `${targetLabel} · ${win.startDate} → ${win.endDate}`,
+        target: `${targetLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
     toast.success("Submitted to Chief Matron");
@@ -471,7 +471,7 @@ function ApprovalsPage() {
           nextStatus === "published"
             ? "Rota published"
             : `Rota approved (${nextStatus.replace(/_/g, " ")})`,
-        target: `${targetLabel} · ${win.startDate} → ${win.endDate}`,
+        target: `${targetLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
     if (nextStatus === "published") {
@@ -504,7 +504,7 @@ function ApprovalsPage() {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Rota returned to draft",
-        target: `${rejectLabel} · ${win.startDate} → ${win.endDate}`,
+        target: `${rejectLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
     toast.success("Returned to draft");
@@ -529,7 +529,7 @@ function ApprovalsPage() {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
         action: "Unpublished rota — returned to Draft",
-        target: `${revertLabel} · ${win.startDate} → ${win.endDate}`,
+        target: `${revertLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
     toast.success("Rota unpublished — schedule is unchanged and now editable");

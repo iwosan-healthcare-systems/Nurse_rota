@@ -50,6 +50,42 @@ router.post(
       }
     }
 
+    // Record missed shifts: published assignments in the past with no shift log at all.
+    // Idempotent — the NOT EXISTS guard skips already-recorded rows.
+    await pool.query(`
+      INSERT INTO shift_logs
+        (nurse_id, shift_date, shift_type, started_at, expected_end_at, ended_at,
+         period_start, hours_logged, is_missed, is_leave, is_locum, is_swap)
+      SELECT
+        sa.nurse_id,
+        sa.shift_date,
+        sa.shift                    AS shift_type,
+        sa.shift_date::timestamp    AS started_at,
+        sa.shift_date::timestamp    AS expected_end_at,
+        sa.shift_date::timestamp    AS ended_at,
+        COALESCE(
+          (SELECT MIN(s2.shift_date)::text
+           FROM shift_assignments s2
+           WHERE s2.status = 'published'
+             AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
+          sa.shift_date::text
+        )                           AS period_start,
+        0                           AS hours_logged,
+        true                        AS is_missed,
+        false                       AS is_leave,
+        false                       AS is_locum,
+        false                       AS is_swap
+      FROM shift_assignments sa
+      WHERE sa.status = 'published'
+        AND sa.shift_date < CURRENT_DATE
+        AND sa.shift NOT IN ('LEAVE', 'OFF')
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_logs sl
+          WHERE sl.nurse_id = sa.nurse_id
+            AND sl.shift_date = sa.shift_date
+        )
+    `);
+
     res.json({ ended: result.rowCount });
   }),
 );
@@ -129,15 +165,25 @@ router.get(
 router.post(
   "/auto-close-period",
   wrap(async (req, res) => {
+    // Find the most recently completed published period.
+    // The period is identified by the MAX published shift_date (= period end).
+    // We treat it as a 28-day block, so period_start = period_end - 27 days.
+    // "Complete" means every shift in the period is in the past (MAX < today).
     const { rows } = await pool.query(`
-    SELECT MIN(shift_date) as period_start, MAX(shift_date) as period_end
-    FROM shift_assignments
-    WHERE status = 'published'
-    AND shift_date < CURRENT_DATE - INTERVAL '1 day'
-    AND shift_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
-  `);
+      WITH latest AS (
+        SELECT MAX(shift_date::date) AS last_date
+        FROM shift_assignments
+        WHERE status = 'published'
+      )
+      SELECT
+        (last_date - 27)::text AS period_start,
+        last_date::text        AS period_end
+      FROM latest
+      WHERE last_date IS NOT NULL
+        AND last_date < CURRENT_DATE
+    `);
 
-    if (!rows[0]?.period_start)
+    if (!rows[0]?.period_end)
       return res.json({ closed: false, period_start: null, period_end: null });
 
     res.json({ closed: true, period_start: rows[0].period_start, period_end: rows[0].period_end });

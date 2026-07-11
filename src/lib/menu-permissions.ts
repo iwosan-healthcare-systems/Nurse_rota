@@ -32,7 +32,7 @@ export const NAV_DEFINITIONS: NavDef[] = [
   {
     key: "/reports",
     label: "Reports",
-    defaultRoles: ["admin", "cno", "chief_matron", "hr_admin"],
+    defaultRoles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
   { key: "/audit", label: "Audit Log", defaultRoles: ["admin", "cno"] },
   { key: "/users", label: "User Profiles", defaultRoles: ["admin"] },
