@@ -157,7 +157,6 @@ router.patch(
 // Batch update by filter
 router.patch(
   "/",
-  requireRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
   wrap(async (req, res) => {
     const {
       nurse_ids,
@@ -169,6 +168,27 @@ router.patch(
       shift: filterShift,
     } = req.query;
     const { shift, status, ward: newWard } = req.body;
+
+    const userRoles = req.user?.roles || [];
+    const isManager = userRoles.some((r) =>
+      ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"].includes(r),
+    );
+    if (!isManager) {
+      // Self-service exception: a nurse accepting a bank/locum invite flips their
+      // own OFF day to the locum shift type. Never allowed to touch status or ward,
+      // or any nurse other than themselves.
+      const ids = nurse_ids ? nurse_ids.split(",") : [];
+      if (status || newWard || !shift || ids.length !== 1 || filterShift !== "OFF") {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+      const { rows: ownNurse } = await pool.query(
+        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        [req.user.userId],
+      );
+      if (!ownNurse[0] || ownNurse[0].id !== ids[0]) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    }
 
     const conditions = [];
     const params = [];

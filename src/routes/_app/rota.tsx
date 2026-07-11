@@ -2207,9 +2207,17 @@ function RotaPage() {
                 {genPendingLeaves.map((l, i) => (
                   <li key={i}>
                     • {l.name} —{" "}
-                    {new Date(l.from + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                    {new Date(l.from + "T00:00:00").toLocaleDateString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
                     {" → "}
-                    {new Date(l.to + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}
+                    {new Date(l.to + "T00:00:00").toLocaleDateString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
                   </li>
                 ))}
               </ul>

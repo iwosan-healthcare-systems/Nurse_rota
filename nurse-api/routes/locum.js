@@ -53,6 +53,7 @@ router.get(
 
 router.post(
   "/requests",
+  requireRole("admin", "chief_matron"),
   wrap(async (req, res) => {
     const {
       shift_date,
@@ -219,6 +220,7 @@ router.get(
 
 router.post(
   "/invites",
+  requireRole("admin", "chief_matron"),
   wrap(async (req, res) => {
     const invites = Array.isArray(req.body) ? req.body : [req.body];
     if (!invites.length) return res.status(400).json({ error: "Invite data required" });
@@ -246,10 +248,32 @@ router.post(
   }),
 );
 
-// Bulk PATCH invites by filter (e.g. mark others unavailable after claim)
+// Bulk PATCH invites by filter (e.g. mark others unavailable after claim).
+// Only callable by a manager, or by the nurse who just filled this request
+// (proven by holding an accepted invite for it) — otherwise any authenticated
+// user could invalidate other nurses' pending invites for a shift they never claimed.
 router.patch(
   "/invites",
   wrap(async (req, res) => {
+    if (!req.query.locum_request_id)
+      return res.status(400).json({ error: "locum_request_id required" });
+
+    const userRoles = req.user?.roles || [];
+    const isManager = userRoles.some((r) => ["admin", "cno", "chief_matron"].includes(r));
+    if (!isManager) {
+      const { rows: claimRows } = await pool.query(
+        `SELECT 1 FROM locum_invites li
+         WHERE li.locum_request_id = $1 AND li.status = 'accepted'
+           AND li.nurse_id = COALESCE(
+             (SELECT id FROM nurses WHERE profile_id = $2 LIMIT 1),
+             (SELECT id FROM nurses WHERE LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $2)) LIMIT 1)
+           )
+         LIMIT 1`,
+        [req.query.locum_request_id, req.user.userId],
+      );
+      if (!claimRows[0]) return res.status(403).json({ error: "Forbidden" });
+    }
+
     const conditions = [];
     const params = [];
 
@@ -288,6 +312,33 @@ router.patch(
     const allowed = ["status", "decline_reason", "responded_at"];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
+
+    // A nurse may only accept/decline their own invite. Managers can override.
+    const userRoles = req.user?.roles || [];
+    const isManager = userRoles.some((r) => ["admin", "cno", "chief_matron"].includes(r));
+    if (!isManager) {
+      const { rows: inviteRows } = await pool.query(
+        "SELECT nurse_id FROM locum_invites WHERE id = $1",
+        [req.params.id],
+      );
+      if (!inviteRows[0]) return res.status(404).json({ error: "Invite not found" });
+
+      let { rows: nurseRows } = await pool.query(
+        "SELECT id FROM nurses WHERE profile_id = $1 LIMIT 1",
+        [req.user.userId],
+      );
+      if (!nurseRows[0]) {
+        nurseRows = (
+          await pool.query(
+            "SELECT id FROM nurses WHERE LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1)) LIMIT 1",
+            [req.user.userId],
+          )
+        ).rows;
+      }
+      if (!nurseRows[0] || nurseRows[0].id !== inviteRows[0].nurse_id) {
+        return res.status(403).json({ error: "Forbidden" });
+      }
+    }
 
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
     const values = fields.map((f) => req.body[f]);
