@@ -80,9 +80,11 @@ router.get(
             WHERE ur.user_id = n.profile_id AND ur.role = 'chief_matron'
           ) THEN 'chief_matron'
           ELSE COALESCE(n.role, '')
-        END AS nurse_role
+        END AS nurse_role,
+        p.full_name AS requested_by_name
       FROM leave_requests lr
       LEFT JOIN nurses n ON lr.nurse_id = n.id
+      LEFT JOIN profiles p ON p.id = lr.requested_by
       ${where}
       ORDER BY lr.created_at DESC`;
     if (req.query.limit) {
@@ -112,18 +114,31 @@ router.post(
 
     // ── Ownership / initiator enforcement ─────────────────────────────────
     // A "Swap" (shift switch) may be raised by a manager on another nurse's
-    // behalf. Every other leave type is self-service only.
+    // behalf. Every other leave type is self-service — except Chief Matron,
+    // who may submit leave for a staff member in her own facility (e.g. the
+    // staff member is unable to submit it themselves at that time).
     const userRoles = req.user?.roles || [];
     const isPrivileged = userRoles.some((r) => SWITCH_INITIATOR_ROLES.includes(r));
     if (type === "Swap") {
       if (!isPrivileged) return res.status(403).json({ error: "Forbidden" });
     } else if (!userRoles.includes("admin") && !userRoles.includes("cno") && nurse_id) {
       const { rows: ownNurse } = await pool.query(
-        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        "SELECT id, facility FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
         [req.user.userId],
       );
-      if (!ownNurse[0] || ownNurse[0].id !== nurse_id) {
-        return res.status(403).json({ error: "Forbidden" });
+      const own = ownNurse[0];
+      const isSelf = own && own.id === nurse_id;
+      if (!isSelf) {
+        if (!own || !userRoles.includes("chief_matron")) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        const { rows: targetRows } = await pool.query(
+          "SELECT facility FROM nurses WHERE id = $1",
+          [nurse_id],
+        );
+        if (!targetRows[0] || targetRows[0].facility !== own.facility) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
       }
     }
 

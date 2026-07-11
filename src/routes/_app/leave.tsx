@@ -22,6 +22,7 @@ type LeaveRow = {
   nurse_name: string;
   nurse_role: string | null;
   requested_by: string | null;
+  requested_by_name: string | null;
   type: string;
   from_date: string;
   to_date: string;
@@ -153,23 +154,25 @@ function LeavePage() {
       }
 
       // Three queries for non-approvers:
-      // 1. Own submissions (self-submitted leave).
+      // 1. Own submissions (self-submitted leave/switches).
       // 2. Switches where this nurse is Nurse B (target).
-      // 3. Switches where this nurse is Nurse A (subject) — submitted by a matron on their behalf.
-      const [ownRows, nurseBSwitchRows, nurseASwitchRows] = await Promise.all([
+      // 3. Anything where this nurse is the beneficiary (nurse_id) — covers both
+      //    switches submitted on their behalf AND regular leave a Chief Matron or
+      //    Admin submitted for them (requested_by won't match their own user id).
+      const [ownRows, nurseBSwitchRows, beneficiaryRows] = await Promise.all([
         api.get<LeaveRow[]>(`/leave-requests?requested_by=${user!.id}`),
         nurseId
           ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`).catch(() => [] as LeaveRow[])
           : Promise.resolve([] as LeaveRow[]),
         nurseId
-          ? api.get<LeaveRow[]>(`/leave-requests?nurse_id=${nurseId}&type=Swap`)
+          ? api.get<LeaveRow[]>(`/leave-requests?nurse_id=${nurseId}`)
           : Promise.resolve([] as LeaveRow[]),
       ]);
 
       // Merge and deduplicate
       const seen = new Set<string>();
       const merged: LeaveRow[] = [];
-      for (const row of [...ownRows, ...nurseBSwitchRows, ...nurseASwitchRows]) {
+      for (const row of [...ownRows, ...nurseBSwitchRows, ...beneficiaryRows]) {
         if (!seen.has(row.id)) {
           seen.add(row.id);
           merged.push(row);
@@ -216,6 +219,23 @@ function LeavePage() {
       is_leave: true,
       leave_request_id: leaveId,
     };
+  }
+
+  // Notify the beneficiary nurse directly by profile lookup — separate from the
+  // `requested_by` notification, since a Chief Matron/Admin submitting on a staff
+  // member's behalf means `requested_by` is the submitter, not the beneficiary.
+  async function notifyBeneficiary(l: LeaveRow, status: "Approved" | "Rejected") {
+    if (!l.nurse_name) return;
+    const profiles = await api
+      .get<{ id: string }[]>(`/profiles?full_name=${encodeURIComponent(l.nurse_name)}`)
+      .catch(() => [] as { id: string }[]);
+    const profileId = profiles[0]?.id;
+    if (!profileId || profileId === l.requested_by) return;
+    await api
+      .post("/notifications/upsert", [
+        { user_id: profileId, notif_key: `leave_${status.toLowerCase()}_${l.id}_staff`, is_read: false },
+      ])
+      .catch(() => {});
   }
 
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
@@ -281,6 +301,7 @@ function LeavePage() {
               ])
               .catch(() => {});
           }
+          await notifyBeneficiary(l, "Approved");
           // Notify the approver to consider arranging shift cover.
           if (user?.id && (l.type === "Sick" || l.type === "Emergency")) {
             await api
@@ -315,6 +336,7 @@ function LeavePage() {
           ])
           .catch(() => {});
       }
+      await notifyBeneficiary(l, status);
       if (status === "Approved" && user?.id && (l.type === "Sick" || l.type === "Emergency")) {
         await api
           .post("/notifications/upsert", [
@@ -659,7 +681,7 @@ function LeaveTable({
   nurseToFacility?: Map<string, string | null>;
   showFacility?: boolean;
 }) {
-  const { user } = useAuth();
+  const { nurseId } = useAuth();
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
     status: "Approved" | "Rejected";
@@ -710,6 +732,11 @@ function LeaveTable({
                       {showApproverCols && (
                         <td className="px-4 py-3">
                           <p className="font-medium">{l.nurse_name}</p>
+                          {l.requested_by_name && l.requested_by_name !== l.nurse_name && (
+                            <p className="text-xs text-muted-foreground/70 mt-0.5">
+                              Initiated by {l.requested_by_name}
+                            </p>
+                          )}
                         </td>
                       )}
                       <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
@@ -739,7 +766,7 @@ function LeaveTable({
                             <p className="text-xs text-muted-foreground text-right italic">
                               {blockedLabel}
                             </p>
-                          ) : l.requested_by === user?.id ? (
+                          ) : l.nurse_id && l.nurse_id === nurseId ? (
                             <p className="text-xs text-muted-foreground text-right italic">
                               Own request
                             </p>
@@ -1068,11 +1095,12 @@ function SwitchTable({
 // ── New leave request modal ──────────────────────────────────────────────────
 
 function NewLeaveModal({ onClose }: { onClose: () => void }) {
-  const { user, fullName, nurseId } = useAuth();
+  const { user, fullName, nurseId, isAdmin, activeRole, nurseFacility } = useAuth();
   const qc = useQueryClient();
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-min"],
-    queryFn: () => api.get<{ id: string; name: string }[]>("/nurses"),
+    queryFn: () =>
+      api.get<{ id: string; name: string; facility: string | null }[]>("/nurses"),
   });
 
   const [type, setType] = useState("Annual");
@@ -1080,22 +1108,53 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const [to, setTo] = useState("");
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  // Admin always submits on behalf of a staff member. Chief Matron chooses — herself,
+  // or a staff member in her own facility who is unable to submit it themselves.
+  const [staffNurseId, setStaffNurseId] = useState("");
+  const isChiefMatron = activeRole === "chief_matron";
+  const [requestFor, setRequestFor] = useState<"self" | "staff">("self");
+  const staffMode = isAdmin || (isChiefMatron && requestFor === "staff");
 
   // Resolve the nurse's own ID: prefer the one from auth context, fall back to name match.
   const resolvedNurseId = nurseId ?? nurses.find((n) => n.name === fullName)?.id ?? null;
 
+  const staffNurse = nurses.find((n) => n.id === staffNurseId);
+  const targetNurseId = staffMode ? staffNurseId || null : resolvedNurseId;
+  const targetNurseName = staffMode ? (staffNurse?.name ?? "") : (fullName ?? "");
+
+  // Admin picks from every facility; Chief Matron is limited to her own staff (not herself).
+  const nursesByFacility = useMemo(() => {
+    const map = new Map<string, typeof nurses>();
+    for (const n of nurses) {
+      const key = n.facility ?? "Unassigned";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(n);
+    }
+    return [...map.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([facility, group]) => [facility, [...group].sort((a, b) => a.name.localeCompare(b.name))] as const);
+  }, [nurses]);
+
+  const chiefMatronStaffOptions = useMemo(
+    () =>
+      nurses
+        .filter((n) => n.facility === nurseFacility && n.id !== resolvedNurseId)
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [nurses, nurseFacility, resolvedNurseId],
+  );
+
   const datesReady = !!from && !!to;
 
-  // Check if the selected date range overlaps THIS nurse's own published assignments.
+  // Check if the selected date range overlaps the target nurse's own published assignments.
   // Scoped to the requesting nurse so nurses in unpublished wards are not incorrectly
   // restricted when another ward happens to have a published rota in the same period.
   const { data: datesInPublishedRota = false, isFetching: checkingDates } = useQuery({
-    queryKey: ["leave-dates-published", from, to, resolvedNurseId],
-    enabled: datesReady && !!resolvedNurseId,
+    queryKey: ["leave-dates-published", from, to, targetNurseId],
+    enabled: datesReady && !!targetNurseId,
     queryFn: () =>
       api
         .get<{ id: string }[]>(
-          `/shift-assignments?nurse_id=${resolvedNurseId}&status=published&from=${from}&to=${to}&limit=1`,
+          `/shift-assignments?nurse_id=${targetNurseId}&status=published&from=${from}&to=${to}&limit=1`,
         )
         .then((arr) => arr.length > 0),
   });
@@ -1120,11 +1179,15 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (staffMode && !targetNurseId) {
+      toast.error("Please select which staff member this request is for");
+      return;
+    }
     setBusy(true);
     try {
       await api.post("/leave-requests", {
-        nurse_id: resolvedNurseId,
-        nurse_name: fullName ?? "",
+        nurse_id: targetNurseId,
+        nurse_name: targetNurseName,
         requested_by: user?.id,
         type: effectiveType,
         from_date: from,
@@ -1132,7 +1195,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         reason: reason || null,
       });
       toast.success("Request submitted");
-      logAudit("Submitted leave request", fullName ?? "");
+      logAudit("Submitted leave request", targetNurseName);
       qc.invalidateQueries({ queryKey: ["leave"] });
       onClose();
     } catch (e: unknown) {
@@ -1148,6 +1211,74 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="New leave request" onClose={onClose}>
       <form onSubmit={submit} className="space-y-4">
+        {isChiefMatron && (
+          <div>
+            <p className="text-sm font-medium mb-1.5">Who is this for?</p>
+            <div className="flex gap-2">
+              {(["self", "staff"] as const).map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  onClick={() => {
+                    setRequestFor(f);
+                    if (f === "self") setStaffNurseId("");
+                  }}
+                  className={`h-9 px-4 rounded-md text-sm font-medium border transition-colors ${
+                    requestFor === f
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-card border-border hover:bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {f === "self" ? "Myself" : "A staff member"}
+                </button>
+              ))}
+            </div>
+            {requestFor === "staff" && (
+              <p className="text-xs text-muted-foreground mt-1.5">
+                For when a staff member is unable to submit their own request — e.g. Sick,
+                Emergency, or Compassionate Leave after the rota is published.
+              </p>
+            )}
+          </div>
+        )}
+
+        {staffMode && (
+          <div>
+            <label htmlFor="leave-staff" className="text-sm font-medium">
+              Staff member
+            </label>
+            <select
+              id="leave-staff"
+              required
+              value={staffNurseId}
+              onChange={(e) => setStaffNurseId(e.target.value)}
+              className={inputCls}
+            >
+              <option value="">Select staff member…</option>
+              {isAdmin
+                ? nursesByFacility.map(([facility, group]) => (
+                    <optgroup key={facility} label={facility}>
+                      {group.map((n) => (
+                        <option key={n.id} value={n.id}>
+                          {n.name}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ))
+                : chiefMatronStaffOptions.map((n) => (
+                    <option key={n.id} value={n.id}>
+                      {n.name}
+                    </option>
+                  ))}
+            </select>
+            <p className="text-xs text-muted-foreground mt-1">
+              {isChiefMatron
+                ? "Submitted on their behalf — it's not your own leave, so you can still approve it yourself once it's in your Pending queue."
+                : "This request is submitted on their behalf and still goes to the Chief Matron for approval."}
+            </p>
+          </div>
+        )}
+
         {/* Dates first — the type options depend on whether these fall in a published rota */}
         <div className="grid grid-cols-2 gap-2">
           <div>
