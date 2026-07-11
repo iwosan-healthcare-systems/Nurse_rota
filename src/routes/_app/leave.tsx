@@ -1432,7 +1432,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const switchableNurses = facilityNurses.filter((n) => !/matron/i.test(n.role));
   const nurseA = nurses.find((n) => n.id === nurseAId);
   const nurseAWards = splitWards(nurseA?.ward);
-  const allFacilityWards = [...new Set(facilityNurses.flatMap((n) => splitWards(n.ward)))].sort();
+  // Case-insensitive dedup: "ICU & CathLab" and "ICU & Cathlab" collapse to one entry.
+  const allFacilityWards = (() => {
+    const seen = new Map<string, string>();
+    facilityNurses.flatMap((n) => splitWards(n.ward)).forEach((w) => {
+      const key = w.trim().toLowerCase();
+      if (!seen.has(key)) seen.set(key, w.trim());
+    });
+    return [...seen.values()].sort();
+  })();
   const wardBOptions = allFacilityWards.filter((w) => !nurseAWards.includes(w));
 
   const facilityNurseIds = useMemo(() => facilityNurses.map((n) => n.id), [facilityNurses]);
@@ -1500,18 +1508,23 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     return [...wardNurses, ...noWardSameRole.filter((n) => !seen.has(n.id))];
   }, [nurseAId, date, switchType, wardB, switchableNurses, nurseA, nurseAWards, assignmentMap, exchangeMode, shiftA]);
 
-  async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
-    if (!nurseId || !forDate) {
-      setShift("");
-      return;
+  // In leave mode, Nurse A must be a nurse who is actually on approved leave on that date.
+  const nurseAList = useMemo(() => {
+    if (exchangeMode === "leave" && date) {
+      return switchableNurses.filter((n) => assignmentMap.get(n.id) === "LEAVE");
     }
-    const arr = await api
-      .get<
-        { shift: string }[]
-      >(`/shift-assignments?nurse_id=${nurseId}&shift_date=${forDate}&status=published&limit=1`)
-      .catch(() => [] as { shift: string }[]);
-    setShift(arr[0]?.shift ?? "");
-  }
+    return switchableNurses;
+  }, [exchangeMode, date, switchableNurses, assignmentMap]);
+
+  // Reactively sync shift displays from the assignment map.
+  // Fires when the map changes (date/facility refetch) so shifts never lag behind.
+  useEffect(() => {
+    setShiftA(nurseAId ? (assignmentMap.get(nurseAId) ?? "") : "");
+  }, [assignmentMap, nurseAId]);
+
+  useEffect(() => {
+    setShiftB(nurseBId ? (assignmentMap.get(nurseBId) ?? "") : "");
+  }, [assignmentMap, nurseBId]);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1597,8 +1610,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
                 type="button"
                 onClick={() => {
                   setExchangeMode(m);
+                  setNurseAId("");
                   setNurseBId("");
+                  setShiftA("");
                   setShiftB("");
+                  setCoverShift("");
                 }}
                 className={`h-9 px-4 rounded-md text-sm font-medium border transition-colors ${
                   exchangeMode === m
@@ -1690,14 +1706,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             type="date"
             value={date}
             onChange={(e) => {
-              const newDate = e.target.value;
-              setDate(newDate);
+              setDate(e.target.value);
               setShiftA("");
               setShiftB("");
-              // Re-fetch shifts immediately with the new date so already-selected
-              // nurses don't stay blank until the user manually re-selects them.
-              if (nurseAId) void fetchShift(nurseAId, newDate, setShiftA);
-              if (nurseBId) void fetchShift(nurseBId, newDate, setShiftB);
+              setCoverShift("");
+              // assignmentMap refetches for the new date → the useEffects above re-sync shifts.
             }}
             className={inputCls}
           />
@@ -1711,25 +1724,36 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           <select
             id="sw-nurse-a"
             required
-            disabled={!facility}
+            disabled={!facility || (exchangeMode === "leave" && !!date && loadingAssignments)}
             value={nurseAId}
             onChange={(e) => {
-              setNurseAId(e.target.value);
+              const id = e.target.value;
+              setNurseAId(id);
               setNurseBId("");
-              setShiftA("");
+              setShiftA(id ? (assignmentMap.get(id) ?? "") : "");
               setShiftB("");
               setCoverShift("");
-              void fetchShift(e.target.value, date, setShiftA);
             }}
             className={inputCls}
           >
-            <option value="">{facility ? "Select nurse…" : "Select facility first…"}</option>
-            {switchableNurses.map((n) => (
+            <option value="">
+              {!facility
+                ? "Select facility first…"
+                : exchangeMode === "leave" && date && !loadingAssignments && nurseAList.length === 0
+                  ? "No nurses on leave for this date"
+                  : "Select nurse…"}
+            </option>
+            {nurseAList.map((n) => (
               <option key={n.id} value={n.id}>
                 {n.name}
               </option>
             ))}
           </select>
+          {exchangeMode === "leave" && date && !loadingAssignments && nurseAList.length === 0 && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              No nurses have an approved leave assignment on this date.
+            </p>
+          )}
           {shiftA && shiftA !== "LEAVE" && (
             <p className="mt-1 text-xs text-muted-foreground">
               Published shift: <span className="font-semibold text-foreground">{shiftA}</span>
@@ -1806,9 +1830,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             }
             value={nurseBId}
             onChange={(e) => {
-              setNurseBId(e.target.value);
-              setShiftB("");
-              void fetchShift(e.target.value, date, setShiftB);
+              const id = e.target.value;
+              setNurseBId(id);
+              setShiftB(id ? (assignmentMap.get(id) ?? "") : "");
             }}
             className={inputCls}
           >
