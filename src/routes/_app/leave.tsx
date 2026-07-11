@@ -1467,21 +1467,47 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
   const nurseBList = useMemo(() => {
     if (!nurseAId || !date) return [];
-    const nurseARole = nurseA?.role ?? "";
-    // Coverage mode: Nurse B must be off duty. Direct mode: Nurse B must be working a different shift.
-    const eligible = (n: (typeof facilityNurses)[number]) =>
-      n.id !== nurseAId &&
-      (!nurseARole || n.role === nurseARole) &&
-      (exchangeMode === "direct" ? onDutyShiftMap.has(n.id) : offDutyIdSet.has(n.id));
+
+    // Base eligibility: not Nurse A, and duty status matches exchange mode.
+    // Role is intentionally NOT filtered — ward/facility scope provides the right boundary.
+    const eligible = (n: (typeof facilityNurses)[number]) => {
+      if (n.id === nurseAId) return false;
+      return exchangeMode === "direct"
+        ? onDutyShiftMap.has(n.id)
+        : offDutyIdSet.has(n.id);
+    };
+
+    // No-ward nurses (porter, coverage nurse, intern, etc.) can cover any ward.
+    const isNoWardNurse = (n: (typeof facilityNurses)[number]) =>
+      splitWards(n.ward).length === 0;
+    const noWardEligible = facilityNurses.filter((n) => eligible(n) && isNoWardNurse(n));
+
     if (switchType === "inter-ward") {
       if (!wardB) return [];
-      return facilityNurses.filter((n) => eligible(n) && splitWards(n.ward).includes(wardB));
+      const wardNurses = facilityNurses.filter(
+        (n) => eligible(n) && splitWards(n.ward).includes(wardB),
+      );
+      // Ward B staff + no-ward nurses (coverage nurses can fill any ward)
+      const seen = new Set(wardNurses.map((n) => n.id));
+      return [...wardNurses, ...noWardEligible.filter((n) => !seen.has(n.id))];
     }
-    // Same-ward: if Nurse A has no ward (coverage nurse), any same-role nurse in the facility can cover.
-    const inWard = (n: (typeof facilityNurses)[number]) =>
-      nurseAWards.length === 0 ? true : splitWards(n.ward).some((w) => nurseAWards.includes(w));
-    return facilityNurses.filter((n) => eligible(n) && inWard(n));
-  }, [nurseAId, date, switchType, wardB, facilityNurses, nurseA, nurseAWards, offDutyIdSet, exchangeMode, onDutyShiftMap]);
+
+    // Same-ward: Nurse A has no ward (porter, coverage nurse, etc.)
+    if (nurseAWards.length === 0) {
+      // Coverage: any off-duty nurse in the facility can step in
+      // Direct: only other no-ward on-duty nurses (same flexible category)
+      return exchangeMode === "coverage"
+        ? facilityNurses.filter(eligible)
+        : noWardEligible;
+    }
+
+    // Same-ward: Nurse A has a ward — show ward staff + no-ward nurses
+    const wardNurses = facilityNurses.filter(
+      (n) => eligible(n) && splitWards(n.ward).some((w) => nurseAWards.includes(w)),
+    );
+    const seen = new Set(wardNurses.map((n) => n.id));
+    return [...wardNurses, ...noWardEligible.filter((n) => !seen.has(n.id))];
+  }, [nurseAId, date, switchType, wardB, facilityNurses, nurseAWards, offDutyIdSet, exchangeMode, onDutyShiftMap]);
 
   async function fetchShift(nurseId: string, forDate: string, setShift: (s: string) => void) {
     if (!nurseId || !forDate) {
@@ -1814,10 +1840,16 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           {nurseAId && date && !loadingOffDuty && !loadingOnDuty && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
             <p className="mt-1 text-xs text-muted-foreground">
               {exchangeMode === "direct"
-                ? `No ${nurseA?.role ?? "nurse"} found on a work shift on this date.`
+                ? switchType === "inter-ward"
+                  ? "No nurses on duty found in the selected ward on this date."
+                  : nurseAWards.length === 0
+                    ? "No other facility-level nurses found on duty on this date."
+                    : "No nurses on duty found in the same ward on this date."
                 : switchType === "inter-ward"
-                  ? `No off-duty ${nurseA?.role ?? "nurse"} found in the selected ward on this date.`
-                  : `No off-duty ${nurseA?.role ?? "nurse"} found in the same ward on this date.`}
+                  ? "No off-duty nurses found for the selected ward on this date."
+                  : nurseAWards.length === 0
+                    ? "No off-duty nurses found in this facility on this date."
+                    : "No off-duty nurses found in the same ward on this date."}
             </p>
           )}
           {shiftB && (
