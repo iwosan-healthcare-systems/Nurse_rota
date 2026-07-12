@@ -1,5 +1,5 @@
-const cron = require('node-cron');
-const pool = require('../db');
+const cron = require("node-cron");
+const pool = require("../db");
 
 async function autoEndOverdueShifts() {
   try {
@@ -18,13 +18,17 @@ async function autoEndOverdueShifts() {
     for (const row of result.rows) {
       if (!row.is_locum && !row.is_swap && row.hours_logged > 0) {
         await pool
-          .query('SELECT increment_nurse_hours($1, $2)', [row.nurse_id, row.hours_logged])
-          .catch((err) => console.error(`[auto-end] hours increment failed for ${row.nurse_id}:`, err.message));
+          .query("SELECT increment_nurse_hours($1, $2)", [row.nurse_id, row.hours_logged])
+          .catch((err) =>
+            console.error(`[auto-end] hours increment failed for ${row.nurse_id}:`, err.message),
+          );
       }
     }
 
     if (result.rowCount > 0) {
-      console.log(`[auto-end] ${new Date().toISOString()} — closed ${result.rowCount} overdue shift(s)`);
+      console.log(
+        `[auto-end] ${new Date().toISOString()} — closed ${result.rowCount} overdue shift(s)`,
+      );
       await pool
         .query(
           `INSERT INTO audit_logs (actor_name, action, target)
@@ -73,10 +77,12 @@ async function autoEndOverdueShifts() {
         )
     `);
     if (missed.rowCount > 0) {
-      console.log(`[auto-end] ${new Date().toISOString()} — recorded ${missed.rowCount} missed shift(s)`);
+      console.log(
+        `[auto-end] ${new Date().toISOString()} — recorded ${missed.rowCount} missed shift(s)`,
+      );
     }
   } catch (err) {
-    console.error('[auto-end] Error:', err.message);
+    console.error("[auto-end] Error:", err.message);
   }
 }
 
@@ -84,8 +90,8 @@ function startAutoEndJob() {
   // Run once immediately on startup to catch any shifts that ended while the server was down.
   autoEndOverdueShifts();
   // Then run every 5 minutes via cron.
-  cron.schedule('*/5 * * * *', autoEndOverdueShifts);
-  console.log('[auto-end] Shift auto-end job started (runs every 5 minutes)');
+  cron.schedule("*/5 * * * *", autoEndOverdueShifts);
+  console.log("[auto-end] Shift auto-end job started (runs every 5 minutes)");
 }
 
 module.exports = { startAutoEndJob };
