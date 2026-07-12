@@ -63,7 +63,7 @@ router.post(
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END AS shift_type,
+        (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
         sa.shift_date::timestamp    AS started_at,
         sa.shift_date::timestamp    AS expected_end_at,
         sa.shift_date::timestamp    AS ended_at,
