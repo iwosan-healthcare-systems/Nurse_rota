@@ -210,7 +210,10 @@ function groupArchiveWindows(
       const diff = Math.round(
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
-      if (diff > 14) {
+      const spanDays = Math.round(
+        (new Date(sorted[i].shift_date).getTime() - new Date(cluster[0].shift_date).getTime()) / 86400000,
+      );
+      if (diff > 14 || spanDays >= 28) {
         windows.push(makeArchiveWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
