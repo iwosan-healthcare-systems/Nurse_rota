@@ -275,7 +275,6 @@ function ApprovalsPage() {
 
   const { data: rows = [], isLoading } = useQuery({
     queryKey: ["approvals"],
-    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const sixAgo = new Date();
       sixAgo.setMonth(sixAgo.getMonth() - 3);
@@ -638,6 +637,10 @@ function ApprovalsPage() {
     }
   }
 
+  function escHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
   async function handleDownloadPdf(win: RotaWindow) {
     const key = winKey(win);
     setDownloading(key + "-pdf");
@@ -665,7 +668,7 @@ function ApprovalsPage() {
               return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
             })
             .join("");
-          return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
+          return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
         })
         .join("");
       const pdfFacilityLabel = win.facility ? ` · ${win.facility}` : "";

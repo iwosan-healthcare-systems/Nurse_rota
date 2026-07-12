@@ -35,14 +35,18 @@ router.post(
 
 router.post(
   "/auto-end-overdue-shifts",
+  requireRole("admin", "cno"),
   wrap(async (req, res) => {
+    // Round to 2 decimal places — consistent with the cron job.
     const result = await pool.query(`
-    UPDATE shift_logs
-    SET ended_at = expected_end_at,
-        hours_logged = EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600
-    WHERE ended_at IS NULL AND expected_end_at < NOW()
-    RETURNING id, nurse_id, hours_logged, is_locum, is_swap
-  `);
+      UPDATE shift_logs
+      SET ended_at     = expected_end_at,
+          hours_logged = ROUND(
+            EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600 * 100
+          ) / 100
+      WHERE ended_at IS NULL AND expected_end_at < NOW()
+      RETURNING id, nurse_id, hours_logged, is_locum, is_swap
+    `);
 
     for (const row of result.rows) {
       if (!row.is_locum && !row.is_swap && row.hours_logged) {
@@ -59,7 +63,7 @@ router.post(
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        sa.shift                    AS shift_type,
+        CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END AS shift_type,
         sa.shift_date::timestamp    AS started_at,
         sa.shift_date::timestamp    AS expected_end_at,
         sa.shift_date::timestamp    AS ended_at,
@@ -167,29 +171,112 @@ router.get(
 
 router.post(
   "/auto-close-period",
+  requireRole("admin", "cno"),
   wrap(async (req, res) => {
-    // Find the most recently completed published period.
-    // The period is identified by the MAX published shift_date (= period end).
-    // We treat it as a 28-day block, so period_start = period_end - 27 days.
-    // "Complete" means every shift in the period is in the past (MAX < today).
-    const { rows } = await pool.query(`
-      WITH latest AS (
-        SELECT MAX(shift_date::date) AS last_date
+    // Use 28-day bucket logic so a running Period 2 doesn't hide completed
+    // Period 1.  Dates are bucketed from the earliest ever published date,
+    // giving stable 0-27, 28-55, … windows regardless of how many periods
+    // are currently running.
+    const { rows: periodRows } = await pool.query(`
+      WITH dates AS (
+        SELECT DISTINCT shift_date::date AS d
         FROM shift_assignments
         WHERE status = 'published'
+      ),
+      anchored AS (
+        SELECT d, MIN(d) OVER () AS anchor FROM dates
+      ),
+      bucketed AS (
+        SELECT d, (d - anchor) / 28 AS bucket FROM anchored
+      ),
+      periods AS (
+        SELECT
+          MIN(d)::text AS period_start,
+          MAX(d)::text AS period_end
+        FROM bucketed
+        GROUP BY bucket
       )
-      SELECT
-        (last_date - 27)::text AS period_start,
-        last_date::text        AS period_end
-      FROM latest
-      WHERE last_date IS NOT NULL
-        AND last_date < CURRENT_DATE
+      SELECT period_start, period_end
+      FROM periods
+      WHERE period_end::date < CURRENT_DATE
+        AND NOT EXISTS (
+          SELECT 1 FROM nurse_period_hours nph
+          WHERE nph.period_start = periods.period_start
+          LIMIT 1
+        )
+      ORDER BY period_end DESC
+      LIMIT 1
     `);
 
-    if (!rows[0]?.period_end)
+    if (!periodRows[0]) {
       return res.json({ closed: false, period_start: null, period_end: null });
+    }
 
-    res.json({ closed: true, period_start: rows[0].period_start, period_end: rows[0].period_end });
+    const { period_start, period_end } = periodRows[0];
+
+    // Aggregate completed shift hours per nurse for this period.
+    const { rows: hoursRows } = await pool.query(`
+      SELECT
+        nurse_id,
+        ROUND(SUM(hours_logged) * 100) / 100            AS total_hours,
+        COUNT(*) FILTER (WHERE hours_logged > 0 AND NOT is_missed)::int AS total_shifts
+      FROM shift_logs
+      WHERE shift_date BETWEEN $1 AND $2
+        AND is_locum       = false
+        AND is_swap        = false
+        AND ended_at       IS NOT NULL
+        AND hours_logged   IS NOT NULL
+      GROUP BY nurse_id
+      HAVING SUM(hours_logged) > 0
+    `, [period_start, period_end]);
+
+    if (!hoursRows.length) {
+      return res.json({ closed: false, period_start: null, period_end: null });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      for (const row of hoursRows) {
+        await client.query(`
+          INSERT INTO nurse_period_hours
+            (nurse_id, period_start, period_end, total_hours, total_shifts)
+          VALUES ($1, $2, $3, $4, $5)
+          ON CONFLICT (nurse_id, period_start) DO UPDATE
+          SET period_end   = EXCLUDED.period_end,
+              total_hours  = EXCLUDED.total_hours,
+              total_shifts = EXCLUDED.total_shifts
+        `, [
+          row.nurse_id,
+          period_start,
+          period_end,
+          parseFloat(row.total_hours),
+          parseInt(row.total_shifts, 10),
+        ]);
+      }
+
+      const nurseIds = hoursRows.map((r) => r.nurse_id);
+      await client.query(
+        "UPDATE nurses SET hours_this_month = 0, updated_at = NOW() WHERE id = ANY($1)",
+        [nurseIds],
+      );
+
+      await client.query(
+        `INSERT INTO audit_logs (actor_name, action, target)
+         VALUES ('system', 'Period auto-closed', $1)`,
+        [`${period_start} → ${period_end} · ${hoursRows.length} nurse(s) archived`],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.json({ closed: true, period_start, period_end });
   }),
 );
 

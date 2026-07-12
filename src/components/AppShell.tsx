@@ -102,10 +102,6 @@ export function AppShell() {
   const [menuPermissions, setMenuPermissions] = useState<Record<string, AppRole[]>>({});
 
   useEffect(() => {
-    void api.post("/rpc/auto-end-overdue-shifts");
-  }, []);
-
-  useEffect(() => {
     api
       .post<{ closed: boolean; period_start?: string; period_end?: string }>(
         "/rpc/auto-close-period",

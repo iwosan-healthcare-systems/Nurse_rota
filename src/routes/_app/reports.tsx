@@ -300,24 +300,20 @@ function ReportsContent() {
 
   const { data: nurses = [] } = useQuery<Nurse[]>({
     queryKey: ["nurses"],
-    staleTime: 10 * 60 * 1000,
     queryFn: () => api.get<Nurse[]>("/nurses"),
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
-    staleTime: 30 * 60 * 1000,
     queryFn: () => api.get<{ id: string; name: string; facility: string | null }[]>("/wards"),
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
-    staleTime: 5 * 60 * 1000,
     queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
   // Current period regular shift logs (last 28 days) — locum and missed excluded
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["shift-logs-current"],
-    staleTime: 2 * 60 * 1000,
     queryFn: () => {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
@@ -329,7 +325,6 @@ function ReportsContent() {
   // Missed shift logs — all time, facility-scoped
   const { data: missedShiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["missed-shift-logs", reportFacility],
-    staleTime: 2 * 60 * 1000,
     enabled: tab === "missed",
     queryFn: () => api.get<ShiftLog[]>("/shift-logs?is_missed=true"),
   });
@@ -337,14 +332,12 @@ function ReportsContent() {
   // Locum shift logs — separate from regular hours
   const { data: locumShiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["locum-shift-logs-report"],
-    staleTime: 2 * 60 * 1000,
     queryFn: () => api.get<ShiftLog[]>("/shift-logs?is_locum=true"),
   });
 
   // Filled locum requests — provides ward / facility context for each locum log
   const { data: locumFilledRequests = [] } = useQuery<LocumFilledRequest[]>({
     queryKey: ["locum-filled-report"],
-    staleTime: 2 * 60 * 1000,
     queryFn: () => api.get<LocumFilledRequest[]>("/locum/requests?status=filled"),
   });
 
@@ -812,6 +805,10 @@ function ReportsContent() {
     toast.success("Exported");
   }
 
+  function escHtml(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
   // ── Staff directory print ─────────────────────────────────────────────────
   function printStaffList(ward?: string) {
     const staffToPrint = ward
@@ -852,7 +849,7 @@ ${staffToPrint
   .sort((a, b) => a.name.localeCompare(b.name))
   .map(
     (n, i) =>
-      `<tr><td>${i + 1}</td><td>${n.name}</td><td>${n.role}</td><td>${n.ward?.split("|")[0] ?? "—"}</td></tr>`,
+      `<tr><td>${i + 1}</td><td>${escHtml(n.name)}</td><td>${escHtml(n.role)}</td><td>${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td></tr>`,
   )
   .join("")}
 </tbody>
@@ -944,7 +941,7 @@ ${staffToPrint
               return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
             })
             .join("");
-          return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
+          return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
         })
         .join("");
       const html = `<!DOCTYPE html>
@@ -1062,7 +1059,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
                 })
                 .join("");
-              return `<tr><td class="nm">${n.name}</td><td class="sm">${n.role}</td><td class="sm">${n.ward ? n.ward.split("|")[0] : "—"}</td>${cells}</tr>`;
+              return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
             })
             .join("");
           return `<h2>${label}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>`;

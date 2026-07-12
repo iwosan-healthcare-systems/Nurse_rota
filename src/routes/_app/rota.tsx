@@ -217,7 +217,6 @@ function RotaPage() {
   // facilities with different schedule start dates see the correct period anchor.
   const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
     queryKey: ["schedule-window-start", activeRole, effectiveFacility],
-    staleTime: 10 * 60 * 1000,
     queryFn: async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
@@ -306,7 +305,6 @@ function RotaPage() {
 
   const { data: leave = [] } = useQuery<LeaveInput[]>({
     queryKey: ["leave"],
-    staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
@@ -335,7 +333,6 @@ function RotaPage() {
     // Wait until the window start is known so we don't fetch for the wrong date range,
     // flash an empty state, then refetch — causing the visible flicker on page load.
     enabled: nurses.length > 0 && !windowLoading,
-    staleTime: 2 * 60 * 1000,
     queryFn: async () => {
       const statusParam = isNurseTier ? "&status=published" : "";
       const nurseParam =
@@ -354,7 +351,6 @@ function RotaPage() {
   // Filled locum requests for this window — used to highlight locum cells.
   const { data: locumFilled = [] } = useQuery({
     queryKey: ["locum-filled-rota", ymd(startDate), ymd(endDate)],
-    staleTime: 2 * 60 * 1000,
     queryFn: () =>
       api.get<{ accepted_by_nurse_id: string | null; shift_date: string; shift: string }[]>(
         `/locum/requests?status=filled&from=${ymd(startDate)}&to=${ymd(endDate)}`,

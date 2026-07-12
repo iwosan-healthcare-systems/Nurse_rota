@@ -25,6 +25,13 @@ async function autoEndOverdueShifts() {
 
     if (result.rowCount > 0) {
       console.log(`[auto-end] ${new Date().toISOString()} — closed ${result.rowCount} overdue shift(s)`);
+      await pool
+        .query(
+          `INSERT INTO audit_logs (actor_name, action, target)
+           VALUES ('system', 'Shifts auto-ended', $1)`,
+          [`${result.rowCount} shift(s) closed at ${new Date().toISOString()}`],
+        )
+        .catch((err) => console.error("[auto-end] audit log failed:", err.message));
     }
 
     // Record missed shifts: published assignments in the past with no shift log at all.
@@ -36,7 +43,7 @@ async function autoEndOverdueShifts() {
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        sa.shift                    AS shift_type,
+        CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END AS shift_type,
         sa.shift_date::timestamp    AS started_at,
         sa.shift_date::timestamp    AS expected_end_at,
         sa.shift_date::timestamp    AS ended_at,

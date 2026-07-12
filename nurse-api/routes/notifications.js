@@ -28,7 +28,7 @@ router.post(
           `INSERT INTO notification_state (user_id, notif_key, is_read)
          VALUES ($1, $2, $3)
          ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = EXCLUDED.is_read, updated_at = NOW()`,
-          [item.user_id, item.notif_key, item.is_read ?? false],
+          [req.user.userId, item.notif_key, item.is_read ?? false],
         );
       }
       await client.query("COMMIT");

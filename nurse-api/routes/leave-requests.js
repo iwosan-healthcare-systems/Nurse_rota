@@ -252,35 +252,49 @@ router.patch(
     const values = fields.map((f) => req.body[f]);
     values.push(req.params.id);
 
-    const { rows } = await pool.query(
-      `UPDATE leave_requests SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
-      values,
-    );
-    if (!rows[0]) return res.status(404).json({ error: "Leave request not found" });
+    // Wrap the leave update + shift flip in a single transaction so they
+    // never end up in a split state (approved leave with un-flipped shifts).
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
 
-    // When a leave request is approved, flip the nurse's shift cells to LEAVE
-    // for every date in the leave window that already exists in shift_assignments.
-    // This covers leave approved on an already-generated rota (auto-generate handles
-    // the case where leave is approved before the schedule is built).
-    const leave = rows[0];
-    if (
-      leave.status === "Approved" &&
-      leave.nurse_id &&
-      leave.from_date &&
-      leave.to_date &&
-      leave.type !== "Swap"
-    ) {
-      await pool.query(
-        `UPDATE shift_assignments
-            SET shift = 'LEAVE'
-          WHERE nurse_id = $1
-            AND shift_date BETWEEN $2 AND $3
-            AND shift != 'LEAVE'`,
-        [leave.nurse_id, leave.from_date, leave.to_date],
+      const { rows } = await client.query(
+        `UPDATE leave_requests SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
+        values,
       );
-    }
+      if (!rows[0]) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leave request not found" });
+      }
 
-    res.json(rows[0]);
+      // When a leave request is approved, flip the nurse's shift cells to LEAVE
+      // for every date in the leave window that already exists in shift_assignments.
+      const leave = rows[0];
+      if (
+        leave.status === "Approved" &&
+        leave.nurse_id &&
+        leave.from_date &&
+        leave.to_date &&
+        leave.type !== "Swap"
+      ) {
+        await client.query(
+          `UPDATE shift_assignments
+              SET shift = 'LEAVE'
+            WHERE nurse_id = $1
+              AND shift_date BETWEEN $2 AND $3
+              AND shift != 'LEAVE'`,
+          [leave.nurse_id, leave.from_date, leave.to_date],
+        );
+      }
+
+      await client.query("COMMIT");
+      res.json(leave);
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   }),
 );
 

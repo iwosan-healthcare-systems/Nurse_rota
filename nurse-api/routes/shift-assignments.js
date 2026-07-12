@@ -177,8 +177,16 @@ router.patch(
       // Self-service exception: a nurse accepting a bank/locum invite flips their
       // own OFF day to the locum shift type. Never allowed to touch status or ward,
       // or any nurse other than themselves.
+      const LOCUM_SHIFT_CODES = ["M", "N", "MWC", "NC"];
       const ids = nurse_ids ? nurse_ids.split(",") : [];
-      if (status || newWard || !shift || ids.length !== 1 || filterShift !== "OFF") {
+      if (
+        status ||
+        newWard ||
+        !shift ||
+        !LOCUM_SHIFT_CODES.includes(shift) ||
+        ids.length !== 1 ||
+        filterShift !== "OFF"
+      ) {
         return res.status(403).json({ error: "Forbidden" });
       }
       const { rows: ownNurse } = await pool.query(
