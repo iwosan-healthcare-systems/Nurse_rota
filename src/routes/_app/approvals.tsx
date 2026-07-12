@@ -131,7 +131,10 @@ function groupIntoWindows(
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) /
           86400000,
       );
-      if (diff > 14) {
+      // Also split at a published↔non-published boundary: consecutive periods share
+      // no date gap, so the only signal that a new period started is a status change.
+      const periodBoundary = (prev.status === "published") !== (sorted[i].status === "published");
+      if (diff > 14 || periodBoundary) {
         windows.push(makeWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
