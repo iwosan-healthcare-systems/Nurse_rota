@@ -35,11 +35,7 @@ import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
 import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { api, getToken } from "@/lib/api";
-import {
-  loadMenuPermissions,
-  getEffectiveRoles,
-  MENU_PERMISSIONS_KEY,
-} from "@/lib/menu-permissions";
+import { getEffectiveRoles } from "@/lib/menu-permissions";
 
 const ALL: AppRole[] = [
   "admin",
@@ -103,7 +99,7 @@ export function AppShell() {
   } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
-  const [menuPermissions, setMenuPermissions] = useState(loadMenuPermissions);
+  const [menuPermissions, setMenuPermissions] = useState<Record<string, AppRole[]>>({});
 
   useEffect(() => {
     void api.post("/rpc/auto-end-overdue-shifts");
@@ -136,30 +132,21 @@ export function AppShell() {
       });
   }, []);
 
-  // Same-tab / same-browser cache updates (instant)
+  // Load menu permissions from DB on mount, and re-fetch whenever an admin saves changes.
   useEffect(() => {
-    const handler = () => setMenuPermissions(loadMenuPermissions());
-    window.addEventListener("menu-permissions-changed", handler);
-    window.addEventListener("storage", handler);
-    return () => {
-      window.removeEventListener("menu-permissions-changed", handler);
-      window.removeEventListener("storage", handler);
+    const fetchMenuPerms = () => {
+      api
+        .get<{ key: string; value: Record<string, AppRole[]> }>("/portal-settings/menu_permissions")
+        .then(({ value }) => { if (value) setMenuPermissions(value); })
+        .catch(() => {/* non-critical */});
     };
-  }, []);
-
-  // Authoritative load from API on mount; changes propagate on next load
-  useEffect(() => {
-    api
-      .get<{ key: string; value: Record<string, AppRole[]> }>("/portal-settings/menu_permissions")
-      .then(({ value }) => {
-        if (value) {
-          setMenuPermissions(value);
-          localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(value));
-        }
-      })
-      .catch(() => {
-        /* non-critical */
-      });
+    fetchMenuPerms();
+    window.addEventListener("menu-permissions-changed", fetchMenuPerms);
+    window.addEventListener("storage", fetchMenuPerms);
+    return () => {
+      window.removeEventListener("menu-permissions-changed", fetchMenuPerms);
+      window.removeEventListener("storage", fetchMenuPerms);
+    };
   }, []);
 
   useEffect(() => {

@@ -789,6 +789,26 @@ function ReportsContent() {
     toast.success("Exported");
   }
 
+  function exportMissedShifts() {
+    if (scopedMissedLogs.length === 0) return toast.error("No missed shifts to export");
+    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+    const rows = scopedMissedLogs.map((l) => {
+      const nurse = nurseMap.get(l.nurse_id);
+      return {
+        Date: fmtDate(l.shift_date),
+        Nurse: nurse?.name ?? "Unknown",
+        Facility: nurse?.facility ?? "",
+        Ward: nurse?.ward?.split("|")[0] ?? "",
+        Shift: l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type,
+      };
+    });
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Missed Shifts");
+    XLSX.writeFile(wb, `missed-shifts-${todayYmd()}.xlsx`);
+    toast.success("Exported");
+  }
+
   // ── Staff directory print ─────────────────────────────────────────────────
   function printStaffList(ward?: string) {
     const staffToPrint = ward
@@ -1784,6 +1804,15 @@ ${sections}
                 <span className="font-medium text-foreground">{scopedMissedLogs.length}</span> missed{" "}
                 {reportFacility ? `in ${reportFacility}` : "across all facilities"}.
               </p>
+              {scopedMissedLogs.length > 0 && (
+                <button
+                  type="button"
+                  onClick={exportMissedShifts}
+                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                >
+                  <Download className="h-4 w-4" /> Export Excel
+                </button>
+              )}
             </div>
             {scopedMissedLogs.length === 0 ? (
               <div className="py-16 text-center text-sm text-muted-foreground">No missed shifts recorded.</div>

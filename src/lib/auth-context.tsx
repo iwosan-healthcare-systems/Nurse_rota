@@ -24,18 +24,6 @@ export interface ApiUser {
   nurse_facility: string | null;
 }
 
-const CAPABILITIES_KEY = "nurse_rota_capabilities";
-
-function capabilityRoles(key: string, defaults: AppRole[]): AppRole[] {
-  try {
-    const raw = localStorage.getItem(CAPABILITIES_KEY);
-    if (!raw) return defaults;
-    const saved = JSON.parse(raw) as { key: string; roles: AppRole[] }[];
-    return saved.find((s) => s.key === key)?.roles ?? defaults;
-  } catch {
-    return defaults;
-  }
-}
 
 interface AuthCtx {
   user: ApiUser | null;
@@ -93,7 +81,7 @@ export function rememberSelectedRole(uid: string, role: AppRole) {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ApiUser | null>(null);
-  const [capabilitiesVersion, setCapabilitiesVersion] = useState(0);
+  const [capabilities, setCapabilities] = useState<{ key: string; roles: AppRole[] }[]>([]);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -115,7 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false));
   }, []);
 
-  // Pull capability overrides from API once on mount.
+  // Pull capability overrides from DB once on mount.
   useEffect(() => {
     if (!getToken()) return;
     api
@@ -123,19 +111,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         "/portal-settings/capabilities",
       )
       .then(({ value }) => {
-        if (value && Array.isArray(value)) {
-          localStorage.setItem(CAPABILITIES_KEY, JSON.stringify(value));
-          setCapabilitiesVersion((v) => v + 1);
-        }
+        if (Array.isArray(value)) setCapabilities(value);
       })
-      .catch(() => {
-        /* non-critical */
-      });
+      .catch(() => {/* non-critical */});
   }, []);
 
-  // Re-read capabilities from localStorage when permissions page saves.
+  // Re-fetch capabilities from DB when the permissions page saves.
   useEffect(() => {
-    const handler = () => setCapabilitiesVersion((v) => v + 1);
+    const handler = () => {
+      api
+        .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>(
+          "/portal-settings/capabilities",
+        )
+        .then(({ value }) => {
+          if (Array.isArray(value)) setCapabilities(value);
+        })
+        .catch(() => {});
+    };
     window.addEventListener("capabilities-changed", handler);
     return () => window.removeEventListener("capabilities-changed", handler);
   }, []);
@@ -240,11 +232,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   const ar = activeRole;
-  void capabilitiesVersion;
   const hasRole = (r: AppRole) => ar === r;
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
-  const cap = (key: string, defaults: AppRole[]) =>
-    ar !== null && capabilityRoles(key, defaults).includes(ar);
+  const cap = (key: string, defaults: AppRole[]) => {
+    const roles = capabilities.find((c) => c.key === key)?.roles ?? defaults;
+    return ar !== null && roles.includes(ar);
+  };
 
   const value: AuthCtx = {
     user,

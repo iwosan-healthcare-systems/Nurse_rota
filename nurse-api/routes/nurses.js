@@ -146,6 +146,13 @@ router.patch(
           "profile_id",
         ]
       : ["ward"];
+    // Nurses in facility-wide roles (Coverage/Head Nurse, Interns, Porters) must never carry a ward.
+    // Enforce this server-side so historical data or direct-DB edits can't leave stale wards.
+    const NO_WARD_ROLE = /^(head|coverage)\s*nurse$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i;
+    if (req.body.role && NO_WARD_ROLE.test(req.body.role)) {
+      req.body.ward = null;
+    }
+
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
 

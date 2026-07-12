@@ -1443,9 +1443,12 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [coverShift, setCoverShift] = useState<"M" | "N" | "">("");
   const [busy, setBusy] = useState(false);
 
-  const facilityNurses = nurses.filter((n) => n.facility === facility);
+  const facilityKey = facility.trim().toLowerCase();
+  const facilityNurses = nurses.filter(
+    (n) => (n.facility ?? "").trim().toLowerCase() === facilityKey,
+  );
   // Matrons (clinical role) never participate in shift switches.
-  const switchableNurses = facilityNurses.filter((n) => !/matron/i.test(n.role));
+  const switchableNurses = facilityNurses.filter((n) => !/matron/i.test(n.role ?? ""));
   const nurseA = nurses.find((n) => n.id === nurseAId);
   const nurseAWards = splitWards(nurseA?.ward);
   // Case-insensitive dedup: "ICU & CathLab" and "ICU & Cathlab" collapse to one entry.
@@ -1481,8 +1484,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
     const nurseARole = nurseA?.role ?? "";
     const nurseACategory = roleCategory(nurseARole);
+    // Mirror the rota's own grouping: Coverage Nurse and Head Nurse are interchangeable.
+    const isGlobalHeadRole = (r: string | null | undefined) =>
+      !!r && /^(head|coverage)\s*nurse$/i.test(r.trim());
+    const nurseAIsGlobalHead = isGlobalHeadRole(nurseARole);
     const notNurseA = (n: (typeof switchableNurses)[number]) => n.id !== nurseAId;
-    const sameRole = (n: (typeof switchableNurses)[number]) => roleCategory(n.role) === nurseACategory;
+    const sameRole = (n: (typeof switchableNurses)[number]) => {
+      if (nurseAIsGlobalHead) return isGlobalHeadRole(n.role);
+      return roleCategory(n.role) === nurseACategory;
+    };
     // Exclude nurses on approved leave — swapping with a leave nurse makes no sense.
     const notOnLeave = (n: (typeof switchableNurses)[number]) =>
       assignmentMap.get(n.id) !== "LEAVE";

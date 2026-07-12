@@ -135,7 +135,6 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
 ];
 
-const STORAGE_KEY = "nurse_rota_capabilities";
 const CAPABILITIES_CHANGED_EVENT = "capabilities-changed";
 
 function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capability[] {
@@ -145,21 +144,11 @@ function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capabili
   });
 }
 
-function loadCapabilities(): Capability[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return DEFAULT_CAPABILITIES;
-    return mergeCapabilities(JSON.parse(raw) as { key: string; roles: AppRole[] }[]);
-  } catch {
-    return DEFAULT_CAPABILITIES;
-  }
-}
-
 function PermissionsPage() {
   const navigate = useNavigate();
   const { isAdmin, loading } = useAuth();
 
-  const [capabilities, setCapabilities] = useState<Capability[]>(loadCapabilities);
+  const [capabilities, setCapabilities] = useState<Capability[]>(DEFAULT_CAPABILITIES);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<Capability[]>([]);
   const [saving, setSaving] = useState(false);
@@ -174,15 +163,9 @@ function PermissionsPage() {
         "/portal-settings/capabilities",
       )
       .then(({ value }) => {
-        if (value) {
-          const merged = mergeCapabilities(value);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(value));
-          setCapabilities(merged);
-        }
+        if (value) setCapabilities(mergeCapabilities(value));
       })
-      .catch(() => {
-        /* non-critical */
-      });
+      .catch(() => {/* non-critical */});
   }, []);
 
   function startEdit() {
@@ -200,7 +183,6 @@ function PermissionsPage() {
     setSaving(true);
     try {
       await api.put("/portal-settings/capabilities", { value: payload });
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
       window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
       setCapabilities(draft);
       setEditing(false);
@@ -217,7 +199,6 @@ function PermissionsPage() {
     setSaving(true);
     try {
       await api.put("/portal-settings/capabilities", { value: [] });
-      localStorage.removeItem(STORAGE_KEY);
       window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
       setCapabilities(DEFAULT_CAPABILITIES);
       setDraft([]);

@@ -49,18 +49,10 @@ export const ADMIN_LOCKED_KEYS = new Set([
 ]);
 
 export function loadMenuPermissions(): Record<string, AppRole[]> {
-  try {
-    const raw = localStorage.getItem(MENU_PERMISSIONS_KEY);
-    if (!raw) return {};
-    return JSON.parse(raw) as Record<string, AppRole[]>;
-  } catch {
-    return {};
-  }
+  return {};
 }
 
-export function saveMenuPermissions(overrides: Record<string, AppRole[]>): void {
-  localStorage.setItem(MENU_PERMISSIONS_KEY, JSON.stringify(overrides));
-  // Notify other components in the same tab via a custom event.
+export function saveMenuPermissions(_overrides: Record<string, AppRole[]>): void {
   window.dispatchEvent(new Event("menu-permissions-changed"));
 }
 
