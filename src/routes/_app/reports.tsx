@@ -1832,9 +1832,9 @@ ${sections}
                   page={missedPage}
                   totalPages={missedTotalPages}
                   pageSize={missedPageSize}
-                  total={scopedMissedLogs.length}
-                  onPageChange={setMissedPage}
-                  onPageSizeChange={(s) => { setMissedPageSize(s); setMissedPage(1); }}
+                  totalItems={scopedMissedLogs.length}
+                  onPage={setMissedPage}
+                  onPageSize={(s) => { setMissedPageSize(s); setMissedPage(1); }}
                 />
               </div>
             )}

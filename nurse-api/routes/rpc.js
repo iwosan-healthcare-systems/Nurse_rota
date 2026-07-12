@@ -77,7 +77,10 @@ router.post(
         false                       AS is_swap
       FROM shift_assignments sa
       WHERE sa.status = 'published'
-        AND sa.shift_date < CURRENT_DATE
+        AND (
+          (sa.shift NOT IN ('N', 'NC') AND sa.shift_date < CURRENT_DATE)
+          OR (sa.shift IN ('N', 'NC') AND sa.shift_date + INTERVAL '1 day 8 hours' < NOW())
+        )
         AND sa.shift NOT IN ('LEAVE', 'OFF')
         AND NOT EXISTS (
           SELECT 1 FROM shift_logs sl

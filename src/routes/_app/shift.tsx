@@ -172,11 +172,23 @@ function ShiftPage() {
 
   // Today's rota assignment — poll every 30 s so the Start Shift button unlocks
   // automatically once an admin publishes the rota without the nurse needing to reload.
+  // Before 08:00 we first check yesterday for an N/NC shift still within its window
+  // (night shifts run 17:00 day D → 08:00 day D+1, so they span midnight).
   const { data: queryAssignment } = useQuery<Assignment | null>({
     queryKey: ["my-assignment", nurseId, today],
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
+      if (new Date().getHours() < 8) {
+        const yd = new Date();
+        yd.setDate(yd.getDate() - 1);
+        const yesterdayStr = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
+        const ydArr = await api.get<Assignment[]>(
+          `/shift-assignments?nurse_id=${nurseId}&shift_date=${yesterdayStr}&status=published&limit=1`,
+        );
+        const ydAssignment = ydArr[0] ?? null;
+        if (ydAssignment && isNightShift(ydAssignment.shift)) return ydAssignment;
+      }
       const arr = await api.get<Assignment[]>(
         `/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`,
       );
@@ -371,15 +383,16 @@ function ShiftPage() {
     const schedulePublished = !!(todayLocum ?? queryAssignment);
     if (!schedulePublished) return;
 
+    const assignmentDate = queryAssignment?.shift_date ?? today;
     const endHour = isMorningShift(effectiveShift) ? 17 : 8;
-    const endTime = new Date();
+    const endTime = new Date(assignmentDate + "T00:00:00");
     if (isNightShift(effectiveShift)) endTime.setDate(endTime.getDate() + 1);
     endTime.setHours(endHour, 0, 0, 0);
     if (now < endTime) return;
 
     missedRecordedRef.current = true;
     const shiftType = normalizeShiftType(effectiveShift);
-    const officialStart = new Date();
+    const officialStart = new Date(assignmentDate + "T00:00:00");
     officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
 
     void (async () => {
@@ -393,7 +406,7 @@ function ShiftPage() {
       await api
         .post("/shift-logs", {
           nurse_id: nurseId,
-          shift_date: today,
+          shift_date: assignmentDate,
           shift_type: shiftType,
           started_at: officialStart.toISOString(),
           ended_at: officialStart.toISOString(),
@@ -469,7 +482,7 @@ function ShiftPage() {
     try {
       await api.post("/shift-logs", {
         nurse_id: nurseId,
-        shift_date: today,
+        shift_date: assignment.shift_date,
         shift_type: shiftType,
         started_at: startedAt.toISOString(),
         expected_end_at: expectedEnd.toISOString(),
@@ -547,20 +560,22 @@ function ShiftPage() {
 
   // ── Timing: when this shift is allowed to start ───────────────────────────
 
-  // The official start time for the nurse's shift today.
-  // M / MWC → 08:00; N / NC → 17:00.
+  // The official start time for the nurse's shift.
+  // M / MWC → 08:00 on shift_date; N / NC → 17:00 on shift_date.
+  // Anchored to assignment.shift_date so night shifts that span midnight
+  // (e.g. assigned July 11 but viewed on July 12 at 02:00) compute correctly.
   const shiftStartTime = (() => {
     if (!assignment || !isWorkShift(assignment.shift)) return null;
-    const t = new Date();
+    const t = new Date(assignment.shift_date + "T00:00:00");
     t.setHours(isMorningShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
   })();
 
   // The official end time (used to detect a missed shift).
-  // M / MWC → 17:00 today; N / NC → 08:00 tomorrow.
+  // M / MWC → 17:00 on shift_date; N / NC → 08:00 on shift_date + 1 day.
   const shiftEndTime = (() => {
     if (!assignment || !isWorkShift(assignment.shift)) return null;
-    const t = new Date();
+    const t = new Date(assignment.shift_date + "T00:00:00");
     if (isNightShift(assignment.shift)) t.setDate(t.getDate() + 1);
     t.setHours(isNightShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
