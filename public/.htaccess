@@ -1,6 +1,14 @@
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
+
+  # Proxy UAT API — strip /uat prefix, forward to port 3002
+  RewriteRule ^uat/api/(.*)$ http://127.0.0.1:3002/api/$1 [P,L]
+
+  # Proxy production API — forward to port 3001
+  RewriteRule ^api/(.*)$ http://127.0.0.1:3001/api/$1 [P,L]
+
+  # React SPA fallback
   RewriteRule ^index\.html$ - [L]
   RewriteCond %{REQUEST_FILENAME} !-f
   RewriteCond %{REQUEST_FILENAME} !-d
