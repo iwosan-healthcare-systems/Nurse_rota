@@ -4,6 +4,7 @@ const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
 const app = express();
+app.set('trust proxy', 1); // trust Apache reverse proxy for X-Forwarded-For
 
 const allowedOrigin = process.env.ALLOWED_ORIGIN;
 if (!allowedOrigin) throw new Error('ALLOWED_ORIGIN env var is not set');

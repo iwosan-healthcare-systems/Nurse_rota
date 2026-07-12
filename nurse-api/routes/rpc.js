@@ -191,14 +191,14 @@ router.post(
       ),
       periods AS (
         SELECT
-          MIN(d)::text AS period_start,
-          MAX(d)::text AS period_end
+          MIN(d) AS period_start,
+          MAX(d) AS period_end
         FROM bucketed
         GROUP BY bucket
       )
-      SELECT period_start, period_end
+      SELECT period_start::text, period_end::text
       FROM periods
-      WHERE period_end::date < CURRENT_DATE
+      WHERE period_end < CURRENT_DATE
         AND NOT EXISTS (
           SELECT 1 FROM nurse_period_hours nph
           WHERE nph.period_start = periods.period_start
