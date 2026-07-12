@@ -683,6 +683,9 @@ function scheduleCoverageNurses(
   // cycleOffset 0 → resume M (non-M case); cycleOffset 8 → resume N (M-block case).
   const mwcNurseResumeDays = new Map<number, Array<{ resumeAt: number; cycleOffset: number }>>();
   let weekendDutyIdx = (periodsElapsed * 4 + seed) % N;
+  // Track who has already received an MWC block this period so no nurse gets
+  // a second block before every other eligible nurse has had their first.
+  const mwcAssignedThisPeriod = new Set<number>();
 
   for (let d = 0; d < days; d++) {
     const satDate = new Date(startDate);
@@ -693,6 +696,9 @@ function scheduleCoverageNurses(
     // AND nurses whose NC block starts on Monday (d+2) or Tuesday (d+3) — assigning MWC
     // to such a nurse would cause NC (highest-priority check) to override the forced M/OFF
     // assignments that immediately follow MWC, creating 6+ consecutive shift blocks.
+    // Also exclude nurses on approved leave during this weekend — assigning them MWC
+    // wastes the rotation slot (LEAVE overrides MWC in the main loop), which causes the
+    // rotation to skip that nurse and potentially double-assign another nurse later.
     const excluded = new Set<number>();
     for (const [nurseIdx, starts] of ncStartDays) {
       for (const startD of starts) {
@@ -704,17 +710,41 @@ function scheduleCoverageNurses(
         }
       }
     }
+    const satStr = ymd(satDate);
+    const sunDate = new Date(satDate);
+    sunDate.setDate(sunDate.getDate() + 1);
+    const sunStr = ymd(sunDate);
+    for (let ni = 0; ni < N; ni++) {
+      if (inLeave(leave, group[ni].id, satStr) || inLeave(leave, group[ni].id, sunStr)) {
+        excluded.add(ni);
+      }
+    }
 
+    // Prefer nurses who haven't had MWC this period (round-robin fairness).
+    // Only fall back to repeating a nurse if every non-excluded nurse has already
+    // had an MWC block this period.
     let mwcNurse = -1;
     for (let attempt = 0; attempt < N; attempt++) {
       const candidate = (weekendDutyIdx + attempt) % N;
-      if (!excluded.has(candidate)) {
+      if (!excluded.has(candidate) && !mwcAssignedThisPeriod.has(candidate)) {
         mwcNurse = candidate;
         weekendDutyIdx = (candidate + 1) % N;
         break;
       }
     }
+    if (mwcNurse < 0) {
+      // All available nurses already have an MWC block this period — allow repeats.
+      for (let attempt = 0; attempt < N; attempt++) {
+        const candidate = (weekendDutyIdx + attempt) % N;
+        if (!excluded.has(candidate)) {
+          mwcNurse = candidate;
+          weekendDutyIdx = (candidate + 1) % N;
+          break;
+        }
+      }
+    }
     if (mwcNurse < 0) continue;
+    mwcAssignedThisPeriod.add(mwcNurse);
 
     mwcByDate.set(ymd(satDate), mwcNurse); // Saturday
     if (d + 1 < days) {

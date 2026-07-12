@@ -263,7 +263,13 @@ router.patch(
     // This covers leave approved on an already-generated rota (auto-generate handles
     // the case where leave is approved before the schedule is built).
     const leave = rows[0];
-    if (leave.status === "Approved" && leave.nurse_id && leave.from_date && leave.to_date) {
+    if (
+      leave.status === "Approved" &&
+      leave.nurse_id &&
+      leave.from_date &&
+      leave.to_date &&
+      leave.type !== "Swap"
+    ) {
       await pool.query(
         `UPDATE shift_assignments
             SET shift = 'LEAVE'
