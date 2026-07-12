@@ -227,14 +227,16 @@ function ShiftPage() {
     };
   }, [isMatronNurse, today]);
 
-  // Active shift (may span midnight for night shifts) or today's completed shift.
-  // Filtering by ended_at IS NULL catches a night shift started yesterday that hasn't
-  // auto-ended yet; including shift_date = today catches a completed morning shift.
+  // Active shift (may span midnight for night shifts) or the current assignment's completed shift.
+  // Anchored to the assignment's shift_date: before 08:00 the assignment may be from yesterday
+  // (a night shift still within its 17:00→08:00 window), so we query that date's log so the
+  // nurse sees the correct state (active / completed / missed) rather than switching to today.
+  const assignmentShiftDate = queryAssignment?.shift_date?.slice(0, 10) ?? today;
   const { data: shiftLog } = useQuery<ShiftLog | null>({
-    queryKey: ["my-shift-log", nurseId, today],
+    queryKey: ["my-shift-log", nurseId, assignmentShiftDate],
     enabled: !!nurseId,
     queryFn: () =>
-      api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${today}`),
+      api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${assignmentShiftDate}`),
     refetchInterval: 30000,
   });
 
@@ -383,7 +385,7 @@ function ShiftPage() {
     const schedulePublished = !!(todayLocum ?? queryAssignment);
     if (!schedulePublished) return;
 
-    const assignmentDate = queryAssignment?.shift_date ?? today;
+    const assignmentDate = queryAssignment?.shift_date?.slice(0, 10) ?? today;
     const endHour = isMorningShift(effectiveShift) ? 17 : 8;
     const endTime = new Date(assignmentDate + "T00:00:00");
     if (isNightShift(effectiveShift)) endTime.setDate(endTime.getDate() + 1);
@@ -482,7 +484,7 @@ function ShiftPage() {
     try {
       await api.post("/shift-logs", {
         nurse_id: nurseId,
-        shift_date: assignment.shift_date,
+        shift_date: assignment.shift_date.slice(0, 10),
         shift_type: shiftType,
         started_at: startedAt.toISOString(),
         expected_end_at: expectedEnd.toISOString(),
@@ -566,7 +568,7 @@ function ShiftPage() {
   // (e.g. assigned July 11 but viewed on July 12 at 02:00) compute correctly.
   const shiftStartTime = (() => {
     if (!assignment || !isWorkShift(assignment.shift)) return null;
-    const t = new Date(assignment.shift_date + "T00:00:00");
+    const t = new Date(assignment.shift_date.slice(0, 10) + "T00:00:00");
     t.setHours(isMorningShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
   })();
@@ -575,7 +577,7 @@ function ShiftPage() {
   // M / MWC → 17:00 on shift_date; N / NC → 08:00 on shift_date + 1 day.
   const shiftEndTime = (() => {
     if (!assignment || !isWorkShift(assignment.shift)) return null;
-    const t = new Date(assignment.shift_date + "T00:00:00");
+    const t = new Date(assignment.shift_date.slice(0, 10) + "T00:00:00");
     if (isNightShift(assignment.shift)) t.setDate(t.getDate() + 1);
     t.setHours(isNightShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
@@ -936,8 +938,8 @@ function ShiftPage() {
             <>
               <p className="text-3xl font-bold">{fmtHours(Number(periodHours.total_hours))}</p>
               <p className="text-xs text-muted-foreground mt-1">
-                {periodHours.total_shifts} shifts · {periodHours.period_start} →{" "}
-                {periodHours.period_end}
+                {periodHours.total_shifts} shifts · {fmtDate(periodHours.period_start)} →{" "}
+                {fmtDate(periodHours.period_end)}
               </p>
             </>
           ) : (

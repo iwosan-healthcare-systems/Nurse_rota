@@ -624,7 +624,7 @@ function ApprovalsPage() {
         win.ward === null
           ? "-coverage-nurses"
           : `-${win.ward.replace(/\s+/g, "-").toLowerCase()}`;
-      XLSX.writeFile(wb, `rota-${win.startDate}-to-${win.endDate}${facilitySlug}${fileSuffix}.xlsx`);
+      XLSX.writeFile(wb, `rota-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${facilitySlug}${fileSuffix}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -670,7 +670,7 @@ function ApprovalsPage() {
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${endDate}${pdfFacilityLabel}${pdfWardLabel}</title>
+<title>Nurse Rota ${win.startDate.slice(0, 10)} — ${endDate}${pdfFacilityLabel}${pdfWardLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}

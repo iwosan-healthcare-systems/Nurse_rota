@@ -1399,6 +1399,22 @@ function splitWards(ward: string | null | undefined): string[] {
     .filter(Boolean);
 }
 
+// Normalise a job-role string to a stable category so that role matching
+// in shift-switch is robust against capitalisation variants and the fact
+// that "Coverage Nurse" and "Head Nurse" are the same functional category.
+function roleCategory(role: string | null | undefined): string {
+  if (!role) return "nurse";
+  const r = role.trim().toLowerCase();
+  if (r === "cno" || r.includes("chief nursing officer")) return "cno";
+  if (r.includes("chief matron") || r === "matron") return "chief_matron";
+  if (r.includes("coverage nurse") || r.includes("head nurse") || r.includes("night coordinator")) return "head_nurse";
+  if (/^hr/.test(r)) return "hr_admin";
+  if (/^porter/.test(r)) return "porter";
+  if (/nurs(?:e|ing)\s*assistant/i.test(r)) return "nursing_assistant";
+  if (/surgical\s*nurse/i.test(r)) return "surgical_nurse";
+  return "nurse";
+}
+
 function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { user, fullName, nurseFacility, isAdmin } = useAuth();
   const qc = useQueryClient();
@@ -1464,8 +1480,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     if (!nurseAId || !date) return [];
 
     const nurseARole = nurseA?.role ?? "";
+    const nurseACategory = roleCategory(nurseARole);
     const notNurseA = (n: (typeof switchableNurses)[number]) => n.id !== nurseAId;
-    const sameRole = (n: (typeof switchableNurses)[number]) => n.role === nurseARole;
+    const sameRole = (n: (typeof switchableNurses)[number]) => roleCategory(n.role) === nurseACategory;
     // Exclude nurses on approved leave — swapping with a leave nurse makes no sense.
     const notOnLeave = (n: (typeof switchableNurses)[number]) =>
       assignmentMap.get(n.id) !== "LEAVE";

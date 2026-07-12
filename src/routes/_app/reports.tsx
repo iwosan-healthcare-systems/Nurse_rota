@@ -927,7 +927,7 @@ ${staffToPrint
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
-<title>Nurse Rota ${win.startDate} — ${win.endDate}${facilityLabel}${wardLabel}</title>
+<title>Nurse Rota ${win.startDate.slice(0, 10)} — ${win.endDate.slice(0, 10)}${facilityLabel}${wardLabel}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:Arial,sans-serif;font-size:7pt;padding:1cm}
@@ -993,7 +993,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
       ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
       XLSX.utils.book_append_sheet(wb, ws, "Rota");
       const slug = win.ward ? `-${win.ward.replace(/\s+/g, "-").toLowerCase()}` : "-coverage";
-      XLSX.writeFile(wb, `rota-archive-${win.startDate}-to-${win.endDate}${slug}.xlsx`);
+      XLSX.writeFile(wb, `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
