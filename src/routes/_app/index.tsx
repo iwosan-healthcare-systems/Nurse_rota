@@ -713,9 +713,17 @@ function ManagementDashboard() {
 function Dashboard() {
   const { activeRole, nurseId } = useAuth();
 
-  // Nurses, Chief Matrons and Head Nurses work shifts — give them the personal view.
+  // All shift-working roles get the personal dashboard view.
   // Only CNO, HR/Admin and System Admin get the ops management view.
-  if (activeRole && ["nurse", "chief_matron", "head_nurse"].includes(activeRole) && nurseId) {
+  const shiftWorkerRoles = [
+    "nurse",
+    "chief_matron",
+    "head_nurse",
+    "porter",
+    "nursing_assistant",
+    "surgical_nurse",
+  ];
+  if (activeRole && shiftWorkerRoles.includes(activeRole) && nurseId) {
     return <NurseDashboard />;
   }
 
