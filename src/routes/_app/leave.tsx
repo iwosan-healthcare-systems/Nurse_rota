@@ -1514,6 +1514,19 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
     if (switchType === "inter-ward") {
       if (!wardB) return [];
+      if (exchangeMode === "leave") {
+        // Leave cover: any nurse in Ward B can cover (no role restriction),
+        // plus same-role no-ward nurses (e.g. other Coverage Nurses).
+        const wardBNurses = switchableNurses.filter(
+          (n) => notNurseA(n) && notOnLeave(n) && splitWards(n.ward).includes(wardB),
+        );
+        const sameRoleNoWard = switchableNurses.filter(
+          (n) => notNurseA(n) && notOnLeave(n) && sameRole(n) && isNoWardNurse(n),
+        );
+        const seen = new Set(wardBNurses.map((n) => n.id));
+        return [...wardBNurses, ...sameRoleNoWard.filter((n) => !seen.has(n.id))];
+      }
+      // Direct switch: Nurse B must be same role as Nurse A (equivalent shift swap).
       const wardNurses = switchableNurses.filter(
         (n) => base(n) && splitWards(n.ward).includes(wardB),
       );
