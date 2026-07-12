@@ -64,11 +64,11 @@ router.post(
         sa.shift_date::timestamp    AS expected_end_at,
         sa.shift_date::timestamp    AS ended_at,
         COALESCE(
-          (SELECT MIN(s2.shift_date)::text
+          (SELECT MIN(s2.shift_date)
            FROM shift_assignments s2
            WHERE s2.status = 'published'
              AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
-          sa.shift_date::text
+          sa.shift_date
         )                           AS period_start,
         0                           AS hours_logged,
         true                        AS is_missed,
