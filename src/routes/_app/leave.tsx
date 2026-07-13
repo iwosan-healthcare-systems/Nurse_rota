@@ -246,9 +246,8 @@ function LeavePage() {
         );
 
         if (publishedShifts.length > 0) {
-          await Promise.all(
-            publishedShifts.map((s) => api.patch(`/shift-assignments/${s.id}`, { shift: "LEAVE" })),
-          );
+          // The backend flips shifts to LEAVE atomically inside the leave-request
+          // PATCH transaction below — no need to PATCH each assignment individually here.
 
           const existingLogs = await api.get<{ shift_date: string }[]>(
             `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
@@ -389,18 +388,25 @@ function LeavePage() {
               "Cannot apply — no valid working shift (M/N) was recorded for Nurse A at request time. Please re-submit the switch request.",
             );
           }
-          await api.patch(`/shift-assignments/${assignB.id}`, { shift: targetShift });
-          qc.invalidateQueries({ queryKey: ["assignments"] });
+          // Idempotent: skip if nurse B already has the target shift (retry-safe).
+          if (assignB.shift !== targetShift) {
+            await api.patch(`/shift-assignments/${assignB.id}`, { shift: targetShift });
+            qc.invalidateQueries({ queryKey: ["assignments"] });
+          }
           logAudit(
             `Leave coverage applied: ${sw.nurseBName} covers ${l.nurse_name}'s ${targetShift} shift`,
             sw.date,
           );
         } else {
-          await Promise.all([
-            api.patch(`/shift-assignments/${assignA.id}`, { shift: assignB.shift }),
-            api.patch(`/shift-assignments/${assignB.id}`, { shift: assignA.shift }),
-          ]);
-          qc.invalidateQueries({ queryKey: ["assignments"] });
+          // Idempotent: skip if shifts are already in the swapped state (retry-safe).
+          const alreadySwapped = assignA.shift === sw.shiftB && assignB.shift === sw.shiftA;
+          if (!alreadySwapped) {
+            await Promise.all([
+              api.patch(`/shift-assignments/${assignA.id}`, { shift: assignB.shift }),
+              api.patch(`/shift-assignments/${assignB.id}`, { shift: assignA.shift }),
+            ]);
+            qc.invalidateQueries({ queryKey: ["assignments"] });
+          }
           logAudit(
             `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
             sw.date,
