@@ -166,7 +166,25 @@ router.patch(
       values,
     );
     if (!rows[0]) return res.status(404).json({ error: "Nurse not found" });
-    res.json(rows[0]);
+
+    // Keep the linked login account in sync when name or email changes.
+    const nurse = rows[0];
+    if (nurse.profile_id && (fields.includes("name") || fields.includes("email"))) {
+      await pool.query(
+        `UPDATE profiles
+         SET full_name  = COALESCE($1, full_name),
+             email      = COALESCE(lower($2), email),
+             updated_at = NOW()
+         WHERE id = $3`,
+        [
+          fields.includes("name")  ? nurse.name  : null,
+          fields.includes("email") ? nurse.email : null,
+          nurse.profile_id,
+        ],
+      );
+    }
+
+    res.json(nurse);
   }),
 );
 

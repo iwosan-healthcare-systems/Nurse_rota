@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Users,
   Search,
@@ -29,6 +29,7 @@ import {
 import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
 import { Modal } from "./staff";
 import { EmptyState } from "@/components/EmptyState";
+import { Pagination, usePagination } from "@/components/Pagination";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 
@@ -91,6 +92,8 @@ function UsersPage() {
   const [filterRole, setFilterRole] = useState<AppRole | "">("");
   const [resetPasswordTarget, setResetPasswordTarget] = useState<UserRow | null>(null);
   const [editTarget, setEditTarget] = useState<UserRow | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
@@ -206,6 +209,10 @@ function UsersPage() {
     setSearch("");
   };
 
+  useEffect(() => { setPage(1); }, [search, filterStatus, filterRole]);
+
+  const { pageItems: pageUsers, totalPages } = usePagination(filtered, pageSize, page);
+
   if (!isAdmin) {
     return (
       <div className="py-20 text-center text-sm text-muted-foreground">
@@ -320,7 +327,7 @@ function UsersPage() {
                     </td>
                   </tr>
                 ) : (
-                  filtered.map((u) => (
+                  pageUsers.map((u) => (
                     <UserRowItem
                       key={u.id}
                       user={u}
@@ -337,6 +344,14 @@ function UsersPage() {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={filtered.length}
+            onPage={setPage}
+            onPageSize={(s) => { setPageSize(s); setPage(1); }}
+          />
           <div className="px-5 py-3 border-t bg-muted/30 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Shield className="h-3.5 w-3.5" />
             {filtered.length} of {users.length} user{users.length !== 1 ? "s" : ""} shown · Role

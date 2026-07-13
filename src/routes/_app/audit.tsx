@@ -6,6 +6,8 @@ import { ShieldCheck } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { formatDistanceToNow } from "date-fns";
 import { useAuth } from "@/lib/auth-context";
+import { useState } from "react";
+import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/audit")({
   component: AuditPage,
@@ -33,10 +35,15 @@ function AuditPage() {
 }
 
 function AuditContent() {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
   const { data: logs = [], isLoading } = useQuery({
     queryKey: ["audit"],
     queryFn: () => api.get<Log[]>("/audit-logs"),
   });
+
+  const { pageItems, totalPages } = usePagination(logs, pageSize, page);
 
   return (
     <div>
@@ -53,7 +60,7 @@ function AuditContent() {
       ) : (
         <div className="bg-card border rounded-xl shadow-soft p-2">
           <div className="divide-y">
-            {logs.map((e) => (
+            {pageItems.map((e) => (
               <div key={e.id} className="flex items-start gap-4 p-4">
                 <div className="h-9 w-9 rounded-lg bg-primary/10 text-primary grid place-items-center shrink-0">
                   <ShieldCheck className="h-4 w-4" />
@@ -76,6 +83,14 @@ function AuditContent() {
               </div>
             ))}
           </div>
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            pageSize={pageSize}
+            totalItems={logs.length}
+            onPage={setPage}
+            onPageSize={(s) => { setPageSize(s); setPage(1); }}
+          />
         </div>
       )}
     </div>
