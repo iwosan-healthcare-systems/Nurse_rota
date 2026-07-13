@@ -29,6 +29,11 @@ export function Pagination({
 }: PaginationProps) {
   if (totalItems === 0) return null;
 
+  function goToPage(p: number) {
+    onPage(p);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
   const start = (page - 1) * pageSize + 1;
   const end = Math.min(page * pageSize, totalItems);
 
@@ -51,7 +56,7 @@ export function Pagination({
           value={pageSize}
           onChange={(e) => {
             onPageSize(Number(e.target.value));
-            onPage(1);
+            goToPage(1);
           }}
           className="h-7 rounded-md border bg-card px-2 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
         >
@@ -70,7 +75,7 @@ export function Pagination({
       <div className="flex items-center gap-1 shrink-0">
         <button
           type="button"
-          onClick={() => onPage(page - 1)}
+          onClick={() => goToPage(page - 1)}
           disabled={page === 1}
           aria-label="Previous page"
           className="h-7 w-7 grid place-items-center rounded-md border bg-card hover:bg-muted disabled:opacity-30"
@@ -86,7 +91,7 @@ export function Pagination({
             <button
               key={p}
               type="button"
-              onClick={() => onPage(p)}
+              onClick={() => goToPage(p as number)}
               aria-current={p === page ? "page" : undefined}
               className={`h-7 min-w-7 px-2 rounded-md border text-xs font-medium ${
                 p === page
@@ -100,7 +105,7 @@ export function Pagination({
         )}
         <button
           type="button"
-          onClick={() => onPage(page + 1)}
+          onClick={() => goToPage(page + 1)}
           disabled={page === totalPages}
           aria-label="Next page"
           className="h-7 w-7 grid place-items-center rounded-md border bg-card hover:bg-muted disabled:opacity-30"
