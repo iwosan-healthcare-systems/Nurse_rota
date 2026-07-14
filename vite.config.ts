@@ -33,18 +33,7 @@ export default defineConfig(({ mode }) => {
       ],
     },
     build: {
-      rollupOptions: {
-        output: {
-          manualChunks: {
-            "vendor-tanstack": [
-              "@tanstack/react-router",
-              "@tanstack/react-query",
-              "@tanstack/query-core",
-            ],
-            "vendor-supabase": ["@supabase/supabase-js"],
-          },
-        },
-      },
+      chunkSizeWarningLimit: 600,
     },
     server: {
       host: "::",
