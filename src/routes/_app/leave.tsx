@@ -1127,14 +1127,13 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
   const inputCls =
     "w-full h-9 px-3 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
   const leaveTypes = [
-    "Annual",
     "Sick",
+    "Annual",
     "Emergency",
     "Maternity",
-    "Paternity",
-    "Compassionate Leave",
+    "Public Holiday",
     "Study Leave",
-    "Unpaid Leave",
+    "Compassionate Leave",
   ];
 
   async function handleSubmit(e: React.FormEvent) {
