@@ -909,6 +909,7 @@ function LeaveTable({
           </div>
         </Modal>
       )}
+      {editing && <EditLeaveModal row={editing} onClose={() => setEditing(null)} />}
     </>
   );
 }
@@ -1109,7 +1110,6 @@ function SwitchTable({
           </div>
         </Modal>
       )}
-      {editing && <EditLeaveModal row={editing} onClose={() => setEditing(null)} />}
     </>
   );
 }
