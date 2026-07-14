@@ -61,6 +61,13 @@ router.post(
       { expiresIn: "10h" },
     );
 
+    pool
+      .query(
+        "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
+        ["Logged in", user.id, user.full_name, roles[0] ?? null],
+      )
+      .catch(() => {});
+
     res.json({
       token,
       user: {
@@ -136,6 +143,11 @@ router.post(
     await pool.query(
       "UPDATE profiles SET password_hash = $1, must_change_password = false, updated_at = NOW() WHERE id = $2",
       [hash, req.user.userId],
+    );
+
+    await pool.query(
+      "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
+      ["Changed password", req.user.userId, req.user.full_name, (req.user.roles || [])[0] ?? null],
     );
 
     res.json({ success: true });
@@ -252,10 +264,24 @@ router.patch(
   wrap(async (req, res) => {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required" });
+    const { rows: targetRows } = await pool.query(
+      "SELECT full_name FROM profiles WHERE id = $1",
+      [req.params.id],
+    );
     const hash = await bcrypt.hash(password, 12);
     await pool.query(
       "UPDATE profiles SET password_hash = $1, must_change_password = true, updated_at = NOW() WHERE id = $2",
       [hash, req.params.id],
+    );
+    await pool.query(
+      "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role, target) VALUES ($1,$2,$3,$4,$5)",
+      [
+        "Reset password (admin)",
+        req.user.userId,
+        req.user.full_name,
+        (req.user.roles || [])[0] ?? null,
+        targetRows[0]?.full_name ?? req.params.id,
+      ],
     );
     res.json({ success: true });
   }),
