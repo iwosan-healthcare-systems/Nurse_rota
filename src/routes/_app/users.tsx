@@ -547,7 +547,7 @@ type BulkResult = {
 };
 
 function BulkCreateModal({ onClose }: { onClose: () => void }) {
-  const [password, setPassword] = useState("RotaLogin@321");
+  const [password, setPassword] = useState("RotaLogin@123");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<BulkResult | null>(null);
 
