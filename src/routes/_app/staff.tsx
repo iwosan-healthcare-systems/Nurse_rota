@@ -29,7 +29,7 @@ import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import * as XLSX from "xlsx";
+import * as ExcelJS from "exceljs";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 
@@ -1175,13 +1175,60 @@ function UploadModal({
   const [parsing, setParsing] = useState(false);
   const [busy, setBusy] = useState(false);
 
+  function parseCsvLine(line: string): string[] {
+    const result: string[] = [];
+    let cur = "";
+    let inQ = false;
+    for (let i = 0; i < line.length; i++) {
+      const c = line[i];
+      if (c === '"') {
+        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
+        else inQ = !inQ;
+      } else if (c === "," && !inQ) {
+        result.push(cur.trim());
+        cur = "";
+      } else {
+        cur += c;
+      }
+    }
+    result.push(cur.trim());
+    return result;
+  }
+
   async function handleFile(file: File) {
     setParsing(true);
     try {
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array" });
-      const sheet = wb.Sheets[wb.SheetNames[0]];
-      const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
+      let raw: Record<string, unknown>[];
+      if (file.name.toLowerCase().endsWith(".csv")) {
+        const text = await file.text();
+        const lines = text.split(/\r?\n/).filter((l) => l.trim());
+        const headers = parseCsvLine(lines[0] ?? "");
+        raw = lines.slice(1).map((line) => {
+          const vals = parseCsvLine(line);
+          const obj: Record<string, unknown> = {};
+          headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+          return obj;
+        });
+      } else {
+        const buf = await file.arrayBuffer();
+        const wb = new ExcelJS.Workbook();
+        await wb.xlsx.load(buf);
+        const ws = wb.worksheets[0];
+        if (!ws) throw new Error("No worksheet found in file");
+        const headers: string[] = [];
+        raw = [];
+        ws.eachRow((row, rowNum) => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const vals = (row.values as any[]).slice(1);
+          if (rowNum === 1) {
+            headers.push(...vals.map((v: unknown) => String(v ?? "")));
+          } else {
+            const obj: Record<string, unknown> = {};
+            headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+            raw.push(obj);
+          }
+        });
+      }
       const norm = raw
         .map((r) => {
           const keys = Object.fromEntries(Object.keys(r).map((k) => [k.trim().toLowerCase(), k]));
@@ -1268,7 +1315,7 @@ function UploadModal({
         <input
           ref={fileRef}
           type="file"
-          accept=".xlsx,.xls,.csv"
+          accept=".xlsx,.csv"
           hidden
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
         />

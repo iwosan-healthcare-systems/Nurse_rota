@@ -24,7 +24,7 @@ import {
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
-import * as XLSX from "xlsx";
+import { xlsWorkbook, xlsAddJsonSheet, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
 import { useAuth } from "@/lib/auth-context";
 import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
 import { Pagination, usePagination } from "@/components/Pagination";
@@ -632,177 +632,188 @@ function ReportsContent() {
   }
 
   // ── Exports ───────────────────────────────────────────────────────────────
-  function exportCurrentHours() {
+  async function exportCurrentHours() {
     if (activeNurses.length === 0) return toast.error("No hours logged yet");
-    const rows = scopedNurses.map((n) => ({
-      Name: n.name,
-      Role: n.role,
-      Ward: n.ward ?? "",
-      Facility: n.facility ?? "",
-      "Shifts Completed": nurseShiftCountMap.get(n.id) ?? 0,
-      "Hours Logged": (nurseHoursMap.get(n.id) ?? 0).toFixed(2),
-      "Target Hours": n.target_hours,
-    }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Current Period");
-    XLSX.writeFile(wb, `shift-hours-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+    try {
+      const rows = scopedNurses.map((n) => ({
+        Name: n.name,
+        Role: n.role,
+        Ward: n.ward ?? "",
+        Facility: n.facility ?? "",
+        "Shifts Completed": nurseShiftCountMap.get(n.id) ?? 0,
+        "Hours Logged": (nurseHoursMap.get(n.id) ?? 0).toFixed(2),
+        "Target Hours": n.target_hours,
+      }));
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Current Period");
+      await xlsDownload(wb, `shift-hours-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
-  function exportDetailedLogs() {
+  async function exportDetailedLogs() {
     if (scopedShiftLogs.length === 0) return toast.error("No shift logs to export");
-    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-    const rows = scopedShiftLogs.map((l) => {
-      const nurse = nurseMap.get(l.nurse_id);
-      return {
-        Name: nurse?.name ?? "Unknown",
-        Role: nurse?.role ?? "",
-        Ward: nurse?.ward ?? "",
-        Date: fmtDate(l.shift_date),
-        "Shift Type": l.shift_type === "M" ? "Morning" : "Night",
-        "Started At": l.started_at ? new Date(l.started_at).toLocaleString("en-GB") : "",
-        "Ended At": l.ended_at ? new Date(l.ended_at).toLocaleString("en-GB") : "In Progress",
-        "Hours Logged": l.hours_logged != null ? Number(l.hours_logged).toFixed(2) : "",
-        Late: l.is_late ? "Yes" : "No",
-        "Late (mins)": l.late_minutes ?? "",
-        "Late Reason": l.late_reason ?? "",
-        "Period Start": fmtDate(l.period_start),
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Shift Logs");
-    XLSX.writeFile(wb, `shift-logs-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+    try {
+      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+      const rows = scopedShiftLogs.map((l) => {
+        const nurse = nurseMap.get(l.nurse_id);
+        return {
+          Name: nurse?.name ?? "Unknown",
+          Role: nurse?.role ?? "",
+          Ward: nurse?.ward ?? "",
+          Date: fmtDate(l.shift_date),
+          "Shift Type": l.shift_type === "M" ? "Morning" : "Night",
+          "Started At": l.started_at ? new Date(l.started_at).toLocaleString("en-GB") : "",
+          "Ended At": l.ended_at ? new Date(l.ended_at).toLocaleString("en-GB") : "In Progress",
+          "Hours Logged": l.hours_logged != null ? Number(l.hours_logged).toFixed(2) : "",
+          Late: l.is_late ? "Yes" : "No",
+          "Late (mins)": l.late_minutes ?? "",
+          "Late Reason": l.late_reason ?? "",
+          "Period Start": fmtDate(l.period_start),
+        };
+      });
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Shift Logs");
+      await xlsDownload(wb, `shift-logs-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
-  function exportPeriodArchive() {
+  async function exportPeriodArchive() {
     if (scopedPeriodSummaries.length === 0) return toast.error("No archived periods yet");
-    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-    const rows = scopedPeriodSummaries.map((p) => {
-      const nurse = nurseMap.get(p.nurse_id);
-      return {
-        Name: nurse?.name ?? "Unknown",
-        Role: nurse?.role ?? "",
-        Ward: nurse?.ward ?? "",
-        Facility: nurse?.facility ?? "",
-        "Period Start": fmtDate(p.period_start),
-        "Period End": fmtDate(p.period_end),
-        "Total Hours": Number(p.total_hours).toFixed(2),
-        "Total Shifts": p.total_shifts,
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Period Archive");
-    XLSX.writeFile(wb, `period-archive-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+    try {
+      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+      const rows = scopedPeriodSummaries.map((p) => {
+        const nurse = nurseMap.get(p.nurse_id);
+        return {
+          Name: nurse?.name ?? "Unknown",
+          Role: nurse?.role ?? "",
+          Ward: nurse?.ward ?? "",
+          Facility: nurse?.facility ?? "",
+          "Period Start": fmtDate(p.period_start),
+          "Period End": fmtDate(p.period_end),
+          "Total Hours": Number(p.total_hours).toFixed(2),
+          "Total Shifts": p.total_shifts,
+        };
+      });
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Period Archive");
+      await xlsDownload(wb, `period-archive-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
-  function exportLocumReport() {
+  async function exportLocumReport() {
     if (scopedLocumRequests.length === 0) return toast.error("No locum shifts to export");
-    const rows = scopedLocumRequests.map((r) => {
-      const log = r.accepted_by_nurse_id
-        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
-        : undefined;
-      return {
-        Date: fmtDate(r.shift_date),
-        Nurse: r.accepted_by_nurse_name ?? "Unknown",
-        Ward: r.ward,
-        Facility: r.facility,
-        "Shift Type": r.shift === "M" ? "Morning" : "Night",
-        "Started At": log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
-        "Ended At": log?.ended_at
-          ? new Date(log.ended_at).toLocaleString("en-GB")
-          : log
-            ? "In Progress"
-            : "Not Started",
-        "Hours Logged": log?.hours_logged != null ? Number(log.hours_logged).toFixed(2) : "",
-        Late: log?.is_late ? "Yes" : "No",
-        "Late (mins)": log?.late_minutes ?? "",
-        "Late Reason": log?.late_reason ?? "",
-        "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [
-      { wch: 12 },
-      { wch: 26 },
-      { wch: 14 },
-      { wch: 10 },
-      { wch: 10 },
-      { wch: 20 },
-      { wch: 20 },
-      { wch: 12 },
-      { wch: 20 },
-    ];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Locum Hours");
-    XLSX.writeFile(wb, `locum-hours-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+    try {
+      const rows = scopedLocumRequests.map((r) => {
+        const log = r.accepted_by_nurse_id
+          ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
+          : undefined;
+        return {
+          Date: fmtDate(r.shift_date),
+          Nurse: r.accepted_by_nurse_name ?? "Unknown",
+          Ward: r.ward,
+          Facility: r.facility,
+          "Shift Type": r.shift === "M" ? "Morning" : "Night",
+          "Started At": log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
+          "Ended At": log?.ended_at
+            ? new Date(log.ended_at).toLocaleString("en-GB")
+            : log
+              ? "In Progress"
+              : "Not Started",
+          "Hours Logged": log?.hours_logged != null ? Number(log.hours_logged).toFixed(2) : "",
+          Late: log?.is_late ? "Yes" : "No",
+          "Late (mins)": log?.late_minutes ?? "",
+          "Late Reason": log?.late_reason ?? "",
+          "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
+        };
+      });
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Locum Hours", [12, 26, 14, 10, 10, 20, 20, 12, 20]);
+      await xlsDownload(wb, `locum-hours-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
-  function exportLeaveRequests() {
+  async function exportLeaveRequests() {
     const leaveOnly = scopedLeave.filter((l) => l.type !== "Swap");
     const switches = scopedLeave.filter((l) => l.type === "Swap");
     if (scopedLeave.length === 0) return toast.error("No leave requests to export");
-    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+    try {
+      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
 
-    const leaveRows = leaveOnly.map((l) => ({
-      Nurse: nurseMap.get(l.nurse_id ?? "")?.name ?? "Unknown",
-      Facility: nurseMap.get(l.nurse_id ?? "")?.facility ?? "",
-      Ward: nurseMap.get(l.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
-      Type: l.type,
-      From: fmtDate(l.from_date),
-      To: fmtDate(l.to_date),
-      Status: l.status,
-      Reason: l.reason ?? "",
-    }));
+      const leaveRows = leaveOnly.map((l) => ({
+        Nurse: nurseMap.get(l.nurse_id ?? "")?.name ?? "Unknown",
+        Facility: nurseMap.get(l.nurse_id ?? "")?.facility ?? "",
+        Ward: nurseMap.get(l.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
+        Type: l.type,
+        From: fmtDate(l.from_date),
+        To: fmtDate(l.to_date),
+        Status: l.status,
+        Reason: l.reason ?? "",
+      }));
 
-    const switchRows = switches.map((s) => ({
-      Nurse: nurseMap.get(s.nurse_id ?? "")?.name ?? "Unknown",
-      Facility: nurseMap.get(s.nurse_id ?? "")?.facility ?? "",
-      Ward: nurseMap.get(s.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
-      Type: "Swap",
-      From: fmtDate(s.from_date),
-      To: fmtDate(s.to_date),
-      Status: s.status,
-      Note: s.reason ?? "",
-    }));
+      const switchRows = switches.map((s) => ({
+        Nurse: nurseMap.get(s.nurse_id ?? "")?.name ?? "Unknown",
+        Facility: nurseMap.get(s.nurse_id ?? "")?.facility ?? "",
+        Ward: nurseMap.get(s.nurse_id ?? "")?.ward?.split("|")[0] ?? "",
+        Type: "Swap",
+        From: fmtDate(s.from_date),
+        To: fmtDate(s.to_date),
+        Status: s.status,
+        Note: s.reason ?? "",
+      }));
 
-    const wb = XLSX.utils.book_new();
-
-    const wsLeave = XLSX.utils.json_to_sheet(leaveRows.length ? leaveRows : [{ Note: "No leave requests" }]);
-    wsLeave["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 32 }];
-    XLSX.utils.book_append_sheet(wb, wsLeave, "Leave Requests");
-
-    const wsSwitch = XLSX.utils.json_to_sheet(switchRows.length ? switchRows : [{ Note: "No switch requests" }]);
-    wsSwitch["!cols"] = [{ wch: 26 }, { wch: 10 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 32 }];
-    XLSX.utils.book_append_sheet(wb, wsSwitch, "Shift Switches");
-
-    XLSX.writeFile(wb, `leave-requests-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(
+        wb,
+        leaveRows.length ? leaveRows : [{ Note: "No leave requests" }],
+        "Leave Requests",
+        [26, 10, 16, 14, 12, 12, 10, 32],
+      );
+      xlsAddJsonSheet(
+        wb,
+        switchRows.length ? switchRows : [{ Note: "No switch requests" }],
+        "Shift Switches",
+        [26, 10, 16, 12, 12, 10, 32],
+      );
+      await xlsDownload(wb, `leave-requests-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
-  function exportMissedShifts() {
+  async function exportMissedShifts() {
     if (scopedMissedLogs.length === 0) return toast.error("No missed shifts to export");
-    const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-    const rows = scopedMissedLogs.map((l) => {
-      const nurse = nurseMap.get(l.nurse_id);
-      return {
-        Date: fmtDate(l.shift_date),
-        Nurse: nurse?.name ?? "Unknown",
-        Facility: nurse?.facility ?? "",
-        Ward: nurse?.ward?.split("|")[0] ?? "",
-        Shift: l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type,
-      };
-    });
-    const ws = XLSX.utils.json_to_sheet(rows);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Missed Shifts");
-    XLSX.writeFile(wb, `missed-shifts-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+    try {
+      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+      const rows = scopedMissedLogs.map((l) => {
+        const nurse = nurseMap.get(l.nurse_id);
+        return {
+          Date: fmtDate(l.shift_date),
+          Nurse: nurse?.name ?? "Unknown",
+          Facility: nurse?.facility ?? "",
+          Ward: nurse?.ward?.split("|")[0] ?? "",
+          Shift: l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type,
+        };
+      });
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Missed Shifts");
+      await xlsDownload(wb, `missed-shifts-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
   function escHtml(s: string): string {
@@ -859,31 +870,33 @@ ${staffToPrint
     openPrintWindow(html);
   }
 
-  function exportStaffListExcel(ward?: string) {
-    const staffToExport = ward
-      ? facilityNurses.filter((n) =>
-          n.ward
-            ?.split("|")
-            .map((w) => w.trim())
-            .includes(ward),
-        )
-      : facilityNurses;
-    const rows = staffToExport
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((n, i) => ({
-        "#": i + 1,
-        Name: n.name,
-        Role: n.role,
-        Ward: n.ward?.split("|")[0] ?? "",
-        Facility: n.facility ?? "",
-      }));
-    const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [{ wch: 4 }, { wch: 28 }, { wch: 22 }, { wch: 18 }, { wch: 10 }];
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Staff");
-    const slug = ward ? `-${ward.replace(/\s+/g, "-").toLowerCase()}` : "";
-    XLSX.writeFile(wb, `staff-${effectiveDirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
-    toast.success("Exported");
+  async function exportStaffListExcel(ward?: string) {
+    try {
+      const staffToExport = ward
+        ? facilityNurses.filter((n) =>
+            n.ward
+              ?.split("|")
+              .map((w) => w.trim())
+              .includes(ward),
+          )
+        : facilityNurses;
+      const rows = staffToExport
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((n, i) => ({
+          "#": i + 1,
+          Name: n.name,
+          Role: n.role,
+          Ward: n.ward?.split("|")[0] ?? "",
+          Facility: n.facility ?? "",
+        }));
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Staff", [4, 28, 22, 18, 10]);
+      const slug = ward ? `-${ward.replace(/\s+/g, "-").toLowerCase()}` : "";
+      await xlsDownload(wb, `staff-${effectiveDirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
   }
 
   // ── Schedule archive download ─────────────────────────────────────────────
@@ -1008,12 +1021,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
         n.ward ? n.ward.split("|")[0] : "",
         ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
       ]);
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
-      ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
-      XLSX.utils.book_append_sheet(wb, ws, "Rota");
+      const wb = xlsWorkbook();
+      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [22, 18, 14, ...dates.map(() => 5)]);
       const slug = win.ward ? `-${win.ward.replace(/\s+/g, "-").toLowerCase()}` : "-coverage";
-      XLSX.writeFile(wb, `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`);
+      await xlsDownload(wb, `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {

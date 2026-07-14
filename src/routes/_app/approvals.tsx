@@ -21,6 +21,7 @@ import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
 import { isGlobalHead, isInternType, isMatron, isPorterType, isNADayType } from "@/lib/auto-schedule";
 import { FacilityChips } from "@/components/FacilityChips";
+import { xlsWorkbook, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -593,10 +594,7 @@ function ApprovalsPage() {
     const key = winKey(win);
     setDownloading(key + "-xlsx");
     try {
-      const [XLSX, { activeNurses, assignMap }] = await Promise.all([
-        import("xlsx"),
-        fetchWindowData(win),
-      ]);
+      const { activeNurses, assignMap } = await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
@@ -620,16 +618,14 @@ function ApprovalsPage() {
         n.ward ? n.ward.split("|")[0] : "",
         ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
       ]);
-      const wb = XLSX.utils.book_new();
-      const ws = XLSX.utils.aoa_to_sheet([[title], [], headers, ...rowData]);
-      ws["!cols"] = [{ wch: 22 }, { wch: 18 }, { wch: 14 }, ...dates.map(() => ({ wch: 5 }))];
-      XLSX.utils.book_append_sheet(wb, ws, "Rota");
+      const wb = xlsWorkbook();
+      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [22, 18, 14, ...dates.map(() => 5)]);
       const facilitySlug = win.facility ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}` : "";
       const fileSuffix =
         win.ward === null
           ? "-coverage-nurses"
           : `-${win.ward.replace(/\s+/g, "-").toLowerCase()}`;
-      XLSX.writeFile(wb, `rota-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${facilitySlug}${fileSuffix}.xlsx`);
+      await xlsDownload(wb, `rota-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${facilitySlug}${fileSuffix}.xlsx`);
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
