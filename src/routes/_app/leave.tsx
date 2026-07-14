@@ -687,7 +687,7 @@ function LeaveTable({
   nurseToFacility?: Map<string, string | null>;
   showFacility?: boolean;
 }) {
-  const { nurseId, user } = useAuth();
+  const { nurseId, user, isAdmin } = useAuth();
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
     status: "Approved" | "Rejected";
@@ -761,7 +761,7 @@ function LeaveTable({
                           </span>
                           {l.status === "Pending" &&
                             !isShiftSwitch(l) &&
-                            l.requested_by === user?.id && (
+                            (l.requested_by === user?.id || isAdmin) && (
                               <button
                                 type="button"
                                 aria-label="Edit leave request"
