@@ -4,6 +4,8 @@ const jwt = require("jsonwebtoken");
 const pool = require("../db");
 const { requireAuth, requireRole } = require("../middleware/auth");
 
+const DEFAULT_INITIAL_PASSWORD = "RotaLogin@123";
+
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.post(
@@ -172,8 +174,9 @@ router.post(
   requireAuth,
   requireRole("admin", "cno"),
   wrap(async (req, res) => {
-    const { email, password, full_name, role, nurse_id } = req.body;
-    if (!email || !password) return res.status(400).json({ error: "Email and password required" });
+    const { email, full_name, role, nurse_id } = req.body;
+    const password = req.body.password || DEFAULT_INITIAL_PASSWORD;
+    if (!email) return res.status(400).json({ error: "Email is required" });
 
     const normalizedEmail = email.trim().toLowerCase();
 
@@ -327,7 +330,7 @@ router.post(
   requireAuth,
   requireRole("admin"),
   wrap(async (req, res) => {
-    const { default_password } = req.body;
+    const { default_password = DEFAULT_INITIAL_PASSWORD } = req.body;
     if (!default_password || default_password.length < 8)
       return res.status(400).json({ error: "Password must be at least 8 characters" });
 
