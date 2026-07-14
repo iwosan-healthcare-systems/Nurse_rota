@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock } from "lucide-react";
+import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -687,12 +687,13 @@ function LeaveTable({
   nurseToFacility?: Map<string, string | null>;
   showFacility?: boolean;
 }) {
-  const { nurseId } = useAuth();
+  const { nurseId, user } = useAuth();
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
     status: "Approved" | "Rejected";
   } | null>(null);
   const [reviewNote, setReviewNote] = useState("");
+  const [editing, setEditing] = useState<LeaveRow | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { pageItems: pagedRows, totalPages } = usePagination(rows, pageSize, page);
@@ -752,11 +753,25 @@ function LeaveTable({
                           : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
                       </td>
                       <td className="px-4 py-3">
-                        <span
-                          className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
-                        >
-                          {l.status}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                          >
+                            {l.status}
+                          </span>
+                          {l.status === "Pending" &&
+                            !isShiftSwitch(l) &&
+                            l.requested_by === user?.id && (
+                              <button
+                                type="button"
+                                aria-label="Edit leave request"
+                                onClick={() => setEditing(l)}
+                                className="h-5 w-5 grid place-items-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            )}
+                        </div>
                         {l.review_note && (
                           <p
                             className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
@@ -1094,7 +1109,103 @@ function SwitchTable({
           </div>
         </Modal>
       )}
+      {editing && <EditLeaveModal row={editing} onClose={() => setEditing(null)} />}
     </>
+  );
+}
+
+// ── Edit pending leave modal ─────────────────────────────────────────────────
+
+function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }) {
+  const qc = useQueryClient();
+  const today = new Date().toISOString().slice(0, 10);
+  const [type, setType] = useState(row.type);
+  const [from, setFrom] = useState(row.from_date.slice(0, 10));
+  const [to, setTo] = useState(row.to_date.slice(0, 10));
+  const [busy, setBusy] = useState(false);
+
+  const inputCls =
+    "w-full h-9 px-3 rounded-md border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring";
+  const leaveTypes = [
+    "Annual",
+    "Sick",
+    "Emergency",
+    "Maternity",
+    "Paternity",
+    "Compassionate Leave",
+    "Study Leave",
+    "Unpaid Leave",
+  ];
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!from || !to) { toast.error("Please fill in all dates"); return; }
+    if (from < today) { toast.error("Cannot use a past start date"); return; }
+    if (to < from) { toast.error("End date must be on or after start date"); return; }
+    setBusy(true);
+    try {
+      await api.patch(`/leave-requests/${row.id}`, { type, from_date: from, to_date: to });
+      toast.success("Leave request updated");
+      qc.invalidateQueries({ queryKey: ["leave-requests"] });
+      onClose();
+    } catch (err: any) {
+      toast.error(err?.message ?? "Failed to update leave request");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onClose}>
+      <h2 className="text-base font-semibold mb-4">Edit Leave Request</h2>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label className="block text-xs font-medium text-muted-foreground mb-1">Leave Type</label>
+          <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
+            {leaveTypes.map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">From</label>
+            <input
+              type="date"
+              value={from}
+              min={today}
+              onChange={(e) => { setFrom(e.target.value); if (to && e.target.value > to) setTo(e.target.value); }}
+              className={inputCls}
+              required
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-muted-foreground mb-1">To</label>
+            <input
+              type="date"
+              value={to}
+              min={from || today}
+              onChange={(e) => setTo(e.target.value)}
+              className={inputCls}
+              required
+            />
+          </div>
+        </div>
+        <div className="flex justify-end gap-2 pt-1">
+          <button type="button" onClick={onClose} className="h-9 px-4 rounded-md border bg-card text-sm">
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-40 flex items-center gap-1.5"
+          >
+            {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+            Save changes
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }
 

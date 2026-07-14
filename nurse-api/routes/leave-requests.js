@@ -222,18 +222,17 @@ router.patch(
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    // Non-managers may only edit their own leave request.
+    // Non-managers may only edit a Pending leave request they personally submitted.
     if (!isManager) {
       const { rows: existing } = await pool.query(
-        "SELECT nurse_id FROM leave_requests WHERE id = $1",
+        "SELECT status, requested_by FROM leave_requests WHERE id = $1",
         [req.params.id],
       );
       if (!existing[0]) return res.status(404).json({ error: "Leave request not found" });
-      const { rows: ownNurse } = await pool.query(
-        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
-        [req.user.userId],
-      );
-      if (!ownNurse[0] || ownNurse[0].id !== existing[0].nurse_id) {
+      if (existing[0].status !== "Pending") {
+        return res.status(400).json({ error: "Only pending requests can be edited" });
+      }
+      if (existing[0].requested_by !== req.user.userId) {
         return res.status(403).json({ error: "Forbidden" });
       }
     }
