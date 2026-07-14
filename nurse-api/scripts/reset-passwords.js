@@ -1,6 +1,7 @@
 // One-time script: set all login passwords (except the admin) to RotaLogin@123
 // Run from /root/nurse-api: node scripts/reset-passwords.js
 
+require("dotenv").config();
 const bcrypt = require("bcryptjs");
 const pool = require("../db");
 
