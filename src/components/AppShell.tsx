@@ -216,7 +216,7 @@ export function AppShell() {
         </div>
       )}
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      <div id="main-scroll" className="flex-1 flex flex-col min-w-0 overflow-y-auto">
         <header className="h-16 border-b bg-card flex items-center px-3 sm:px-6 gap-2 sm:gap-4 sticky top-0 z-30">
           <button
             onClick={() => setOpen(true)}

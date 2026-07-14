@@ -31,7 +31,7 @@ export function Pagination({
 
   function goToPage(p: number) {
     onPage(p);
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    (document.getElementById("main-scroll") ?? window).scrollTo({ top: 0, behavior: "smooth" });
   }
 
   const start = (page - 1) * pageSize + 1;
