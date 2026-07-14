@@ -1109,6 +1109,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       api.get<{ id: string; name: string; facility: string | null }[]>("/nurses"),
   });
 
+  const today = new Date().toISOString().slice(0, 10);
   const [type, setType] = useState("Annual");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -1187,6 +1188,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     e.preventDefault();
     if (staffMode && !targetNurseId) {
       toast.error("Please select which staff member this request is for");
+      return;
+    }
+    if (from < today) {
+      toast.error("Leave requests cannot be submitted for past dates");
       return;
     }
     setBusy(true);
@@ -1295,6 +1300,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               id="leave-from"
               required
               type="date"
+              min={today}
               value={from}
               onChange={(e) => {
                 const v = e.target.value;
@@ -1312,7 +1318,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               id="leave-to"
               required
               type="date"
-              min={from}
+              min={from || today}
               value={to}
               onChange={(e) => setTo(e.target.value)}
               className={inputCls}
@@ -1440,6 +1446,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [exchangeMode, setExchangeMode] = useState<"leave" | "direct">("leave");
   const [facility, setFacility] = useState(lockedFacility ?? "");
   const [nurseAId, setNurseAId] = useState("");
+  const today = new Date().toISOString().slice(0, 10);
   const [nurseBId, setNurseBId] = useState("");
   const [wardB, setWardB] = useState("");
   const [date, setDate] = useState("");
@@ -1750,6 +1757,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             id="sw-date"
             required
             type="date"
+            min={today}
             value={date}
             onChange={(e) => {
               setDate(e.target.value);

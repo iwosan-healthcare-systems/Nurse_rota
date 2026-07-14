@@ -112,6 +112,11 @@ router.post(
     if (!nurse_name || !type || !from_date || !to_date)
       return res.status(400).json({ error: "Missing required fields" });
 
+    const today = new Date().toISOString().slice(0, 10);
+    if (from_date < today) {
+      return res.status(400).json({ error: "Cannot submit a request for past dates" });
+    }
+
     // ── Ownership / initiator enforcement ─────────────────────────────────
     // A "Swap" (shift switch) may be raised by a manager on another nurse's
     // behalf. Every other leave type is self-service — except Chief Matron,
