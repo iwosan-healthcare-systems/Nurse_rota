@@ -2212,12 +2212,16 @@ function RotaPage() {
                       month: "short",
                       year: "numeric",
                     })}
-                    {" → "}
-                    {new Date(l.to.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}
+                    {l.from.slice(0, 10) !== l.to.slice(0, 10) && (
+                      <>
+                        {" → "}
+                        {new Date(l.to.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

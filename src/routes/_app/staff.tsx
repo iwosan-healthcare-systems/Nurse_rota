@@ -1340,8 +1340,8 @@ function UploadModal({
             <div className="px-3 py-2 bg-muted/50 text-xs font-semibold flex justify-between">
               <span>Preview ({rows.length} rows)</span>
             </div>
-            <div className="max-h-56 overflow-y-auto text-sm">
-              <table className="w-full">
+            <div className="max-h-56 overflow-y-auto overflow-x-auto text-sm">
+              <table className="w-full min-w-[480px]">
                 <thead className="bg-muted/30 text-[10px] uppercase text-muted-foreground">
                   <tr>
                     <th className="text-left px-3 py-1.5">Name</th>

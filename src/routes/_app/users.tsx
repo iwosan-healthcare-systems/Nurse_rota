@@ -444,7 +444,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-sm p-6 space-y-4">
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-sm p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-lg">Create User</h2>
           <button
@@ -583,7 +583,7 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-md p-6 space-y-4">
+      <div className="relative bg-card rounded-xl shadow-xl border w-full max-w-md p-6 space-y-4 max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between">
           <h2 className="font-semibold text-lg flex items-center gap-2">
             <Zap className="h-5 w-5 text-primary" /> Generate Logins
