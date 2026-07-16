@@ -97,6 +97,7 @@ type LeaveRequest = {
   status: "Pending" | "Approved" | "Rejected";
   type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave";
   reason: string | null;
+  created_at: string;
 };
 type ArchiveAssignment = {
   nurse_id: string;
@@ -759,6 +760,7 @@ function ReportsContent() {
         From: fmtDate(l.from_date),
         To: fmtDate(l.to_date),
         Status: l.status,
+        "Requested Date": fmtDate(l.created_at),
         Reason: l.reason ?? "",
       }));
 
@@ -770,6 +772,7 @@ function ReportsContent() {
         From: fmtDate(s.from_date),
         To: fmtDate(s.to_date),
         Status: s.status,
+        "Requested Date": fmtDate(s.created_at),
         Note: s.reason ?? "",
       }));
 
@@ -778,13 +781,13 @@ function ReportsContent() {
         wb,
         leaveRows.length ? leaveRows : [{ Note: "No leave requests" }],
         "Leave Requests",
-        [26, 10, 16, 14, 12, 12, 10, 32],
+        [26, 10, 16, 14, 12, 12, 10, 14, 32],
       );
       xlsAddJsonSheet(
         wb,
         switchRows.length ? switchRows : [{ Note: "No switch requests" }],
         "Shift Switches",
-        [26, 10, 16, 12, 12, 10, 32],
+        [26, 10, 16, 12, 12, 10, 14, 32],
       );
       await xlsDownload(wb, `leave-requests-${todayYmd()}.xlsx`);
       toast.success("Exported");
@@ -1670,6 +1673,7 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">From</th>
                       <th className="text-left px-4 py-3 font-semibold">To</th>
                       <th className="text-left px-4 py-3 font-semibold">Status</th>
+                      <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1700,6 +1704,9 @@ ${sections}
                               {l.status}
                             </span>
                           </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {fmtDate(l.created_at)}
+                          </td>
                         </tr>
                       );
 
@@ -1716,7 +1723,7 @@ ${sections}
                           .flatMap(([facility, fRows]) => [
                             <tr key={`hdr-${facility}`}>
                               <td
-                                colSpan={5}
+                                colSpan={6}
                                 className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
                               >
                                 {facility}
