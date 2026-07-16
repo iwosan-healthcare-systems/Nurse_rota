@@ -715,6 +715,7 @@ function LeaveTable({
                 {showApproverCols && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
                 <th className="text-left font-semibold px-4 py-3">Type</th>
                 <th className="text-left font-semibold px-4 py-3">Period</th>
+                <th className="text-left font-semibold px-4 py-3">Requested Date</th>
                 <th className="text-left font-semibold px-4 py-3">Status</th>
                 {showApproverCols && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
@@ -723,7 +724,7 @@ function LeaveTable({
               {pagedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={showApproverCols ? 5 : 3}
+                    colSpan={showApproverCols ? 6 : 4}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     No requests match the current filter.
@@ -731,7 +732,7 @@ function LeaveTable({
                 </tr>
               ) : (() => {
                 // When showing all facilities, group rows by facility with a divider header.
-                const cols = showApproverCols ? 5 : 3;
+                const cols = showApproverCols ? 6 : 4;
                 const renderRow = (l: LeaveRow) => {
                   const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
                   return (
@@ -751,6 +752,9 @@ function LeaveTable({
                         {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
                           ? fmtDateLeave(l.from_date)
                           : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                        {fmtDateLeave(l.created_at)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
@@ -954,6 +958,7 @@ function SwitchTable({
                 <th className="text-left font-semibold px-4 py-3">Date</th>
                 <th className="text-left font-semibold px-4 py-3">Shifts</th>
                 <th className="text-left font-semibold px-4 py-3">Reason / Note</th>
+                <th className="text-left font-semibold px-4 py-3">Requested Date</th>
                 <th className="text-left font-semibold px-4 py-3">Status</th>
                 {canApprove && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
@@ -962,7 +967,7 @@ function SwitchTable({
               {rows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={canApprove ? 7 : 6}
+                    colSpan={canApprove ? 8 : 7}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     No switch requests match the current filter.
@@ -1019,6 +1024,9 @@ function SwitchTable({
                           Review: {l.review_note}
                         </p>
                       )}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                      {fmtDateLeave(l.created_at)}
                     </td>
                     <td className="px-4 py-3">
                       <span

@@ -189,6 +189,7 @@ function RotaPage() {
   const [genPendingLeaves, setGenPendingLeaves] = useState<
     { name: string; from: string; to: string }[]
   >([]);
+  const [showAllLeaves, setShowAllLeaves] = useState(false);
 
   // Extra shifts added by safety enforcement during the last auto-generate run.
   const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
@@ -2199,17 +2200,20 @@ function RotaPage() {
                 Cannot generate — {genPendingLeaves.length} pending leave request
                 {genPendingLeaves.length > 1 ? "s" : ""} in this period
               </p>
-              <ul className="space-y-0.5 text-red-700 dark:text-red-400">
+              <ul
+                className="space-y-0.5 text-red-700 dark:text-red-400 overflow-y-auto pr-1 transition-all"
+                style={{ maxHeight: showAllLeaves ? "20rem" : "8rem" }}
+              >
                 {genPendingLeaves.map((l, i) => (
                   <li key={i}>
                     • {l.name} —{" "}
-                    {new Date(l.from + "T00:00:00").toLocaleDateString("en-GB", {
+                    {new Date(l.from.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
                       day: "numeric",
                       month: "short",
                       year: "numeric",
                     })}
                     {" → "}
-                    {new Date(l.to + "T00:00:00").toLocaleDateString("en-GB", {
+                    {new Date(l.to.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
                       day: "numeric",
                       month: "short",
                       year: "numeric",
@@ -2217,6 +2221,15 @@ function RotaPage() {
                   </li>
                 ))}
               </ul>
+              {genPendingLeaves.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllLeaves((v) => !v)}
+                  className="text-red-600 dark:text-red-400 underline underline-offset-2 hover:no-underline"
+                >
+                  {showAllLeaves ? "See less" : `See ${genPendingLeaves.length - 5} more…`}
+                </button>
+              )}
               <p className="text-red-600 dark:text-red-500">
                 Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
                 before the schedule can be generated, so the system knows whether to mark those days
