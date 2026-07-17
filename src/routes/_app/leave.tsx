@@ -637,7 +637,7 @@ function LeavePage() {
             className="h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring text-muted-foreground"
           >
             <option value="">All types</option>
-            {["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave"].map((t) => (
+            {["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"].map((t) => (
               <option key={t} value={t}>{t}</option>
             ))}
           </select>
@@ -1178,6 +1178,7 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
     "Public Holiday",
     "Study Leave",
     "Compassionate Leave",
+    "Leave of Absence",
   ];
 
   async function handleSubmit(e: React.FormEvent) {
@@ -1333,7 +1334,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const allowedTypes =
     datesInPublishedRota || leaveWindowClosed
       ? ["Sick", "Emergency", "Compassionate Leave"]
-      : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave"];
+      : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"];
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];

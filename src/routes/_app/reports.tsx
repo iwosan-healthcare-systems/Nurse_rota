@@ -95,7 +95,7 @@ type LeaveRequest = {
   from_date: string;
   to_date: string;
   status: "Pending" | "Approved" | "Rejected";
-  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave";
+  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave" | "Leave of Absence";
   reason: string | null;
   created_at: string;
 };
