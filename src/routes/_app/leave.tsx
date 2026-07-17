@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock, Pencil } from "lucide-react";
+import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock, Pencil, Search } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -102,6 +102,7 @@ function LeavePage() {
   const [showSwitch, setShowSwitch] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [activeTab, setActiveTab] = useState<ActiveTab>("leave");
+  const [search, setSearch] = useState("");
 
   const { data: workflowStatus } = useQuery<WorkflowStatus>({
     queryKey: ["workflow-status"],
@@ -485,8 +486,12 @@ function LeavePage() {
     Rejected: activeRows.filter((r) => r.status === "Rejected").length,
   };
 
-  const visibleRows =
-    statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter);
+  const visibleRows = (statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter))
+    .filter((r) => {
+      if (!search.trim()) return true;
+      const q = search.trim().toLowerCase();
+      return r.nurse_name.toLowerCase().includes(q) || r.type.toLowerCase().includes(q);
+    });
 
   const filterActiveStyle = "ring-2 ring-primary";
   const cardStyle = (s: StatusFilter) =>
@@ -548,7 +553,7 @@ function LeavePage() {
       <div className="mb-4">
         <FacilityChips
           value={lockedFacility ?? selectedFacility}
-          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); }}
+          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); setSearch(""); }}
           locked={!!lockedFacility}
           showAll={canFilterFacility}
         />
@@ -562,6 +567,7 @@ function LeavePage() {
           onClick={() => {
             setActiveTab("leave");
             setStatusFilter("All");
+            setSearch("");
           }}
         >
           Leave Requests
@@ -577,6 +583,7 @@ function LeavePage() {
           onClick={() => {
             setActiveTab("switches");
             setStatusFilter("All");
+            setSearch("");
           }}
         >
           Shift Switches
@@ -606,6 +613,18 @@ function LeavePage() {
             )}
           </button>
         ))}
+      </div>
+
+      {/* Search bar */}
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+        <input
+          type="text"
+          placeholder={activeTab === "leave" ? "Search by name or leave type…" : "Search by name…"}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="w-full h-9 pl-9 pr-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
 
       {isLoading ? (
@@ -1312,6 +1331,24 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       toast.error("Leave requests cannot be submitted for past dates");
       return;
     }
+
+    // Frontend overlap guard: check cached leave rows before hitting the API.
+    const cached = qc.getQueryData<LeaveRow[]>(["leave"]) ?? [];
+    const conflict = cached.find(
+      (l) =>
+        !isShiftSwitch(l) &&
+        l.status !== "Rejected" &&
+        (l.nurse_id === targetNurseId || l.nurse_name === targetNurseName) &&
+        l.from_date.slice(0, 10) <= to &&
+        l.to_date.slice(0, 10) >= from,
+    );
+    if (conflict) {
+      toast.error(
+        `A ${conflict.type} leave request already exists for those dates. Please cancel or update the existing request first.`,
+      );
+      return;
+    }
+
     setBusy(true);
     try {
       await api.post("/leave-requests", {

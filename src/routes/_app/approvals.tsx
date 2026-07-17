@@ -964,7 +964,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
             </p>
           ) : (
             <div className="space-y-8">
-              {(showAllPeriods ? windowsByPeriod : windowsByPeriod.slice(0, 2)).map(
+              {(showAllPeriods ? windowsByPeriod : windowsByPeriod.slice(0, 1)).map(
                 ([periodStart, periodWins]) => {
                   const periodEnd = scheduleEndDate(periodStart);
                   const coverageWins = periodWins.filter((w) => w.ward === null);
@@ -991,7 +991,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 },
               )}
 
-              {windowsByPeriod.length > 2 && (
+              {windowsByPeriod.length > 1 && (
                 <div className="flex justify-center pt-2">
                   <button
                     type="button"
@@ -1000,7 +1000,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   >
                     {showAllPeriods
                       ? "Show fewer periods"
-                      : `Show ${windowsByPeriod.length - 2} older period${windowsByPeriod.length - 2 !== 1 ? "s" : ""}`}
+                      : `Show ${windowsByPeriod.length - 1} older period${windowsByPeriod.length - 1 !== 1 ? "s" : ""}`}
                   </button>
                 </div>
               )}
