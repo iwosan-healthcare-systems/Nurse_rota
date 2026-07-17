@@ -121,6 +121,30 @@ router.post(
           ],
         );
       }
+
+      // Re-apply approved leave over the freshly upserted shifts.
+      // Approved leave may have been granted before this rota period existed, so
+      // the approval's shift-flip found no rows to update at approval time.
+      const nurseIds = [...new Set(rows.map((r) => r.nurse_id).filter(Boolean))];
+      const dates = rows.map((r) => r.shift_date).filter(Boolean).sort();
+      const minDate = dates[0];
+      const maxDate = dates[dates.length - 1];
+      await client.query(
+        `UPDATE shift_assignments sa
+            SET shift = 'LEAVE', updated_at = NOW()
+          WHERE sa.nurse_id = ANY($1)
+            AND sa.shift_date BETWEEN $2 AND $3
+            AND sa.shift != 'LEAVE'
+            AND EXISTS (
+              SELECT 1 FROM leave_requests lr
+              WHERE lr.nurse_id = sa.nurse_id
+                AND lr.status = 'Approved'
+                AND lr.type != 'Swap'
+                AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+            )`,
+        [nurseIds, minDate, maxDate],
+      );
+
       await client.query("COMMIT");
       res.json({ success: true, count: rows.length });
     } catch (err) {
