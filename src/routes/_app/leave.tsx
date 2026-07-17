@@ -103,6 +103,7 @@ function LeavePage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
   const [activeTab, setActiveTab] = useState<ActiveTab>("leave");
   const [search, setSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("");
 
   const { data: workflowStatus } = useQuery<WorkflowStatus>({
     queryKey: ["workflow-status"],
@@ -488,9 +489,9 @@ function LeavePage() {
 
   const visibleRows = (statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter))
     .filter((r) => {
-      if (!search.trim()) return true;
-      const q = search.trim().toLowerCase();
-      return r.nurse_name.toLowerCase().includes(q) || r.type.toLowerCase().includes(q);
+      if (search.trim() && !r.nurse_name.toLowerCase().includes(search.trim().toLowerCase())) return false;
+      if (typeFilter && r.type !== typeFilter) return false;
+      return true;
     });
 
   const filterActiveStyle = "ring-2 ring-primary";
@@ -553,7 +554,7 @@ function LeavePage() {
       <div className="mb-4">
         <FacilityChips
           value={lockedFacility ?? selectedFacility}
-          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); setSearch(""); }}
+          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); setSearch(""); setTypeFilter(""); }}
           locked={!!lockedFacility}
           showAll={canFilterFacility}
         />
@@ -568,6 +569,7 @@ function LeavePage() {
             setActiveTab("leave");
             setStatusFilter("All");
             setSearch("");
+            setTypeFilter("");
           }}
         >
           Leave Requests
@@ -584,6 +586,7 @@ function LeavePage() {
             setActiveTab("switches");
             setStatusFilter("All");
             setSearch("");
+            setTypeFilter("");
           }}
         >
           Shift Switches
@@ -615,16 +618,30 @@ function LeavePage() {
         ))}
       </div>
 
-      {/* Search bar */}
-      <div className="relative mb-4">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-        <input
-          type="text"
-          placeholder={activeTab === "leave" ? "Search by name or leave type…" : "Search by name…"}
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="w-full h-9 pl-9 pr-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-        />
+      {/* Search + type filter */}
+      <div className="flex gap-2 mb-4">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Search by name…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full h-9 pl-9 pr-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
+        {activeTab === "leave" && (
+          <select
+            value={typeFilter}
+            onChange={(e) => setTypeFilter(e.target.value)}
+            className="h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring text-muted-foreground"
+          >
+            <option value="">All types</option>
+            {["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave"].map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       {isLoading ? (
