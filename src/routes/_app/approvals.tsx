@@ -542,6 +542,13 @@ function ApprovalsPage() {
         `Rota published! Next rota (from ${fmtDate(nextStartDt.toISOString().slice(0, 10))}) must be approved by ${fmtDate(deadlineDt.toISOString().slice(0, 10))}.`,
         { duration: 8000 },
       );
+      // Rotate interns to their next ward when the intern rota is published.
+      if (win.roleGroup === "intern" && win.facility) {
+        await api
+          .post("/nurses/rotate-interns", { facility: win.facility })
+          .catch(() => {});
+        qc.invalidateQueries({ queryKey: ["nurses"] });
+      }
     } else {
       toast.success("Approved — moving to next step");
     }

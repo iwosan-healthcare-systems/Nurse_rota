@@ -197,4 +197,62 @@ router.delete(
   }),
 );
 
+// Rotate all interns in a facility to their next ward in alphabetical sequence.
+// Called after the intern rota is published to prepare ward assignments for the next period.
+router.post(
+  "/rotate-interns",
+  requireRole("admin", "cno", "chief_matron"),
+  wrap(async (req, res) => {
+    const { facility } = req.body;
+    if (!facility) return res.status(400).json({ error: "facility is required" });
+
+    // Wards for this facility, sorted alphabetically — defines the rotation order.
+    const { rows: wardRows } = await pool.query(
+      "SELECT name FROM wards WHERE facility = $1 ORDER BY name",
+      [facility],
+    );
+    const wardNames = wardRows.map((r) => r.name);
+    if (!wardNames.length) return res.json({ updated: 0 });
+
+    // All interns in this facility.
+    const { rows: interns } = await pool.query(
+      `SELECT id, ward FROM nurses
+       WHERE facility = $1
+         AND role ~* '^(nurse\\s+intern|intern\\s+nurse|nursing\\s+intern)$'
+       ORDER BY id`,
+      [facility],
+    );
+    if (!interns.length) return res.json({ updated: 0 });
+
+    let updated = 0;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const intern of interns) {
+        // Ward is stored as plain string or pipe-separated; use first segment.
+        const currentWard = intern.ward ? intern.ward.split("|")[0] : null;
+        const idx = wardNames.indexOf(currentWard);
+        const nextWard = currentWard === null
+          ? wardNames[0]
+          : wardNames[(idx === -1 ? 0 : idx + 1) % wardNames.length];
+        if (nextWard !== intern.ward) {
+          await client.query(
+            "UPDATE nurses SET ward = $1, updated_at = NOW() WHERE id = $2",
+            [nextWard, intern.id],
+          );
+          updated++;
+        }
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.json({ updated });
+  }),
+);
+
 module.exports = router;
