@@ -209,7 +209,9 @@ function UsersPage() {
     setSearch("");
   };
 
-  useEffect(() => { setPage(1); }, [search, filterStatus, filterRole]);
+  useEffect(() => {
+    setPage(1);
+  }, [search, filterStatus, filterRole]);
 
   const { pageItems: pageUsers, totalPages } = usePagination(filtered, pageSize, page);
 
@@ -350,7 +352,10 @@ function UsersPage() {
             pageSize={pageSize}
             totalItems={filtered.length}
             onPage={setPage}
-            onPageSize={(s) => { setPageSize(s); setPage(1); }}
+            onPageSize={(s) => {
+              setPageSize(s);
+              setPage(1);
+            }}
           />
           <div className="px-5 py-3 border-t bg-muted/30 flex items-center gap-1.5 text-xs text-muted-foreground">
             <Shield className="h-3.5 w-3.5" />

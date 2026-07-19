@@ -268,6 +268,7 @@ function NurseDashboard() {
 
   return (
     <div className="space-y-6">
+      <ManagementAlerts />
       <PageHeader
         title={`Welcome, ${fullName?.split(" ")[0] ?? "Nurse"}`}
         subtitle={[
@@ -555,10 +556,239 @@ function NurseDashboard() {
   );
 }
 
+// ── Management alerts (shared by NurseDashboard and ManagementDashboard) ─────
+
+const FW_GROUP_LABELS: Record<string, string> = {
+  matron: "Matron",
+  head: "Coverage Nurses",
+  porter: "Porter",
+  intern: "Nurse Interns",
+  facility_wide: "Facility-Wide Staff",
+};
+
+function parseRegenKey(key: string) {
+  const prefix = "rota_regenerate_needed_";
+  if (!key.startsWith(prefix)) return null;
+  const rest = key.slice(prefix.length);
+  const dateMatch = rest.match(/(\d{4}-\d{2}-\d{2})/);
+  if (!dateMatch) return null;
+  const periodStart = dateMatch[1];
+  const halves = rest.split(periodStart);
+  const fSlug = halves[0].replace(/_$/, "");
+  const wSlug = (halves[1] ?? "").replace(/^_/, "");
+  const facilityDisplay = fSlug.charAt(0).toUpperCase() + fSlug.slice(1).replace(/_/g, " ");
+  const wardDisplay = wSlug
+    ? (FW_GROUP_LABELS[wSlug] ?? wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
+    : null;
+  const pStart = new Date(periodStart + "T00:00:00");
+  const pEnd = new Date(pStart);
+  pEnd.setDate(pEnd.getDate() + 27);
+  const fmtOpts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" };
+  const periodDisplay = `${pStart.toLocaleDateString("en-GB", fmtOpts)} – ${pEnd.toLocaleDateString("en-GB", { ...fmtOpts, year: "numeric" })}`;
+  return { facilityDisplay, wardDisplay, periodDisplay };
+}
+
+// Renders leave-blocking and regen alerts. Included in both NurseDashboard (for
+// head_nurse and chief_matron) and ManagementDashboard. Queries are deduplicated
+// by TanStack Query when both components mount simultaneously.
+function ManagementAlerts() {
+  const { isAdmin, nurseFacility, canApproveLeave, activeRole, user } = useAuth();
+
+  const canSeeRegen = activeRole === "head_nurse" || isAdmin;
+  const canSeePlc = canApproveLeave;
+  const canSeeAll = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
+  const facilityFilter: string | null = canSeeAll ? null : (nurseFacility ?? null);
+  const facilitySlug = nurseFacility ? nurseFacility.toLowerCase().replace(/\s+/g, "_") : null;
+
+  const { data: allNurses = [] } = useQuery({
+    queryKey: ["nurses"],
+    queryFn: () => api.get<Record<string, unknown>[]>("/nurses"),
+  });
+  const { data: leave = [] } = useQuery({
+    queryKey: ["leave"],
+    queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
+  });
+  const { data: allNotifs } = useQuery({
+    queryKey: ["notif-state", user?.id],
+    enabled: !!user?.id,
+    staleTime: 0,
+    refetchInterval: 30 * 1000,
+    queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
+  });
+  const { data: facilityRegenKeys = [] } = useQuery<string[]>({
+    queryKey: ["regen-needed", facilitySlug],
+    enabled: canSeeRegen,
+    staleTime: 0,
+    refetchInterval: 30 * 1000,
+    queryFn: () =>
+      api.get<string[]>(
+        facilitySlug
+          ? `/notifications/regen-needed?facility=${facilitySlug}`
+          : "/notifications/regen-needed",
+      ),
+  });
+  const { data: facilityPlcKeys = [] } = useQuery<string[]>({
+    queryKey: ["plc-needed", facilitySlug],
+    enabled: canSeePlc,
+    staleTime: 0,
+    refetchInterval: 30 * 1000,
+    queryFn: () =>
+      api.get<string[]>(
+        facilitySlug
+          ? `/notifications/plc-needed?facility=${facilitySlug}`
+          : "/notifications/plc-needed",
+      ),
+  });
+
+  const nurses = facilityFilter
+    ? allNurses.filter((n) => n.facility === facilityFilter)
+    : allNurses;
+  const facilityNurseNames = new Set(nurses.map((n) => n.name));
+  const visibleLeave = facilityFilter
+    ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
+    : leave;
+  const pendingLeave = visibleLeave.filter((l) => l.status === "Pending");
+
+  const regenPrefix = facilitySlug
+    ? `rota_regenerate_needed_${facilitySlug}_`
+    : "rota_regenerate_needed_";
+  const userRegenKeys =
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith(regenPrefix))
+      .map((r) => r.notif_key) ?? [];
+  const regenNotifKeys = [...new Set([...facilityRegenKeys, ...userRegenKeys])];
+
+  const plcPrefix = facilitySlug ? `pending_leave_check_${facilitySlug}_` : "pending_leave_check_";
+  const userPlcKeys =
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith(plcPrefix))
+      .map((r) => r.notif_key) ?? [];
+  const pendingLeaveNotifKeys = [...new Set([...facilityPlcKeys, ...userPlcKeys])];
+
+  const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
+  const showPendingLeaveMatron = canApproveLeave && !isAdmin && pendingLeaveNotifKeys.length > 0;
+  const generalPendingCount = pendingLeave.filter((l) => l.type !== "Swap").length;
+  const showGeneralPendingForMatron =
+    canApproveLeave && !isAdmin && generalPendingCount > 0 && !showPendingLeaveMatron;
+  const showPendingLeaveInfo =
+    (activeRole === "head_nurse" || isAdmin) && pendingLeaveNotifKeys.length > 0 && !showRegenAlert;
+
+  if (
+    !showRegenAlert &&
+    !showPendingLeaveMatron &&
+    !showGeneralPendingForMatron &&
+    !showPendingLeaveInfo
+  )
+    return null;
+
+  return (
+    <div className="space-y-3">
+      {showPendingLeaveInfo && (
+        <div className="rounded-xl border-2 border-orange-400 bg-orange-50 dark:bg-orange-950/30 p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-orange-800 dark:text-orange-300">
+              Pending leave requests are blocking rota submission
+            </p>
+            <p className="text-sm text-orange-700 dark:text-orange-400 mt-1">
+              One or more leave requests were submitted after the rota draft was created. The matron
+              needs to approve or reject them before the rota can be submitted. You will be notified
+              here once the matron has acted and the rota is ready to regenerate.
+            </p>
+          </div>
+        </div>
+      )}
+      {showRegenAlert && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <RefreshCw className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Action required: Regenerate the following draft rota
+              {regenNotifKeys.length > 1 ? "s" : ""}
+            </p>
+            <ul className="mt-1 space-y-0.5">
+              {regenNotifKeys.map((key) => {
+                const parsed = parseRegenKey(key);
+                if (!parsed) return null;
+                return (
+                  <li key={key} className="text-sm text-amber-700 dark:text-amber-400">
+                    <strong>{parsed.wardDisplay ?? parsed.facilityDisplay}</strong>
+                    {parsed.wardDisplay && (
+                      <span className="text-amber-600 dark:text-amber-500">
+                        {" "}
+                        · {parsed.facilityDisplay}
+                      </span>
+                    )}
+                    <span className="text-amber-600 dark:text-amber-500">
+                      {" "}
+                      · {parsed.periodDisplay}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-2">
+              Go to the <strong>Rota page</strong>, select the ward above, and click{" "}
+              <strong>Regenerate</strong> to apply the latest leave before submitting.
+            </p>
+          </div>
+          <Link
+            to="/rota"
+            className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
+          >
+            Go to Rota
+          </Link>
+        </div>
+      )}
+      {showPendingLeaveMatron && (
+        <div className="rounded-xl border-2 border-red-400 bg-red-50 dark:bg-red-950/30 p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-red-800 dark:text-red-300">
+              Urgent: A rota submission is being blocked
+            </p>
+            <p className="text-sm text-red-700 dark:text-red-400 mt-1">
+              The head nurse attempted to submit a rota but pending leave requests are blocking it.
+              Please approve or reject the outstanding leave requests so the rota can be submitted.
+            </p>
+          </div>
+          <Link
+            to="/leave"
+            className="shrink-0 h-9 px-4 rounded-md bg-red-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-red-700"
+          >
+            Review Leave
+          </Link>
+        </div>
+      )}
+      {showGeneralPendingForMatron && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              {generalPendingCount} pending leave request
+              {generalPendingCount > 1 ? "s" : ""} awaiting your review
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              These have not yet blocked a rota submission, but should be reviewed and approved or
+              rejected in good time.
+            </p>
+          </div>
+          <Link
+            to="/leave"
+            className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
+          >
+            Go to Leave
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Management dashboard ──────────────────────────────────────────────────────
 
 function ManagementDashboard() {
-  const { fullName, isAdmin, nurseFacility, canApproveLeave, activeRole, user } = useAuth();
+  const { fullName, isAdmin, nurseFacility, activeRole } = useAuth();
 
   // Admin, CNO, and HR are not tied to a facility — they see data across all facilities.
   const canSeeAll = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
@@ -577,13 +807,6 @@ function ManagementDashboard() {
     queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
-  const { data: allNotifs } = useQuery({
-    queryKey: ["notif-state", user?.id],
-    enabled: !!user?.id,
-    staleTime: 60 * 1000,
-    queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
-  });
-
   const nurses = facilityFilter
     ? allNurses.filter((n) => n.facility === facilityFilter)
     : allNurses;
@@ -593,72 +816,6 @@ function ManagementDashboard() {
     ? leave.filter((l) => facilityNurseNames.has(l.nurse_name))
     : leave;
   const pendingLeave = visibleLeave.filter((l) => l.status === "Pending");
-
-  // Parse rota_regenerate_needed_${facilitySlug}_${periodStart}_${wardSlug} keys.
-  function parseRegenKey(key: string) {
-    const prefix = "rota_regenerate_needed_";
-    if (!key.startsWith(prefix)) return null;
-    const rest = key.slice(prefix.length);
-    const dateMatch = rest.match(/(\d{4}-\d{2}-\d{2})/);
-    if (!dateMatch) return null;
-    const periodStart = dateMatch[1];
-    const halves = rest.split(periodStart);
-    const fSlug = halves[0].replace(/_$/, "");
-    const wSlug = (halves[1] ?? "").replace(/^_/, "");
-    const facilityDisplay = fSlug.charAt(0).toUpperCase() + fSlug.slice(1).replace(/_/g, " ");
-    const FW_GROUP_LABELS: Record<string, string> = {
-      matron: "Matron",
-      head: "Coverage Nurses",
-      porter: "Porter",
-      intern: "Nurse Interns",
-      facility_wide: "Facility-Wide Staff",
-    };
-    const wardDisplay = wSlug
-      ? (FW_GROUP_LABELS[wSlug] ??
-        wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
-      : null;
-    const pStart = new Date(periodStart + "T00:00:00");
-    const pEnd = new Date(pStart);
-    pEnd.setDate(pEnd.getDate() + 27);
-    const fmtOpts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" };
-    const periodDisplay = `${pStart.toLocaleDateString("en-GB", fmtOpts)} – ${pEnd.toLocaleDateString("en-GB", { ...fmtOpts, year: "numeric" })}`;
-    return { facilityDisplay, wardDisplay, periodDisplay };
-  }
-
-  // Dashboard alert: rota regeneration needed (head_nurse / admin)
-  const canSeeRegen = activeRole === "head_nurse" || isAdmin;
-  const facilitySlug = nurseFacility ? nurseFacility.toLowerCase().replace(/\s+/g, "_") : null;
-
-  // Facility-level regen check — visible to ALL head nurses and admins for the facility,
-  // regardless of whether a per-user notification row was created for them.
-  const { data: facilityRegenKeys = [] } = useQuery<string[]>({
-    queryKey: ["regen-needed", facilitySlug],
-    enabled: canSeeRegen,
-    staleTime: 60 * 1000,
-    queryFn: () =>
-      facilitySlug
-        ? api.get<string[]>(`/notifications/regen-needed?facility=${facilitySlug}`)
-        : api.get<string[]>("/notifications/regen-needed"),
-  });
-  const regenNotifKeys = facilityRegenKeys;
-  const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
-
-  // Dashboard alert: pending leave check (matron action; head_nurse/admin info — only when no regen alert)
-  const plcPrefix = facilitySlug ? `pending_leave_check_${facilitySlug}_` : "pending_leave_check_";
-  const pendingLeaveNotifs =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith(plcPrefix)) ?? [];
-  // Urgent matron alert: a submission was explicitly blocked (notification fired)
-  const showPendingLeaveMatron =
-    canApproveLeave && activeRole === "chief_matron" && pendingLeaveNotifs.length > 0;
-  // General matron alert: pending non-Swap leaves exist (not necessarily blocking yet)
-  const generalPendingCount = pendingLeave.filter((l) => l.type !== "Swap").length;
-  const showGeneralPendingForMatron =
-    activeRole === "chief_matron" &&
-    canApproveLeave &&
-    generalPendingCount > 0 &&
-    !showPendingLeaveMatron;
-  const showPendingLeaveInfo =
-    (activeRole === "head_nurse" || isAdmin) && pendingLeaveNotifs.length > 0 && !showRegenAlert;
 
   const subtitle = facilityFilter
     ? `Live staffing and rota health · ${facilityFilter}`
@@ -671,116 +828,7 @@ function ManagementDashboard() {
         subtitle={subtitle}
       />
 
-      {(showRegenAlert ||
-        showPendingLeaveMatron ||
-        showGeneralPendingForMatron ||
-        showPendingLeaveInfo) && (
-        <div className="space-y-3">
-          {/* Alert 1 for head_nurse/admin: pending leave waiting for matron — matron hasn't acted yet */}
-          {showPendingLeaveInfo && (
-            <div className="rounded-xl border-2 border-orange-400 bg-orange-50 dark:bg-orange-950/30 p-4 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-orange-800 dark:text-orange-300">
-                  Pending leave requests are blocking rota submission
-                </p>
-                <p className="text-sm text-orange-700 dark:text-orange-400 mt-1">
-                  One or more leave requests were submitted after the rota draft was created. The
-                  matron needs to approve or reject them before the rota can be submitted. You will
-                  be notified here once the matron has acted and the rota is ready to regenerate.
-                </p>
-              </div>
-            </div>
-          )}
-          {/* Alert 2 for head_nurse/admin: matron has acted — regenerate now */}
-          {showRegenAlert && (
-            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
-              <RefreshCw className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-amber-800 dark:text-amber-300">
-                  Action required: Regenerate the following draft rota
-                  {regenNotifKeys.length > 1 ? "s" : ""}
-                </p>
-                <ul className="mt-1 space-y-0.5">
-                  {regenNotifKeys.map((key) => {
-                    const parsed = parseRegenKey(key);
-                    if (!parsed) return null;
-                    return (
-                      <li key={key} className="text-sm text-amber-700 dark:text-amber-400">
-                        <strong>{parsed.wardDisplay ?? parsed.facilityDisplay}</strong>
-                        {parsed.wardDisplay && (
-                          <span className="text-amber-600 dark:text-amber-500">
-                            {" "}
-                            · {parsed.facilityDisplay}
-                          </span>
-                        )}
-                        <span className="text-amber-600 dark:text-amber-500">
-                          {" "}
-                          · {parsed.periodDisplay}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <p className="text-sm text-amber-700 dark:text-amber-400 mt-2">
-                  Go to the <strong>Rota page</strong>, select the ward above, and click{" "}
-                  <strong>Regenerate</strong> to apply the latest leave before submitting.
-                </p>
-              </div>
-              <Link
-                to="/rota"
-                className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
-              >
-                Go to Rota
-              </Link>
-            </div>
-          )}
-          {/* Alert for chief_matron: a submission is blocked — urgent */}
-          {showPendingLeaveMatron && (
-            <div className="rounded-xl border-2 border-red-400 bg-red-50 dark:bg-red-950/30 p-4 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-red-800 dark:text-red-300">
-                  Urgent: A rota submission is being blocked
-                </p>
-                <p className="text-sm text-red-700 dark:text-red-400 mt-1">
-                  The head nurse attempted to submit a rota but pending leave requests are blocking
-                  it. Please approve or reject the outstanding leave requests so the rota can be
-                  submitted.
-                </p>
-              </div>
-              <Link
-                to="/leave"
-                className="shrink-0 h-9 px-4 rounded-md bg-red-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-red-700"
-              >
-                Review Leave
-              </Link>
-            </div>
-          )}
-          {/* Alert for chief_matron: general pending leaves (no blocked submission) */}
-          {showGeneralPendingForMatron && (
-            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
-              <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
-              <div className="flex-1 min-w-0">
-                <p className="font-bold text-amber-800 dark:text-amber-300">
-                  {generalPendingCount} pending leave request
-                  {generalPendingCount > 1 ? "s" : ""} awaiting your review
-                </p>
-                <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-                  These have not yet blocked a rota submission, but should be reviewed and approved
-                  or rejected in good time.
-                </p>
-              </div>
-              <Link
-                to="/leave"
-                className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
-              >
-                Go to Leave
-              </Link>
-            </div>
-          )}
-        </div>
-      )}
+      <ManagementAlerts />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         <Stat
@@ -899,8 +947,9 @@ function ManagementDashboard() {
 function Dashboard() {
   const { activeRole, nurseId } = useAuth();
 
-  // All shift-working roles get the personal dashboard view.
-  // Only CNO, HR/Admin and System Admin get the ops management view.
+  // Shift-working roles get the personal nurse dashboard. ManagementAlerts is
+  // rendered inside NurseDashboard so head_nurse and chief_matron still see
+  // leave-blocking and regen alerts alongside their personal schedule.
   const shiftWorkerRoles = [
     "nurse",
     "chief_matron",

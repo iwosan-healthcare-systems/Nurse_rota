@@ -17,19 +17,90 @@ router.get(
 // Facility-level regen check: returns distinct unread rota_regenerate_needed_* keys
 // for a facility regardless of which user owns the row. Any head_nurse or admin
 // for the facility can see these, even if their personal row was never created.
+// If no facility param is supplied the caller's own facility is resolved from the
+// nurses table. If still none (pure-admin account with no nurse profile) all keys
+// are returned so admins always have full visibility.
 router.get(
   "/regen-needed",
   wrap(async (req, res) => {
-    const { facility } = req.query;
-    if (!facility) return res.json([]);
-    const facilitySlug = String(facility).toLowerCase().replace(/\s+/g, "_");
-    const { rows } = await pool.query(
-      `SELECT DISTINCT notif_key
-         FROM notification_state
-        WHERE notif_key LIKE $1
-          AND is_read = false`,
-      [`rota_regenerate_needed_${facilitySlug}_%`],
-    );
+    let facilitySlug = req.query.facility
+      ? String(req.query.facility).toLowerCase().replace(/\s+/g, "_")
+      : null;
+
+    if (!facilitySlug) {
+      const { rows: nurseRows } = await pool.query(
+        `SELECT n.facility
+           FROM nurses n
+           JOIN profiles p ON LOWER(n.name) = LOWER(p.full_name)
+          WHERE p.id = $1
+            AND n.facility IS NOT NULL
+          LIMIT 1`,
+        [req.user.userId],
+      );
+      if (nurseRows[0]?.facility) {
+        facilitySlug = nurseRows[0].facility.toLowerCase().replace(/\s+/g, "_");
+      }
+    }
+
+    const { rows } = facilitySlug
+      ? await pool.query(
+          `SELECT DISTINCT notif_key
+             FROM notification_state
+            WHERE notif_key LIKE $1
+              AND is_read = false`,
+          [`rota_regenerate_needed_${facilitySlug}_%`],
+        )
+      : await pool.query(
+          `SELECT DISTINCT notif_key
+             FROM notification_state
+            WHERE notif_key LIKE 'rota_regenerate_needed_%'
+              AND is_read = false`,
+        );
+
+    res.json(rows.map((r) => r.notif_key));
+  }),
+);
+
+// Facility-level pending-leave-check: returns distinct unread pending_leave_check_* keys
+// for a facility. Chief matron can query this without needing a personal notification row —
+// same pattern as /regen-needed. Resolves facility from caller's nurse profile when omitted.
+router.get(
+  "/plc-needed",
+  wrap(async (req, res) => {
+    let facilitySlug = req.query.facility
+      ? String(req.query.facility).toLowerCase().replace(/\s+/g, "_")
+      : null;
+
+    if (!facilitySlug) {
+      const { rows: nurseRows } = await pool.query(
+        `SELECT n.facility
+           FROM nurses n
+           JOIN profiles p ON LOWER(n.name) = LOWER(p.full_name)
+          WHERE p.id = $1
+            AND n.facility IS NOT NULL
+          LIMIT 1`,
+        [req.user.userId],
+      );
+      if (nurseRows[0]?.facility) {
+        facilitySlug = nurseRows[0].facility.toLowerCase().replace(/\s+/g, "_");
+      }
+    }
+
+    const { rows } = facilitySlug
+      ? await pool.query(
+          `SELECT DISTINCT notif_key
+             FROM notification_state
+            WHERE notif_key LIKE $1
+              AND is_read = false`,
+          [`pending_leave_check_${facilitySlug}_%`],
+        )
+      : await pool.query(
+          `SELECT DISTINCT notif_key
+             FROM notification_state
+            WHERE notif_key LIKE 'pending_leave_check_%'
+              AND is_read = false`,
+        );
+
     res.json(rows.map((r) => r.notif_key));
   }),
 );

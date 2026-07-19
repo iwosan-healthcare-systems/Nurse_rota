@@ -215,8 +215,7 @@ function RotaPage() {
     queryKey: ["regen-needed", regenFacilitySlug],
     enabled: canGenerate && !!regenFacilitySlug,
     staleTime: 30 * 1000,
-    queryFn: () =>
-      api.get<string[]>(`/notifications/regen-needed?facility=${regenFacilitySlug}`),
+    queryFn: () => api.get<string[]>(`/notifications/regen-needed?facility=${regenFacilitySlug}`),
   });
 
   // Parse rota_regenerate_needed_${facilitySlug}_${periodStart}_${wardSlug} keys.
@@ -268,8 +267,12 @@ function RotaPage() {
       } else if (targetWardSlug === "intern") {
         scopedNurses = scopedNurses.filter((n) => isInternType(n.role));
       } else {
-        scopedNurses = scopedNurses.filter((n) =>
-          isMatron(n.role) || isGlobalHead(n.role) || isPorterType(n.role) || isInternType(n.role),
+        scopedNurses = scopedNurses.filter(
+          (n) =>
+            isMatron(n.role) ||
+            isGlobalHead(n.role) ||
+            isPorterType(n.role) ||
+            isInternType(n.role),
         );
       }
       await api.post("/shift-assignments/reapply-leave", {
@@ -2431,7 +2434,13 @@ function RotaPage() {
       </Dialog>
 
       {/* Facility-wide generation dialog */}
-      <Dialog open={fwDialogOpen} onOpenChange={(open) => { setFwDialogOpen(open); if (!open) setFwPendingLeaves([]); }}>
+      <Dialog
+        open={fwDialogOpen}
+        onOpenChange={(open) => {
+          setFwDialogOpen(open);
+          if (!open) setFwPendingLeaves([]);
+        }}
+      >
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>
@@ -2560,8 +2569,8 @@ function RotaPage() {
                 </Link>
               ) : (
                 <p className="text-red-700 dark:text-red-400 font-medium">
-                  Contact the matron to approve or reject these leave requests before the rota can
-                  be generated.
+                  Contact the <strong>Matron</strong> to <strong>Approve</strong> or{" "}
+                  <strong>Reject</strong> these leave requests before the rota can be generated.
                 </p>
               )}
             </div>
