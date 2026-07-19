@@ -397,25 +397,33 @@ function ApprovalsPage() {
     return windows.filter((win) => win.facility === effectiveFacility);
   }, [windows, effectiveFacility]);
 
-  // For each ward, only the most recent period belongs in approvals.
-  // Older fully-published periods are archived in Reports.
-  // A fully-published window whose last shift date is more than 14 days ago
-  // moves to archive-only — the approvals page shows only active/upcoming work.
+  // Non-published windows (submitted / approved_*) all need to appear in approvals
+  // regardless of how many periods are active for the same ward simultaneously.
+  // Published windows are deduplicated per ward (older ones belong in Reports) and
+  // are removed once their end date is more than 14 days in the past.
   const currentPeriodWindows = useMemo(() => {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 14);
     const cutoffYmd = `${cutoff.getFullYear()}-${String(cutoff.getMonth() + 1).padStart(2, "0")}-${String(cutoff.getDate()).padStart(2, "0")}`;
 
-    const latestByWard = new Map<string, RotaWindow>();
+    const latestPublishedByWard = new Map<string, RotaWindow>();
+    const nonPublished: RotaWindow[] = [];
+
     for (const win of facilityWindows) {
-      if (win.status === "published" && win.endDate < cutoffYmd) continue;
-      const wardKey = `${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? "__COVERAGE__"}`;
-      const existing = latestByWard.get(wardKey);
-      if (!existing || win.startDate > existing.startDate) {
-        latestByWard.set(wardKey, win);
+      if (win.status === "published") {
+        if (win.endDate < cutoffYmd) continue; // archived — show in Reports only
+        const wardKey = `${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? "__COVERAGE__"}`;
+        const existing = latestPublishedByWard.get(wardKey);
+        if (!existing || win.startDate > existing.startDate) {
+          latestPublishedByWard.set(wardKey, win);
+        }
+      } else {
+        // Every submitted / approved period belongs in approvals.
+        nonPublished.push(win);
       }
     }
-    return [...latestByWard.values()];
+
+    return [...latestPublishedByWard.values(), ...nonPublished];
   }, [facilityWindows]);
 
   // Group current-period windows by period start, newest first.
