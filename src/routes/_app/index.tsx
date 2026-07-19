@@ -668,8 +668,7 @@ function ManagementAlerts() {
   const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
   const showPendingLeaveMatron = canApproveLeave && !isAdmin && pendingLeaveNotifKeys.length > 0;
   const generalPendingCount = pendingLeave.filter((l) => l.type !== "Swap").length;
-  const showGeneralPendingForMatron =
-    canApproveLeave && !isAdmin && generalPendingCount > 0 && !showPendingLeaveMatron;
+  const showGeneralPendingForMatron = canApproveLeave && !isAdmin && generalPendingCount > 0;
   const showPendingLeaveInfo =
     (activeRole === "head_nurse" || isAdmin) && pendingLeaveNotifKeys.length > 0 && !showRegenAlert;
 
@@ -773,12 +772,6 @@ function ManagementAlerts() {
               rejected in good time.
             </p>
           </div>
-          <Link
-            to="/leave"
-            className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
-          >
-            Go to Leave
-          </Link>
         </div>
       )}
     </div>

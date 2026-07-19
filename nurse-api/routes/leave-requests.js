@@ -158,7 +158,10 @@ router.post(
       if (!isPrivileged) return res.status(403).json({ error: "Forbidden" });
     } else if (!userRoles.includes("admin") && !userRoles.includes("cno") && nurse_id) {
       const { rows: ownNurse } = await pool.query(
-        "SELECT id, facility FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        `SELECT id, facility FROM nurses
+          WHERE profile_id = $1
+             OR LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1))
+          LIMIT 1`,
         [req.user.userId],
       );
       const own = ownNurse[0];
