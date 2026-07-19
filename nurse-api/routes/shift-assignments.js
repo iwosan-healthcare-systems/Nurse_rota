@@ -257,6 +257,56 @@ router.patch(
       params.push(filterShift);
     }
 
+    // ── Pre-submission: block if pending leaves exist for this period ────────
+    if (status === "submitted" && filterStatus === "draft" && nurse_ids && shift_date_from && shift_date_to) {
+      const nurseIdArr = nurse_ids.split(",");
+      const { rows: pendingLeaves } = await pool.query(
+        `SELECT lr.nurse_name, lr.type, lr.from_date::text, lr.to_date::text
+           FROM leave_requests lr
+          WHERE lr.nurse_id = ANY($1)
+            AND lr.status = 'Pending'
+            AND lr.type != 'Swap'
+            AND lr.from_date <= $3
+            AND lr.to_date >= $2`,
+        [nurseIdArr, shift_date_from, shift_date_to],
+      );
+
+      if (pendingLeaves.length > 0) {
+        // Notify chief matrons for the affected facility
+        const { rows: facilityRows } = await pool.query(
+          `SELECT DISTINCT facility FROM nurses WHERE id = ANY($1) AND facility IS NOT NULL`,
+          [nurseIdArr],
+        );
+        for (const { facility } of facilityRows) {
+          const notifKey = `pending_leave_check_${facility.toLowerCase().replace(/\s+/g, "_")}_${shift_date_from}`;
+          const { rows: matrons } = await pool.query(
+            `SELECT DISTINCT p.id
+               FROM profiles p
+               JOIN user_roles ur ON ur.user_id = p.id AND ur.role = 'chief_matron'
+               JOIN nurses n ON LOWER(n.name) = LOWER(p.full_name) AND n.facility = $1
+              WHERE p.is_active = true`,
+            [facility],
+          );
+          for (const { id } of matrons) {
+            pool
+              .query(
+                `INSERT INTO notification_state (user_id, notif_key, is_read)
+                 VALUES ($1, $2, false)
+                 ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                [id, notifKey],
+              )
+              .catch(() => {});
+          }
+        }
+
+        return res.status(409).json({
+          error: `Cannot submit: ${pendingLeaves.length} pending leave request${pendingLeaves.length > 1 ? "s" : ""} must be approved or rejected by the matron before the rota can be submitted.`,
+          code: "PENDING_LEAVES_EXIST",
+          pendingCount: pendingLeaves.length,
+        });
+      }
+    }
+
     const sets = [];
     if (shift) {
       sets.push(`shift = $${params.length + 1}`);
@@ -325,6 +375,35 @@ router.delete(
   wrap(async (req, res) => {
     await pool.query("DELETE FROM shift_assignments WHERE id = $1", [req.params.id]);
     res.json({ success: true });
+  }),
+);
+
+// Re-apply approved leave to existing draft assignments (used by the "Regenerate" button).
+// Flips any draft shift cell to LEAVE where the nurse has an approved leave overlapping that date.
+router.post(
+  "/reapply-leave",
+  requireRole("admin", "head_nurse"),
+  wrap(async (req, res) => {
+    const { nurse_ids, from_date, to_date } = req.body;
+    if (!Array.isArray(nurse_ids) || !nurse_ids.length || !from_date || !to_date)
+      return res.status(400).json({ error: "nurse_ids, from_date, to_date required" });
+
+    const { rowCount } = await pool.query(
+      `UPDATE shift_assignments sa
+          SET shift = 'LEAVE', updated_at = NOW()
+        WHERE sa.nurse_id = ANY($1)
+          AND sa.shift_date BETWEEN $2 AND $3
+          AND sa.shift != 'LEAVE'
+          AND EXISTS (
+            SELECT 1 FROM leave_requests lr
+            WHERE lr.nurse_id = sa.nurse_id
+              AND lr.status = 'Approved'
+              AND lr.type != 'Swap'
+              AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+          )`,
+      [nurse_ids, from_date, to_date],
+    );
+    res.json({ success: true, updated: rowCount });
   }),
 );
 

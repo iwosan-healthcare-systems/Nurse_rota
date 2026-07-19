@@ -13,6 +13,19 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+export class ApiError extends Error {
+  code?: string;
+  data: Record<string, unknown>;
+  status: number;
+  constructor(message: string, status: number, code?: string, data: Record<string, unknown> = {}) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    this.data = data;
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {};
@@ -26,10 +39,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
 
   if (!res.ok) {
-    const payload = await res.json().catch(() => ({}));
-    const msg = (payload as { error?: string }).error ?? `HTTP ${res.status}`;
+    const payload = await res.json().catch(() => ({})) as Record<string, unknown>;
+    const msg = (payload.error as string) ?? `HTTP ${res.status}`;
     if (res.status === 401) clearToken();
-    throw new Error(msg);
+    throw new ApiError(msg, res.status, payload.code as string | undefined, payload);
   }
 
   return res.json() as Promise<T>;

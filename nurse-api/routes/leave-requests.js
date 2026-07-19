@@ -117,6 +117,25 @@ router.post(
       return res.status(400).json({ error: "Cannot submit a request for past dates" });
     }
 
+    // Block leave requests for dates where the nurse's rota is currently under review.
+    if (type !== "Swap" && nurse_id) {
+      const { rows: inApprovalRows } = await pool.query(
+        `SELECT 1 FROM shift_assignments
+          WHERE nurse_id = $1
+            AND status IN ('submitted', 'approved_chief', 'approved_cno')
+            AND shift_date BETWEEN $2 AND $3
+          LIMIT 1`,
+        [nurse_id, from_date, to_date],
+      );
+      if (inApprovalRows.length > 0) {
+        return res.status(422).json({
+          error:
+            "The rota for this period is currently under review. Leave requests cannot be submitted until after the rota is published.",
+          code: "ROTA_IN_APPROVAL",
+        });
+      }
+    }
+
     // ── Ownership / initiator enforcement ─────────────────────────────────
     // A "Swap" (shift switch) may be raised by a manager on another nurse's
     // behalf. Every other leave type is self-service — except Chief Matron,
@@ -292,6 +311,53 @@ router.patch(
       }
 
       await client.query("COMMIT");
+
+      // After committing: if leave was approved or rejected, notify rota generators
+      // (head_nurse / admin) when there are draft assignments in the same facility & period.
+      if (
+        (leave.status === "Approved" || leave.status === "Rejected") &&
+        leave.nurse_id
+      ) {
+        pool
+          .query("SELECT facility FROM nurses WHERE id = $1", [leave.nurse_id])
+          .then(async ({ rows: nurseRows }) => {
+            const facility = nurseRows[0]?.facility;
+            if (!facility) return;
+            // Check draft assignments exist for this facility overlapping the leave period
+            const { rows: draftRows } = await pool.query(
+              `SELECT MIN(sa.shift_date)::text AS period_start
+                 FROM shift_assignments sa
+                 JOIN nurses n ON n.id = sa.nurse_id
+                WHERE n.facility = $1
+                  AND sa.status = 'draft'
+                  AND sa.shift_date BETWEEN $2 AND $3
+                LIMIT 1`,
+              [facility, leave.from_date, leave.to_date],
+            );
+            if (!draftRows[0]?.period_start) return;
+            const notifKey = `rota_regenerate_needed_${facility.toLowerCase().replace(/\s+/g, "_")}_${draftRows[0].period_start}`;
+            // Notify all head_nurse and admin profiles
+            const { rows: generators } = await pool.query(
+              `SELECT DISTINCT p.id
+                 FROM profiles p
+                 JOIN user_roles ur ON ur.user_id = p.id
+                WHERE ur.role IN ('head_nurse', 'admin')
+                  AND p.is_active = true`,
+            );
+            for (const { id } of generators) {
+              pool
+                .query(
+                  `INSERT INTO notification_state (user_id, notif_key, is_read)
+                   VALUES ($1, $2, false)
+                   ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                  [id, notifKey],
+                )
+                .catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
+
       res.json(leave);
     } catch (err) {
       await client.query("ROLLBACK");

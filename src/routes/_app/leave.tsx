@@ -1200,8 +1200,7 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
   }
 
   return (
-    <Modal onClose={onClose}>
-      <h2 className="text-base font-semibold mb-4">Edit Leave Request</h2>
+    <Modal title="Edit Leave Request" onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
           <label className="block text-xs font-medium text-muted-foreground mb-1">Leave Type</label>
@@ -1321,6 +1320,18 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         .then((arr) => arr.length > 0),
   });
 
+  // Block ALL leave types when the nurse's rota for these dates is in the approval chain.
+  const { data: datesInApprovalRota = false } = useQuery({
+    queryKey: ["leave-dates-in-approval", from, to, targetNurseId],
+    enabled: datesReady && !!targetNurseId,
+    queryFn: () =>
+      api
+        .get<{ id: string }[]>(
+          `/shift-assignments?nurse_id=${targetNurseId}&status_in=submitted,approved_chief,approved_cno&from=${from}&to=${to}&limit=1`,
+        )
+        .then((arr) => arr.length > 0),
+  });
+
   // Check the leave closure window — shared cache with LeavePage so no extra network call.
   const { data: workflowStatus } = useQuery<WorkflowStatus>({
     queryKey: ["workflow-status"],
@@ -1329,12 +1340,14 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   });
   const leaveWindowClosed = workflowStatus?.firstRotaPublished && workflowStatus.leaveIsClosed;
 
-  // Restrict types: dates-in-published-rota takes highest priority, then closure window.
-  // Only Sick, Emergency, and Compassionate Leave are allowed in restricted windows.
+  // In-approval rota: all leave blocked for those dates.
+  // Published / closure window: only 3 exempt types allowed.
   const allowedTypes =
-    datesInPublishedRota || leaveWindowClosed
-      ? ["Sick", "Emergency", "Compassionate Leave"]
-      : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"];
+    datesInApprovalRota
+      ? []
+      : datesInPublishedRota || leaveWindowClosed
+        ? ["Sick", "Emergency", "Compassionate Leave"]
+        : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"];
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
@@ -1347,6 +1360,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     }
     if (from < today) {
       toast.error("Leave requests cannot be submitted for past dates");
+      return;
+    }
+    if (datesInApprovalRota) {
+      toast.error("The rota for this period is under review. Leave requests are blocked until it is published.");
       return;
     }
 
@@ -1499,7 +1516,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
           </div>
         </div>
 
-        {datesReady && datesInPublishedRota && (
+        {datesReady && datesInApprovalRota && (
+          <div className="flex items-start gap-2 p-3 rounded-md bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-400">
+            <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              The rota for these dates is currently <strong>under review</strong>. Leave requests are blocked until the rota is published.
+            </span>
+          </div>
+        )}
+
+        {datesReady && datesInPublishedRota && !datesInApprovalRota && (
           <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
             These dates fall within a <strong>published schedule</strong>. Only{" "}
             <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
@@ -1560,9 +1586,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy || checkingDates}
+            disabled={busy || checkingDates || datesInApprovalRota}
             type="submit"
-            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2"
+            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >
             {busy && <Loader2 className="h-3 w-3 animate-spin" />} Submit
           </button>
