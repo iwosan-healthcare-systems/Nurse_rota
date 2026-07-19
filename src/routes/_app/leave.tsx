@@ -244,7 +244,7 @@ function LeavePage() {
     try {
       if (status === "Approved" && l.nurse_id) {
         const publishedShifts = await api.get<{ id: string; shift_date: string; shift: string }[]>(
-          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status_in=draft,submitted,approved_chief,approved_cno,published&shift_in=M,N`,
+          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published&shift_in=M,N`,
         );
 
         if (publishedShifts.length > 0) {
@@ -260,12 +260,14 @@ function LeavePage() {
           );
 
           if (shiftsToCredit.length > 0) {
-            await api.post(
-              "/shift-logs/bulk",
-              shiftsToCredit.map((s) =>
-                buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N"),
-              ),
-            );
+            await api
+              .post(
+                "/shift-logs/bulk",
+                shiftsToCredit.map((s) =>
+                  buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N"),
+                ),
+              )
+              .catch(() => {});
             const totalHours = shiftsToCredit.reduce(
               (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N"] ?? 0),
               0,
@@ -355,8 +357,8 @@ function LeavePage() {
         qc.invalidateQueries({ queryKey: ["my-today-assignment"] });
         qc.invalidateQueries({ queryKey: ["my-upcoming"] });
       }
-    } catch {
-      toast.error("Failed to update leave request");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to update leave request");
     }
   }
 

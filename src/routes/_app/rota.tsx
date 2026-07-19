@@ -190,6 +190,11 @@ function RotaPage() {
     { name: string; from: string; to: string }[]
   >([]);
   const [showAllLeaves, setShowAllLeaves] = useState(false);
+  // Pending leave warning for the facility-wide (role group) dialog.
+  const [fwPendingLeaves, setFwPendingLeaves] = useState<
+    { name: string; from: string; to: string }[]
+  >([]);
+  const [showAllFwLeaves, setShowAllFwLeaves] = useState(false);
 
   // Extra shifts added by safety enforcement during the last auto-generate run.
   const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
@@ -759,28 +764,6 @@ function RotaPage() {
     const genWards = qc.getQueryData<WardInput[]>(["gen-wards", genForm.facility]) ?? [];
     const freshLeave = qc.getQueryData<LeaveInput[]>(["leave"]) ?? leave;
 
-    // Pre-flight: block generation when any nurse in this facility has a Pending
-    // leave request that overlaps the period. They must be Approved or Rejected first
-    // so the schedule knows whether to mark those days as LEAVE.
-    const facilityIds = nurses
-      .filter((n) => n.facility === genForm.facility)
-      .map((n) => n.id)
-      .filter(Boolean);
-    if (facilityIds.length > 0) {
-      const pending = await api
-        .get<
-          { nurse_name: string; from_date: string; to_date: string }[]
-        >(`/leave-requests?status=Pending&nurse_ids=${facilityIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
-        .catch(() => []);
-      if (pending.length > 0) {
-        setGenPendingLeaves(
-          pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
-        );
-        setBusy(false);
-        return; // Block until resolved
-      }
-    }
-
     setGenPendingLeaves([]);
 
     const facilityNurses = nurses.filter((n) => n.facility === genForm.facility);
@@ -802,8 +785,25 @@ function RotaPage() {
       return;
     }
 
+    // Pre-flight: block generation when any nurse in THIS WARD has a Pending leave
+    // request overlapping the period. Check only ward nurses, not the whole facility.
+    const wardIds = wardNurses.map((n) => n.id).filter(Boolean);
+    if (wardIds.length > 0) {
+      const pending = await api
+        .get<
+          { nurse_name: string; from_date: string; to_date: string }[]
+        >(`/leave-requests?status=Pending&nurse_ids=${wardIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
+        .catch(() => []);
+      if (pending.length > 0) {
+        setGenPendingLeaves(
+          pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
+        );
+        setBusy(false);
+        return;
+      }
+    }
+
     // Block regeneration if this ward's schedule is already in the approval pipeline.
-    const wardIds = wardNurses.map((n) => n.id);
     const inApprovalRows = await api
       .get<
         { status: string }[]
@@ -1062,6 +1062,25 @@ function RotaPage() {
     if (!targetNurses.length) {
       toast.error(`No ${fwRoleGroup} staff found for ${effectiveFacility}`);
       return;
+    }
+
+    // Pre-flight: block generation when any nurse in THIS GROUP has a Pending leave
+    // request overlapping the period.
+    setFwPendingLeaves([]);
+    const groupIds = targetNurses.map((n) => n.id).filter(Boolean);
+    if (groupIds.length > 0) {
+      const pending = await api
+        .get<
+          { nurse_name: string; from_date: string; to_date: string }[]
+        >(`/leave-requests?status=Pending&nurse_ids=${groupIds.join(",")}&from_date_lte=${ymd(genEnd)}&to_date_gte=${ymd(genStart)}`)
+        .catch(() => []);
+      if (pending.length > 0) {
+        setFwPendingLeaves(
+          pending.map((l) => ({ name: l.nurse_name, from: l.from_date, to: l.to_date })),
+        );
+        setBusy(false);
+        return;
+      }
     }
 
     const inApprovalRows = await api
@@ -2272,7 +2291,7 @@ function RotaPage() {
       </Dialog>
 
       {/* Facility-wide generation dialog */}
-      <Dialog open={fwDialogOpen} onOpenChange={setFwDialogOpen}>
+      <Dialog open={fwDialogOpen} onOpenChange={(open) => { setFwDialogOpen(open); if (!open) setFwPendingLeaves([]); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>
@@ -2342,6 +2361,65 @@ function RotaPage() {
             )}
           </div>
 
+          {/* Pending leave warning for role group — hard block */}
+          {fwPendingLeaves.length > 0 && (
+            <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-950/20 dark:border-red-700 p-3 text-xs space-y-2">
+              <p className="font-semibold text-red-800 dark:text-red-300 flex items-center gap-1.5">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                Cannot generate — {fwPendingLeaves.length} pending leave request
+                {fwPendingLeaves.length > 1 ? "s" : ""} in this period
+              </p>
+              <ul
+                className="space-y-0.5 text-red-700 dark:text-red-400 overflow-y-auto pr-1 transition-all"
+                style={{ maxHeight: showAllFwLeaves ? "20rem" : "8rem" }}
+              >
+                {fwPendingLeaves.map((l, i) => (
+                  <li key={i}>
+                    • {l.name} —{" "}
+                    {new Date(l.from.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                    })}
+                    {l.from.slice(0, 10) !== l.to.slice(0, 10) && (
+                      <>
+                        {" → "}
+                        {new Date(l.to.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+              {fwPendingLeaves.length > 5 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllFwLeaves((v) => !v)}
+                  className="text-red-600 dark:text-red-400 underline underline-offset-2 hover:no-underline"
+                >
+                  {showAllFwLeaves ? "See less" : `See ${fwPendingLeaves.length - 5} more…`}
+                </button>
+              )}
+              <p className="text-red-600 dark:text-red-500">
+                Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
+                before the schedule can be generated.
+              </p>
+              <Link
+                to="/leave"
+                onClick={() => {
+                  setFwDialogOpen(false);
+                  setFwPendingLeaves([]);
+                }}
+                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
+              >
+                Go to Leave requests
+              </Link>
+            </div>
+          )}
+
           <DialogFooter>
             <DialogClose asChild>
               <button type="button" className="h-9 px-4 rounded-md border text-sm hover:bg-muted">
@@ -2351,7 +2429,7 @@ function RotaPage() {
             <button
               type="button"
               onClick={handleGenerateFacilityWide}
-              disabled={!fwStartDate || busy}
+              disabled={!fwStartDate || busy || fwPendingLeaves.length > 0}
               className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
             >
               <Wand2 className="h-4 w-4" />
