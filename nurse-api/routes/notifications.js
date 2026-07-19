@@ -14,6 +14,43 @@ router.get(
   }),
 );
 
+// Facility-level regen check: returns distinct unread rota_regenerate_needed_* keys
+// for a facility regardless of which user owns the row. Any head_nurse or admin
+// for the facility can see these, even if their personal row was never created.
+router.get(
+  "/regen-needed",
+  wrap(async (req, res) => {
+    const { facility } = req.query;
+    if (!facility) return res.json([]);
+    const facilitySlug = String(facility).toLowerCase().replace(/\s+/g, "_");
+    const { rows } = await pool.query(
+      `SELECT DISTINCT notif_key
+         FROM notification_state
+        WHERE notif_key LIKE $1
+          AND is_read = false`,
+      [`rota_regenerate_needed_${facilitySlug}_%`],
+    );
+    res.json(rows.map((r) => r.notif_key));
+  }),
+);
+
+// Mark regen notifications as read for ALL users (called after Regenerate completes).
+router.post(
+  "/regen-mark-read",
+  wrap(async (req, res) => {
+    const { notif_keys } = req.body;
+    if (!Array.isArray(notif_keys) || !notif_keys.length)
+      return res.status(400).json({ error: "notif_keys array required" });
+    await pool.query(
+      `UPDATE notification_state
+          SET is_read = true, updated_at = NOW()
+        WHERE notif_key = ANY($1)`,
+      [notif_keys],
+    );
+    res.json({ success: true });
+  }),
+);
+
 router.post(
   "/upsert",
   wrap(async (req, res) => {

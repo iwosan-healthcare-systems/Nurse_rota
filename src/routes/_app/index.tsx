@@ -628,12 +628,20 @@ function ManagementDashboard() {
   // Dashboard alert: rota regeneration needed (head_nurse / admin)
   const canSeeRegen = activeRole === "head_nurse" || isAdmin;
   const facilitySlug = nurseFacility ? nurseFacility.toLowerCase().replace(/\s+/g, "_") : null;
-  const regenPrefix = facilitySlug
-    ? `rota_regenerate_needed_${facilitySlug}_`
-    : "rota_regenerate_needed_";
-  const regenNotifs =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith(regenPrefix)) ?? [];
-  const showRegenAlert = canSeeRegen && regenNotifs.length > 0;
+
+  // Facility-level regen check — visible to ALL head nurses and admins for the facility,
+  // regardless of whether a per-user notification row was created for them.
+  const { data: facilityRegenKeys = [] } = useQuery<string[]>({
+    queryKey: ["regen-needed", facilitySlug],
+    enabled: canSeeRegen,
+    staleTime: 60 * 1000,
+    queryFn: () =>
+      facilitySlug
+        ? api.get<string[]>(`/notifications/regen-needed?facility=${facilitySlug}`)
+        : api.get<string[]>("/notifications/regen-needed"),
+  });
+  const regenNotifKeys = facilityRegenKeys;
+  const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
 
   // Dashboard alert: pending leave check (matron action; head_nurse/admin info — only when no regen alert)
   const plcPrefix = facilitySlug ? `pending_leave_check_${facilitySlug}_` : "pending_leave_check_";
@@ -691,14 +699,14 @@ function ManagementDashboard() {
               <div className="flex-1 min-w-0">
                 <p className="font-bold text-amber-800 dark:text-amber-300">
                   Action required: Regenerate the following draft rota
-                  {regenNotifs.length > 1 ? "s" : ""}
+                  {regenNotifKeys.length > 1 ? "s" : ""}
                 </p>
                 <ul className="mt-1 space-y-0.5">
-                  {regenNotifs.map((r) => {
-                    const parsed = parseRegenKey(r.notif_key);
+                  {regenNotifKeys.map((key) => {
+                    const parsed = parseRegenKey(key);
                     if (!parsed) return null;
                     return (
-                      <li key={r.notif_key} className="text-sm text-amber-700 dark:text-amber-400">
+                      <li key={key} className="text-sm text-amber-700 dark:text-amber-400">
                         <strong>{parsed.wardDisplay ?? parsed.facilityDisplay}</strong>
                         {parsed.wardDisplay && (
                           <span className="text-amber-600 dark:text-amber-500">

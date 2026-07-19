@@ -198,16 +198,28 @@ function RotaPage() {
   >([]);
   const [showAllFwLeaves, setShowAllFwLeaves] = useState(false);
 
-  // Notification state — shared cache key with AppShell and dashboard
-  const { data: allNotifs, refetch: refetchNotifs } = useQuery({
+  // Per-user notification state (for bell, pending-leave-check etc.)
+  const { data: allNotifs } = useQuery({
     queryKey: ["notif-state", user?.id],
     enabled: !!user?.id,
     staleTime: 60 * 1000,
     queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
   });
 
+  // Facility-level regen keys — visible to ALL head nurses/admins for the facility,
+  // regardless of whether a per-user notification_state row exists for them.
+  const regenFacilitySlug = effectiveFacility
+    ? effectiveFacility.toLowerCase().replace(/\s+/g, "_")
+    : null;
+  const { data: facilityRegenKeys = [], refetch: refetchRegenKeys } = useQuery<string[]>({
+    queryKey: ["regen-needed", regenFacilitySlug],
+    enabled: canGenerate && !!regenFacilitySlug,
+    staleTime: 30 * 1000,
+    queryFn: () =>
+      api.get<string[]>(`/notifications/regen-needed?facility=${regenFacilitySlug}`),
+  });
+
   // Parse rota_regenerate_needed_${facilitySlug}_${periodStart}_${wardSlug} keys.
-  // Returns null for keys that don't match the pattern.
   function parseRegenKey(key: string) {
     const prefix = "rota_regenerate_needed_";
     if (!key.startsWith(prefix)) return null;
@@ -221,23 +233,21 @@ function RotaPage() {
     return { facilitySlug, periodStart, wardSlug };
   }
 
-  // Return unread regen notifications matching a specific ward/group slug for the current facility.
-  // Only empty wardSlugs (very old key format) wildcard-match any target.
-  // Specific slugs ("head", "porter", "gopd", "facility_wide") must match exactly —
-  // an unrelated ward or group never bleeds its Regenerate button onto another card.
-  function regenNotifsFor(targetWardSlug: string) {
-    if (!allNotifs || !canGenerate || !effectiveFacility) return [];
-    const fSlug = effectiveFacility.toLowerCase().replace(/\s+/g, "_");
-    return allNotifs.filter((r) => {
-      if (r.is_read) return false;
-      const parsed = parseRegenKey(r.notif_key);
-      if (!parsed || parsed.facilitySlug !== fSlug) return false;
+  // Return unread regen keys for a specific ward/group slug.
+  // Uses the facility-level list so all head nurses see it, not just the one whose
+  // per-user row was created. Empty wardSlugs (very old format) match any target;
+  // specific slugs must match exactly so unrelated cards are never affected.
+  function regenKeysFor(targetWardSlug: string): string[] {
+    if (!canGenerate || !regenFacilitySlug) return [];
+    return facilityRegenKeys.filter((key) => {
+      const parsed = parseRegenKey(key);
+      if (!parsed || parsed.facilitySlug !== regenFacilitySlug) return false;
       if (parsed.wardSlug && parsed.wardSlug !== targetWardSlug) return false;
       return true;
     });
   }
   function isRegenNeededFor(targetWardSlug: string) {
-    return regenNotifsFor(targetWardSlug).length > 0;
+    return regenKeysFor(targetWardSlug).length > 0;
   }
 
   async function regenerateFromRota(targetWardSlug: string, wardName?: string) {
@@ -258,7 +268,6 @@ function RotaPage() {
       } else if (targetWardSlug === "intern") {
         scopedNurses = scopedNurses.filter((n) => isInternType(n.role));
       } else {
-        // "facility_wide" old-format fallback — regenerate all facility-wide groups
         scopedNurses = scopedNurses.filter((n) =>
           isMatron(n.role) || isGlobalHead(n.role) || isPorterType(n.role) || isInternType(n.role),
         );
@@ -268,13 +277,12 @@ function RotaPage() {
         from_date: ymd(startDate),
         to_date: ymd(endDate),
       });
-      const toMark = regenNotifsFor(targetWardSlug);
-      if (toMark.length > 0) {
-        await api.post(
-          "/notifications/upsert",
-          toMark.map((r) => ({ user_id: user.id, notif_key: r.notif_key, is_read: true })),
-        );
-        refetchNotifs();
+      const keysToMark = regenKeysFor(targetWardSlug);
+      if (keysToMark.length > 0) {
+        // Mark as read for ALL users so the alert clears everywhere at once.
+        await api.post("/notifications/regen-mark-read", { notif_keys: keysToMark });
+        refetchRegenKeys();
+        qc.invalidateQueries({ queryKey: ["regen-needed"] });
       }
       qc.invalidateQueries({ queryKey: ["assignments"] });
       toast.success("Leave re-applied to draft. Review the rota then go to Approvals to submit.");
