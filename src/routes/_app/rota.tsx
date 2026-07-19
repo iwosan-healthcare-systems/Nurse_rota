@@ -18,6 +18,7 @@ import {
   Lock,
   Clock,
   Building2,
+  RefreshCw,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -195,6 +196,93 @@ function RotaPage() {
     { name: string; from: string; to: string }[]
   >([]);
   const [showAllFwLeaves, setShowAllFwLeaves] = useState(false);
+
+  // Notification state — shared cache key with AppShell and dashboard
+  const { data: allNotifs, refetch: refetchNotifs } = useQuery({
+    queryKey: ["notif-state", user?.id],
+    enabled: !!user?.id,
+    staleTime: 60 * 1000,
+    queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
+  });
+
+  // Parse rota_regenerate_needed_${facilitySlug}_${periodStart}_${wardSlug} keys.
+  // Returns null for keys that don't match the pattern.
+  function parseRegenKey(key: string) {
+    const prefix = "rota_regenerate_needed_";
+    if (!key.startsWith(prefix)) return null;
+    const rest = key.slice(prefix.length);
+    const dateMatch = rest.match(/(\d{4}-\d{2}-\d{2})/);
+    if (!dateMatch) return null;
+    const periodStart = dateMatch[1];
+    const halves = rest.split(periodStart);
+    const facilitySlug = halves[0].replace(/_$/, "");
+    const wardSlug = (halves[1] ?? "").replace(/^_/, "");
+    return { facilitySlug, periodStart, wardSlug };
+  }
+
+  // Current ward slug for matching notifications: ward name → slug, facility-wide → "facility_wide"
+  const currentWardSlug = selectedWard
+    ? selectedWard.toLowerCase().replace(/\s+/g, "_")
+    : selectedFacilityWide
+      ? "facility_wide"
+      : null;
+
+  // Unread rota-regenerate-needed notifications scoped to current facility + ward/group
+  const regenNotifRows = (() => {
+    if (!allNotifs || !canGenerate) return [];
+    const facilitySlug = effectiveFacility
+      ? effectiveFacility.toLowerCase().replace(/\s+/g, "_")
+      : null;
+    return allNotifs.filter((r) => {
+      if (r.is_read) return false;
+      const parsed = parseRegenKey(r.notif_key);
+      if (!parsed) return false;
+      if (facilitySlug && parsed.facilitySlug !== facilitySlug) return false;
+      // When a specific ward or facility-wide group is active, only match that slug
+      if (currentWardSlug && parsed.wardSlug !== currentWardSlug) return false;
+      return true;
+    });
+  })();
+  const regenNeededOnPage = regenNotifRows.length > 0;
+
+  async function regenerateFromRota() {
+    if (!user?.id) return;
+    setBusy(true);
+    try {
+      // Scope regeneration to the currently-viewed ward, or all facility-wide groups if in fw view
+      let scopedNurses = nurses.filter((n) =>
+        effectiveFacility ? n.facility === effectiveFacility : true,
+      );
+      if (selectedWard) {
+        // Ward-specific: only nurses in this ward
+        scopedNurses = scopedNurses.filter((n) =>
+          n.ward ? parseWards(n.ward).includes(selectedWard) : false,
+        );
+      } else if (selectedFacilityWide) {
+        // Facility-wide notification covers all non-ward groups — regenerate all of them at once
+        scopedNurses = scopedNurses.filter((n) =>
+          isMatron(n.role) || isGlobalHead(n.role) || isPorterType(n.role) || isInternType(n.role),
+        );
+      }
+      await api.post("/shift-assignments/reapply-leave", {
+        nurse_ids: scopedNurses.map((n) => n.id),
+        from_date: ymd(startDate),
+        to_date: ymd(endDate),
+      });
+      // Mark all matching notifications as read
+      await api.post(
+        "/notifications/upsert",
+        regenNotifRows.map((r) => ({ user_id: user.id, notif_key: r.notif_key, is_read: true })),
+      );
+      refetchNotifs();
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      toast.success("Leave re-applied to draft. Review then go to Approvals to submit.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Regenerate failed");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   // Extra shifts added by safety enforcement during the last auto-generate run.
   const [extraShifts, setExtraShifts] = useState<ExtraShift[]>([]);
@@ -1441,6 +1529,31 @@ function RotaPage() {
               : "Generate a schedule to view the rota"
         }
       />
+
+      {regenNeededOnPage && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3 mb-2">
+          <RefreshCw className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Leave approved — rota needs regeneration
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              A pending leave request was approved or rejected after this rota was drafted.
+              Click <strong>Regenerate</strong> to apply the latest leave changes, then go to
+              Approvals to submit.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void regenerateFromRota()}
+            className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-amber-700 disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+            {busy ? "Regenerating…" : "Regenerate"}
+          </button>
+        </div>
+      )}
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">

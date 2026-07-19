@@ -30,8 +30,6 @@ import {
   ClipboardCheck,
   CalendarX,
   ArrowRightLeft,
-  RefreshCw,
-  AlertTriangle,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -561,20 +559,6 @@ function RotaReminderBell({
       .map((r) => r.notif_key) ?? [];
   const coverUnread = coverNeededKeys.length;
 
-  // Unread "pending leave check" notifications — sent to chief matrons before rota submission
-  const pendingLeaveCheckKeys =
-    allNotifs
-      ?.filter((r) => !r.is_read && r.notif_key.startsWith("pending_leave_check_"))
-      .map((r) => r.notif_key) ?? [];
-  const pendingLeaveCheckUnread = pendingLeaveCheckKeys.length;
-
-  // Unread "rota regenerate needed" notifications — sent to head_nurse/admin after matron acts on leave
-  const rotaRegenKeys =
-    allNotifs
-      ?.filter((r) => !r.is_read && r.notif_key.startsWith("rota_regenerate_needed_"))
-      .map((r) => r.notif_key) ?? [];
-  const rotaRegenUnread = rotaRegenKeys.length;
-
   // ── Computed alert counts ─────────────────────────────────────────────────
   const showMgmt = canSeeManagement && !!mgmtNotif && !mgmtNotif.nextRotaExists;
   const showStaff = !!nurseId && !!staffNotif;
@@ -591,13 +575,9 @@ function RotaReminderBell({
     (showLocumFilled ? 1 : 0) +
     (workflowUnread ? 1 : 0) +
     (leaveUnread > 0 ? 1 : 0) +
-    (coverUnread > 0 ? 1 : 0) +
-    (pendingLeaveCheckUnread > 0 ? 1 : 0) +
-    (rotaRegenUnread > 0 ? 1 : 0);
+    (coverUnread > 0 ? 1 : 0);
 
   const allNotifItems = [
-    ...(rotaRegenUnread > 0 ? [{ kind: "rota_regen_needed" as const }] : []),
-    ...(pendingLeaveCheckUnread > 0 ? [{ kind: "pending_leave_check" as const }] : []),
     ...(coverUnread > 0 ? [{ kind: "cover_needed" as const }] : []),
     ...(leaveUnread > 0 ? [{ kind: "leave_updates" as const }] : []),
     ...(showLocumFilled ? [{ kind: "locum_filled" as const }] : []),
@@ -680,63 +660,7 @@ function RotaReminderBell({
             ) : (
               <div className="space-y-3">
                 {notifItems.map(({ kind }) =>
-                  kind === "rota_regen_needed" ? (
-                    <div
-                      key="rota_regen_needed"
-                      className="rounded-lg border border-amber-400/40 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <RefreshCw className="h-4 w-4 shrink-0 text-amber-600" />
-                          <p className="text-xs font-semibold text-amber-700 dark:text-amber-400">
-                            Rota Regeneration Needed
-                          </p>
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => markManyNotifs(rotaRegenKeys, true)}
-                          className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
-                        >
-                          Dismiss
-                        </button>
-                      </div>
-                      <p className="text-xs">
-                        The matron has reviewed pending leave requests. Regenerate the rota draft to apply the changes before submitting.
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Open the Approvals page, find the draft rota, and click <strong>Regenerate</strong>.
-                      </p>
-                    </div>
-                  ) : kind === "pending_leave_check" ? (
-                    <div
-                      key="pending_leave_check"
-                      className="rounded-lg border border-orange-400/40 bg-orange-50 dark:bg-orange-950/20 p-3 space-y-2"
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-2">
-                          <AlertTriangle className="h-4 w-4 shrink-0 text-orange-600" />
-                          <p className="text-xs font-semibold text-orange-700 dark:text-orange-400">
-                            Pending Leave Needs Review
-                          </p>
-                          <span className="h-1.5 w-1.5 rounded-full bg-orange-500 shrink-0" />
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => markManyNotifs(pendingLeaveCheckKeys, true)}
-                          className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
-                        >
-                          Dismiss
-                        </button>
-                      </div>
-                      <p className="text-xs">
-                        A rota submission is blocked by pending leave requests. Please approve or reject the outstanding leave so the rota can be submitted.
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        Open <strong>Leave &amp; Requests</strong> and review pending requests.
-                      </p>
-                    </div>
-                  ) : kind === "cover_needed" ? (
+                  kind === "cover_needed" ? (
                     <div
                       key="cover_needed"
                       className="rounded-lg border border-amber-400/40 bg-amber-50 dark:bg-amber-950/20 p-3 space-y-2"

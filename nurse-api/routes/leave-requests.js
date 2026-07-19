@@ -323,19 +323,19 @@ router.patch(
           .then(async ({ rows: nurseRows }) => {
             const facility = nurseRows[0]?.facility;
             if (!facility) return;
-            // Check draft assignments exist for this facility overlapping the leave period
+            // Find draft assignments for THIS specific nurse, grouped by ward.
+            // A nurse may appear in multiple wards (rare) or in facility-wide (ward = null).
             const { rows: draftRows } = await pool.query(
-              `SELECT MIN(sa.shift_date)::text AS period_start
+              `SELECT sa.ward, MIN(sa.shift_date)::text AS period_start
                  FROM shift_assignments sa
-                 JOIN nurses n ON n.id = sa.nurse_id
-                WHERE n.facility = $1
+                WHERE sa.nurse_id = $1
                   AND sa.status = 'draft'
                   AND sa.shift_date BETWEEN $2 AND $3
-                LIMIT 1`,
-              [facility, leave.from_date, leave.to_date],
+                GROUP BY sa.ward`,
+              [leave.nurse_id, leave.from_date, leave.to_date],
             );
-            if (!draftRows[0]?.period_start) return;
-            const notifKey = `rota_regenerate_needed_${facility.toLowerCase().replace(/\s+/g, "_")}_${draftRows[0].period_start}`;
+            if (!draftRows.length) return;
+            const facilitySlug = facility.toLowerCase().replace(/\s+/g, "_");
             // Notify all head_nurse and admin profiles
             const { rows: generators } = await pool.query(
               `SELECT DISTINCT p.id
@@ -344,15 +344,21 @@ router.patch(
                 WHERE ur.role IN ('head_nurse', 'admin')
                   AND p.is_active = true`,
             );
-            for (const { id } of generators) {
-              pool
-                .query(
-                  `INSERT INTO notification_state (user_id, notif_key, is_read)
-                   VALUES ($1, $2, false)
-                   ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
-                  [id, notifKey],
-                )
-                .catch(() => {});
+            for (const draftRow of draftRows) {
+              const wardSlug = draftRow.ward
+                ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
+                : "facility_wide";
+              const notifKey = `rota_regenerate_needed_${facilitySlug}_${draftRow.period_start}_${wardSlug}`;
+              for (const { id } of generators) {
+                pool
+                  .query(
+                    `INSERT INTO notification_state (user_id, notif_key, is_read)
+                     VALUES ($1, $2, false)
+                     ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                    [id, notifKey],
+                  )
+                  .catch(() => {});
+              }
             }
           })
           .catch(() => {});

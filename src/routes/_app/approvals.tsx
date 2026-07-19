@@ -11,7 +11,6 @@ import {
   FileDown,
   Undo2,
   CalendarRange,
-  RefreshCw,
   AlertTriangle,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
@@ -259,6 +258,26 @@ function ApprovalsPage() {
   // windowKey → pending leave count that blocked the last submission attempt
   const [pendingLeaveBlocked, setPendingLeaveBlocked] = useState<Record<string, number>>({});
 
+  // Pull notification_state to check for persistent "rota_regenerate_needed_" flags.
+  // Shares the same cache key as AppShell and Rota page so no extra network request is needed.
+  const { data: allNotifs } = useQuery({
+    queryKey: ["notif-state", user?.id],
+    enabled: !!user?.id,
+    staleTime: 60 * 1000,
+    queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
+  });
+
+  function regenNotifKey(win: RotaWindow) {
+    if (!win.facility) return null;
+    return `rota_regenerate_needed_${win.facility.toLowerCase().replace(/\s+/g, "_")}_${win.startDate}`;
+  }
+  function isRegenNeeded(win: RotaWindow): boolean {
+    const key = regenNotifKey(win);
+    if (!key) return false;
+    const row = allNotifs?.find((r) => r.notif_key === key);
+    return !!row && !row.is_read;
+  }
+
   // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
   const lockedFacility =
     isAdmin || activeRole === "cno" || activeRole === "hr_admin"
@@ -487,30 +506,6 @@ function ApprovalsPage() {
       } else {
         toast.error(e instanceof Error ? e.message : "Submission failed");
       }
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function regenerateLeave(win: RotaWindow) {
-    const wk = winKey(win);
-    setBusy(`regen-${wk}`);
-    try {
-      let candidates = allNurses.filter((n) => n.facility === win.facility);
-      if (win.ward === null && win.roleGroup)
-        candidates = candidates.filter((n) => roleGroupOf(n.role) === win.roleGroup);
-      await api.post("/shift-assignments/reapply-leave", {
-        nurse_ids: candidates.map((n) => n.id),
-        from_date: win.startDate,
-        to_date: win.endDate,
-      });
-      // Re-check pending leaves — clear blocked state so Submit is usable again
-      setPendingLeaveBlocked((prev) => { const n = { ...prev }; delete n[wk]; return n; });
-      toast.success("Leave re-applied to draft. Review the rota, then submit.");
-      qc.invalidateQueries({ queryKey: ["approvals"] });
-      qc.invalidateQueries({ queryKey: ["assignments"] });
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Regenerate failed");
     } finally {
       setBusy(null);
     }
@@ -818,7 +813,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
       canReject ||
       win.status === "published";
     const pendingLeaveCount = pendingLeaveBlocked[winKey(win)] ?? 0;
-    const isRegenBusy = busy === `regen-${winKey(win)}`;
+    const regenNeeded = isRegenNeeded(win) || pendingLeaveCount > 0;
 
     return (
       <div key={key} className="rounded-xl border bg-card overflow-hidden flex flex-col">
@@ -907,35 +902,33 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Actions */}
         {showActions && (
           <div className="border-t bg-muted/30 mt-auto">
-            {/* Pending-leave warning banner */}
-            {win.status === "draft" && canSubmit && pendingLeaveCount > 0 && (
+            {/* Pending-leave / regen-needed warning banner */}
+            {win.status === "draft" && canSubmit && regenNeeded && (
               <div className="px-4 py-2.5 flex items-start gap-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
                 <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
                 <p className="text-xs leading-snug">
-                  <span className="font-semibold">
-                    {pendingLeaveCount} pending leave request{pendingLeaveCount > 1 ? "s" : ""}
-                  </span>{" "}
-                  must be approved or rejected by the matron before this rota can be submitted.{" "}
-                  <a href="/leave" className="underline font-medium">
-                    Go to Leave page
-                  </a>
-                  . After the matron acts, click <strong>Regenerate</strong> to apply the changes, then submit.
+                  {pendingLeaveCount > 0 ? (
+                    <>
+                      <span className="font-semibold">
+                        {pendingLeaveCount} pending leave request{pendingLeaveCount > 1 ? "s" : ""}
+                      </span>{" "}
+                      must be approved or rejected by the matron before this rota can be submitted.{" "}
+                      <a href="/leave" className="underline font-medium">Go to Leave page</a>.{" "}
+                      After the matron acts, go to the <strong>Rota page</strong> and click{" "}
+                      <strong>Regenerate</strong> to apply the changes, then return here to submit.
+                    </>
+                  ) : (
+                    <>
+                      Leave has been reviewed. Go to the{" "}
+                      <a href="/rota" className="underline font-medium">Rota page</a> and click{" "}
+                      <strong>Regenerate</strong> to apply the approved leave, then return here to submit.
+                    </>
+                  )}
                 </p>
               </div>
             )}
             <div className="px-4 py-2.5 flex items-center justify-end gap-2 flex-wrap">
-            {win.status === "draft" && canSubmit && pendingLeaveCount > 0 && (
-              <button
-                type="button"
-                disabled={isBusy || isRegenBusy}
-                onClick={() => regenerateLeave(win)}
-                className="h-8 px-3 rounded-md bg-amber-600 text-white text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50 hover:bg-amber-700"
-              >
-                <RefreshCw className={`h-3.5 w-3.5 ${isRegenBusy ? "animate-spin" : ""}`} />
-                {isRegenBusy ? "Regenerating…" : "Regenerate"}
-              </button>
-            )}
-            {win.status === "draft" && canSubmit && pendingLeaveCount === 0 && (
+            {win.status === "draft" && canSubmit && !regenNeeded && (
               <button
                 type="button"
                 disabled={isBusy}

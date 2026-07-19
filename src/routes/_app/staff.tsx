@@ -388,7 +388,10 @@ function StaffPage() {
       <div className="mb-4">
         <FacilityChips
           value={lockedFacility ?? filterFacility}
-          onChange={(f) => { setFilterFacility(f); setFilterWard(""); }}
+          onChange={(f) => {
+            setFilterFacility(f);
+            setFilterWard("");
+          }}
           locked={!!lockedFacility}
           showAll={canSeeAllFacilities}
         />
@@ -424,7 +427,6 @@ function StaffPage() {
               </option>
             ))}
           </select>
-
 
           {/* Ward filter */}
           <select
@@ -1182,8 +1184,10 @@ function UploadModal({
     for (let i = 0; i < line.length; i++) {
       const c = line[i];
       if (c === '"') {
-        if (inQ && line[i + 1] === '"') { cur += '"'; i++; }
-        else inQ = !inQ;
+        if (inQ && line[i + 1] === '"') {
+          cur += '"';
+          i++;
+        } else inQ = !inQ;
       } else if (c === "," && !inQ) {
         result.push(cur.trim());
         cur = "";
@@ -1206,7 +1210,9 @@ function UploadModal({
         raw = lines.slice(1).map((line) => {
           const vals = parseCsvLine(line);
           const obj: Record<string, unknown> = {};
-          headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+          headers.forEach((h, i) => {
+            obj[h] = vals[i] ?? "";
+          });
           return obj;
         });
       } else {
@@ -1224,7 +1230,9 @@ function UploadModal({
             headers.push(...vals.map((v: unknown) => String(v ?? "")));
           } else {
             const obj: Record<string, unknown> = {};
-            headers.forEach((h, i) => { obj[h] = vals[i] ?? ""; });
+            headers.forEach((h, i) => {
+              obj[h] = vals[i] ?? "";
+            });
             raw.push(obj);
           }
         });
@@ -1341,7 +1349,7 @@ function UploadModal({
               <span>Preview ({rows.length} rows)</span>
             </div>
             <div className="max-h-56 overflow-y-auto overflow-x-auto text-sm">
-              <table className="w-full min-w-[480px]">
+              <table className="w-full min-w-120">
                 <thead className="bg-muted/30 text-[10px] uppercase text-muted-foreground">
                   <tr>
                     <th className="text-left px-3 py-1.5">Name</th>

@@ -25,8 +25,14 @@ export function TopProgressBar() {
   const sourcesRef = useRef(0);
 
   function clearTimers() {
-    if (tickRef.current) { clearInterval(tickRef.current); tickRef.current = null; }
-    if (hideRef.current) { clearTimeout(hideRef.current); hideRef.current = null; }
+    if (tickRef.current) {
+      clearInterval(tickRef.current);
+      tickRef.current = null;
+    }
+    if (hideRef.current) {
+      clearTimeout(hideRef.current);
+      hideRef.current = null;
+    }
   }
 
   function domStart() {
@@ -76,7 +82,10 @@ export function TopProgressBar() {
       sourcesRef.current = Math.max(0, sourcesRef.current - 1);
       if (sourcesRef.current === 0 && fetchingCount === 0) domComplete();
     });
-    return () => { unsubStart(); unsubEnd(); };
+    return () => {
+      unsubStart();
+      unsubEnd();
+    };
     // fetchingCount intentionally omitted — we only want the snapshot at subscribe time.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router]);

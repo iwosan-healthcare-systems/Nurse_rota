@@ -30,10 +30,7 @@ export function FacilityChips({
       <div className={cn("flex items-center gap-2 flex-wrap", className)}>
         <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
         <span
-          className={cn(
-            chipBase,
-            "bg-primary/10 text-primary border-primary/30 cursor-default",
-          )}
+          className={cn(chipBase, "bg-primary/10 text-primary border-primary/30 cursor-default")}
         >
           <Building2 className="h-3.5 w-3.5 shrink-0" />
           {value}

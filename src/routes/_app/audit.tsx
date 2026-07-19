@@ -89,7 +89,10 @@ function AuditContent() {
             pageSize={pageSize}
             totalItems={logs.length}
             onPage={setPage}
-            onPageSize={(s) => { setPageSize(s); setPage(1); }}
+            onPageSize={(s) => {
+              setPageSize(s);
+              setPage(1);
+            }}
           />
         </div>
       )}

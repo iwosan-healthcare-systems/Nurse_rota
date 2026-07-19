@@ -279,6 +279,7 @@ router.patch(
         );
         for (const { facility } of facilityRows) {
           const notifKey = `pending_leave_check_${facility.toLowerCase().replace(/\s+/g, "_")}_${shift_date_from}`;
+          // Notify chief matrons at this facility
           const { rows: matrons } = await pool.query(
             `SELECT DISTINCT p.id
                FROM profiles p
@@ -288,6 +289,24 @@ router.patch(
             [facility],
           );
           for (const { id } of matrons) {
+            pool
+              .query(
+                `INSERT INTO notification_state (user_id, notif_key, is_read)
+                 VALUES ($1, $2, false)
+                 ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                [id, notifKey],
+              )
+              .catch(() => {});
+          }
+          // Also notify head_nurse / admin so they know submission is blocked
+          const { rows: generators } = await pool.query(
+            `SELECT DISTINCT p.id
+               FROM profiles p
+               JOIN user_roles ur ON ur.user_id = p.id
+              WHERE ur.role IN ('head_nurse', 'admin')
+                AND p.is_active = true`,
+          );
+          for (const { id } of generators) {
             pool
               .query(
                 `INSERT INTO notification_state (user_id, notif_key, is_read)
