@@ -3,6 +3,17 @@ const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// Map a nurse role string to the facility-wide group slug used in notification keys.
+// Mirrors the isMatron / isGlobalHead / isPorterType / isInternType helpers on the frontend.
+function facilityWideGroupSlug(role) {
+  if (!role) return "facility_wide";
+  if (/^matron$/i.test(role)) return "matron";
+  if (/^(head|coverage)\s*nurse$/i.test(role)) return "head";
+  if (/^porter(\s*-\s*day)?$/i.test(role)) return "porter";
+  if (/nurse\s*intern|intern\s*nurse/i.test(role)) return "intern";
+  return "facility_wide";
+}
+
 router.get(
   "/",
   wrap(async (req, res) => {
@@ -319,9 +330,10 @@ router.patch(
         leave.nurse_id
       ) {
         pool
-          .query("SELECT facility FROM nurses WHERE id = $1", [leave.nurse_id])
+          .query("SELECT facility, role FROM nurses WHERE id = $1", [leave.nurse_id])
           .then(async ({ rows: nurseRows }) => {
             const facility = nurseRows[0]?.facility;
+            const nurseRole = nurseRows[0]?.role || "";
             if (!facility) return;
             // Find draft assignments for THIS specific nurse, grouped by ward.
             // A nurse may appear in multiple wards (rare) or in facility-wide (ward = null).
@@ -353,7 +365,7 @@ router.patch(
             for (const draftRow of draftRows) {
               const wardSlug = draftRow.ward
                 ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
-                : "facility_wide";
+                : facilityWideGroupSlug(nurseRole);
               const notifKey = `rota_regenerate_needed_${facilitySlug}_${draftRow.period_start}_${wardSlug}`;
               for (const { id } of generators) {
                 pool
@@ -365,6 +377,34 @@ router.patch(
                   )
                   .catch(() => {});
               }
+            }
+
+            // If no pending leaves remain that overlap any draft rota in this facility,
+            // clear all pending_leave_check notifications for everyone (matron + head_nurse/admin).
+            const { rows: remainingPending } = await pool.query(
+              `SELECT 1 FROM leave_requests lr
+                WHERE lr.status = 'Pending'
+                  AND lr.type != 'Swap'
+                  AND lr.nurse_id IN (SELECT id FROM nurses WHERE facility = $1)
+                  AND EXISTS (
+                    SELECT 1 FROM shift_assignments sa
+                    WHERE sa.nurse_id = lr.nurse_id
+                      AND sa.status = 'draft'
+                      AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+                  )
+                LIMIT 1`,
+              [facility],
+            );
+            if (!remainingPending.length) {
+              pool
+                .query(
+                  `UPDATE notification_state
+                      SET is_read = true, updated_at = NOW()
+                    WHERE notif_key LIKE $1
+                      AND is_read = false`,
+                  [`pending_leave_check_${facilitySlug}_%`],
+                )
+                .catch(() => {});
             }
           })
           .catch(() => {});

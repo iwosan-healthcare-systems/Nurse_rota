@@ -221,7 +221,9 @@ function RotaPage() {
   }
 
   // Return unread regen notifications matching a specific ward/group slug for the current facility.
-  // Old-format keys (empty wardSlug) are treated as matching any target — backward compat.
+  // Only empty wardSlugs (very old key format) wildcard-match any target.
+  // Specific slugs ("head", "porter", "gopd", "facility_wide") must match exactly —
+  // an unrelated ward or group never bleeds its Regenerate button onto another card.
   function regenNotifsFor(targetWardSlug: string) {
     if (!allNotifs || !canGenerate || !effectiveFacility) return [];
     const fSlug = effectiveFacility.toLowerCase().replace(/\s+/g, "_");
@@ -229,7 +231,6 @@ function RotaPage() {
       if (r.is_read) return false;
       const parsed = parseRegenKey(r.notif_key);
       if (!parsed || parsed.facilitySlug !== fSlug) return false;
-      // Old keys have no ward slug — they match any target (backward compat)
       if (parsed.wardSlug && parsed.wardSlug !== targetWardSlug) return false;
       return true;
     });
@@ -247,7 +248,16 @@ function RotaPage() {
         scopedNurses = scopedNurses.filter((n) =>
           n.ward ? parseWards(n.ward).includes(wardName) : false,
         );
-      } else if (targetWardSlug === "facility_wide") {
+      } else if (targetWardSlug === "matron") {
+        scopedNurses = scopedNurses.filter((n) => isMatron(n.role));
+      } else if (targetWardSlug === "head") {
+        scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
+      } else if (targetWardSlug === "porter") {
+        scopedNurses = scopedNurses.filter((n) => isPorterType(n.role));
+      } else if (targetWardSlug === "intern") {
+        scopedNurses = scopedNurses.filter((n) => isInternType(n.role));
+      } else {
+        // "facility_wide" old-format fallback — regenerate all facility-wide groups
         scopedNurses = scopedNurses.filter((n) =>
           isMatron(n.role) || isGlobalHead(n.role) || isPorterType(n.role) || isInternType(n.role),
         );
@@ -1885,12 +1895,12 @@ function RotaPage() {
                         <Wand2 className="h-3 w-3" /> Generate
                       </button>
                     )}
-                    {status === "draft" && isRegenNeededFor("facility_wide") ? (
+                    {status === "draft" && isRegenNeededFor(key) ? (
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          void regenerateFromRota("facility_wide");
+                          void regenerateFromRota(key);
                         }}
                         disabled={busy}
                         className="h-7 px-2 rounded border text-[11px] font-semibold inline-flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white border-amber-600 disabled:opacity-50"

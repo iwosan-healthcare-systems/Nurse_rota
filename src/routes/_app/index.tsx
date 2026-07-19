@@ -606,12 +606,17 @@ function ManagementDashboard() {
     const fSlug = halves[0].replace(/_$/, "");
     const wSlug = (halves[1] ?? "").replace(/^_/, "");
     const facilityDisplay = fSlug.charAt(0).toUpperCase() + fSlug.slice(1).replace(/_/g, " ");
-    const wardDisplay =
-      wSlug === "facility_wide"
-        ? "Facility-Wide Staff"
-        : wSlug
-          ? wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
-          : null;
+    const FW_GROUP_LABELS: Record<string, string> = {
+      matron: "Matron",
+      head: "Coverage Nurses",
+      porter: "Porter",
+      intern: "Nurse Interns",
+      facility_wide: "Facility-Wide Staff",
+    };
+    const wardDisplay = wSlug
+      ? (FW_GROUP_LABELS[wSlug] ??
+        wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
+      : null;
     const pStart = new Date(periodStart + "T00:00:00");
     const pEnd = new Date(pStart);
     pEnd.setDate(pEnd.getDate() + 27);
@@ -634,8 +639,16 @@ function ManagementDashboard() {
   const plcPrefix = facilitySlug ? `pending_leave_check_${facilitySlug}_` : "pending_leave_check_";
   const pendingLeaveNotifs =
     allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith(plcPrefix)) ?? [];
+  // Urgent matron alert: a submission was explicitly blocked (notification fired)
   const showPendingLeaveMatron =
     canApproveLeave && activeRole === "chief_matron" && pendingLeaveNotifs.length > 0;
+  // General matron alert: pending non-Swap leaves exist (not necessarily blocking yet)
+  const generalPendingCount = pendingLeave.filter((l) => l.type !== "Swap").length;
+  const showGeneralPendingForMatron =
+    activeRole === "chief_matron" &&
+    canApproveLeave &&
+    generalPendingCount > 0 &&
+    !showPendingLeaveMatron;
   const showPendingLeaveInfo =
     (activeRole === "head_nurse" || isAdmin) && pendingLeaveNotifs.length > 0 && !showRegenAlert;
 
@@ -650,7 +663,10 @@ function ManagementDashboard() {
         subtitle={subtitle}
       />
 
-      {(showRegenAlert || showPendingLeaveMatron || showPendingLeaveInfo) && (
+      {(showRegenAlert ||
+        showPendingLeaveMatron ||
+        showGeneralPendingForMatron ||
+        showPendingLeaveInfo) && (
         <div className="space-y-3">
           {/* Alert 1 for head_nurse/admin: pending leave waiting for matron — matron hasn't acted yet */}
           {showPendingLeaveInfo && (
@@ -711,22 +727,45 @@ function ManagementDashboard() {
               </Link>
             </div>
           )}
-          {/* Alert for chief_matron: pending leave needs their review */}
+          {/* Alert for chief_matron: a submission is blocked — urgent */}
           {showPendingLeaveMatron && (
-            <div className="rounded-xl border-2 border-orange-400 bg-orange-50 dark:bg-orange-950/30 p-4 flex items-start gap-3">
-              <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600 mt-0.5" />
+            <div className="rounded-xl border-2 border-red-400 bg-red-50 dark:bg-red-950/30 p-4 flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 shrink-0 text-red-600 mt-0.5" />
               <div className="flex-1 min-w-0">
-                <p className="font-bold text-orange-800 dark:text-orange-300">
-                  Action required: Review pending leave requests
+                <p className="font-bold text-red-800 dark:text-red-300">
+                  Urgent: A rota submission is being blocked
                 </p>
-                <p className="text-sm text-orange-700 dark:text-orange-400 mt-1">
-                  A rota submission is blocked by pending leave requests that need your decision.
-                  Please approve or reject the outstanding leave so the rota can be submitted.
+                <p className="text-sm text-red-700 dark:text-red-400 mt-1">
+                  The head nurse attempted to submit a rota but pending leave requests are blocking
+                  it. Please approve or reject the outstanding leave requests so the rota can be
+                  submitted.
                 </p>
               </div>
               <Link
                 to="/leave"
-                className="shrink-0 h-9 px-4 rounded-md bg-orange-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-orange-700"
+                className="shrink-0 h-9 px-4 rounded-md bg-red-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-red-700"
+              >
+                Review Leave
+              </Link>
+            </div>
+          )}
+          {/* Alert for chief_matron: general pending leaves (no blocked submission) */}
+          {showGeneralPendingForMatron && (
+            <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+              <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-amber-800 dark:text-amber-300">
+                  {generalPendingCount} pending leave request
+                  {generalPendingCount > 1 ? "s" : ""} awaiting your review
+                </p>
+                <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                  These have not yet blocked a rota submission, but should be reviewed and approved
+                  or rejected in good time.
+                </p>
+              </div>
+              <Link
+                to="/leave"
+                className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-1.5 hover:bg-amber-700"
               >
                 Go to Leave
               </Link>
