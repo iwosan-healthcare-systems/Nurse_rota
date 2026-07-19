@@ -2382,16 +2382,23 @@ function RotaPage() {
                 before the schedule can be generated, so the system knows whether to mark those days
                 as leave or keep the nurse on shift.
               </p>
-              <Link
-                to="/leave"
-                onClick={() => {
-                  setGenOpen(false);
-                  setGenPendingLeaves([]);
-                }}
-                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
-              >
-                Go to Leave requests
-              </Link>
+              {isAdmin ? (
+                <Link
+                  to="/leave"
+                  onClick={() => {
+                    setGenOpen(false);
+                    setGenPendingLeaves([]);
+                  }}
+                  className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
+                >
+                  Go to Leave requests
+                </Link>
+              ) : (
+                <p className="text-red-700 dark:text-red-400 font-medium">
+                  Contact the matron to approve or reject these leave requests before the rota can
+                  be generated.
+                </p>
+              )}
             </div>
           )}
 
@@ -2531,16 +2538,23 @@ function RotaPage() {
                 Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
                 before the schedule can be generated.
               </p>
-              <Link
-                to="/leave"
-                onClick={() => {
-                  setFwDialogOpen(false);
-                  setFwPendingLeaves([]);
-                }}
-                className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
-              >
-                Go to Leave requests
-              </Link>
+              {isAdmin ? (
+                <Link
+                  to="/leave"
+                  onClick={() => {
+                    setFwDialogOpen(false);
+                    setFwPendingLeaves([]);
+                  }}
+                  className="inline-flex items-center gap-1.5 h-7 px-3 rounded-md bg-red-600 hover:bg-red-700 text-white text-xs font-medium"
+                >
+                  Go to Leave requests
+                </Link>
+              ) : (
+                <p className="text-red-700 dark:text-red-400 font-medium">
+                  Contact the matron to approve or reject these leave requests before the rota can
+                  be generated.
+                </p>
+              )}
             </div>
           )}
 
