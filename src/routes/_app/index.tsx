@@ -612,11 +612,11 @@ function ManagementDashboard() {
         : wSlug
           ? wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
           : null;
-    const periodDisplay = new Date(periodStart + "T00:00:00").toLocaleDateString("en-GB", {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
+    const pStart = new Date(periodStart + "T00:00:00");
+    const pEnd = new Date(pStart);
+    pEnd.setDate(pEnd.getDate() + 27);
+    const fmtOpts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" };
+    const periodDisplay = `${pStart.toLocaleDateString("en-GB", fmtOpts)} – ${pEnd.toLocaleDateString("en-GB", { ...fmtOpts, year: "numeric" })}`;
     return { facilityDisplay, wardDisplay, periodDisplay };
   }
 
@@ -692,7 +692,7 @@ function ManagementDashboard() {
                         )}
                         <span className="text-amber-600 dark:text-amber-500">
                           {" "}
-                          · from {parsed.periodDisplay}
+                          · {parsed.periodDisplay}
                         </span>
                       </li>
                     );

@@ -330,7 +330,13 @@ router.patch(
                  FROM shift_assignments sa
                 WHERE sa.nurse_id = $1
                   AND sa.status = 'draft'
-                  AND sa.shift_date BETWEEN $2 AND $3
+                  AND EXISTS (
+                    SELECT 1 FROM shift_assignments sa2
+                     WHERE sa2.nurse_id = sa.nurse_id
+                       AND sa2.status = 'draft'
+                       AND sa2.ward IS NOT DISTINCT FROM sa.ward
+                       AND sa2.shift_date BETWEEN $2 AND $3
+                  )
                 GROUP BY sa.ward`,
               [leave.nurse_id, leave.from_date, leave.to_date],
             );

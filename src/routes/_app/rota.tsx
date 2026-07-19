@@ -220,46 +220,34 @@ function RotaPage() {
     return { facilitySlug, periodStart, wardSlug };
   }
 
-  // Current ward slug for matching notifications: ward name → slug, facility-wide → "facility_wide"
-  const currentWardSlug = selectedWard
-    ? selectedWard.toLowerCase().replace(/\s+/g, "_")
-    : selectedFacilityWide
-      ? "facility_wide"
-      : null;
-
-  // Unread rota-regenerate-needed notifications scoped to current facility + ward/group
-  const regenNotifRows = (() => {
-    if (!allNotifs || !canGenerate) return [];
-    const facilitySlug = effectiveFacility
-      ? effectiveFacility.toLowerCase().replace(/\s+/g, "_")
-      : null;
+  // Return unread regen notifications matching a specific ward/group slug for the current facility.
+  // Old-format keys (empty wardSlug) are treated as matching any target — backward compat.
+  function regenNotifsFor(targetWardSlug: string) {
+    if (!allNotifs || !canGenerate || !effectiveFacility) return [];
+    const fSlug = effectiveFacility.toLowerCase().replace(/\s+/g, "_");
     return allNotifs.filter((r) => {
       if (r.is_read) return false;
       const parsed = parseRegenKey(r.notif_key);
-      if (!parsed) return false;
-      if (facilitySlug && parsed.facilitySlug !== facilitySlug) return false;
-      // When a specific ward or facility-wide group is active, only match that slug
-      if (currentWardSlug && parsed.wardSlug !== currentWardSlug) return false;
+      if (!parsed || parsed.facilitySlug !== fSlug) return false;
+      // Old keys have no ward slug — they match any target (backward compat)
+      if (parsed.wardSlug && parsed.wardSlug !== targetWardSlug) return false;
       return true;
     });
-  })();
-  const regenNeededOnPage = regenNotifRows.length > 0;
+  }
+  function isRegenNeededFor(targetWardSlug: string) {
+    return regenNotifsFor(targetWardSlug).length > 0;
+  }
 
-  async function regenerateFromRota() {
-    if (!user?.id) return;
+  async function regenerateFromRota(targetWardSlug: string, wardName?: string) {
+    if (!user?.id || !effectiveFacility) return;
     setBusy(true);
     try {
-      // Scope regeneration to the currently-viewed ward, or all facility-wide groups if in fw view
-      let scopedNurses = nurses.filter((n) =>
-        effectiveFacility ? n.facility === effectiveFacility : true,
-      );
-      if (selectedWard) {
-        // Ward-specific: only nurses in this ward
+      let scopedNurses = nurses.filter((n) => n.facility === effectiveFacility);
+      if (wardName) {
         scopedNurses = scopedNurses.filter((n) =>
-          n.ward ? parseWards(n.ward).includes(selectedWard) : false,
+          n.ward ? parseWards(n.ward).includes(wardName) : false,
         );
-      } else if (selectedFacilityWide) {
-        // Facility-wide notification covers all non-ward groups — regenerate all of them at once
+      } else if (targetWardSlug === "facility_wide") {
         scopedNurses = scopedNurses.filter((n) =>
           isMatron(n.role) || isGlobalHead(n.role) || isPorterType(n.role) || isInternType(n.role),
         );
@@ -269,14 +257,16 @@ function RotaPage() {
         from_date: ymd(startDate),
         to_date: ymd(endDate),
       });
-      // Mark all matching notifications as read
-      await api.post(
-        "/notifications/upsert",
-        regenNotifRows.map((r) => ({ user_id: user.id, notif_key: r.notif_key, is_read: true })),
-      );
-      refetchNotifs();
+      const toMark = regenNotifsFor(targetWardSlug);
+      if (toMark.length > 0) {
+        await api.post(
+          "/notifications/upsert",
+          toMark.map((r) => ({ user_id: user.id, notif_key: r.notif_key, is_read: true })),
+        );
+        refetchNotifs();
+      }
       qc.invalidateQueries({ queryKey: ["assignments"] });
-      toast.success("Leave re-applied to draft. Review then go to Approvals to submit.");
+      toast.success("Leave re-applied to draft. Review the rota then go to Approvals to submit.");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Regenerate failed");
     } finally {
@@ -1530,31 +1520,6 @@ function RotaPage() {
         }
       />
 
-      {regenNeededOnPage && (
-        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3 mb-2">
-          <RefreshCw className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="font-bold text-amber-800 dark:text-amber-300">
-              Leave approved — rota needs regeneration
-            </p>
-            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              A pending leave request was approved or rejected after this rota was drafted.
-              Click <strong>Regenerate</strong> to apply the latest leave changes, then go to
-              Approvals to submit.
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void regenerateFromRota()}
-            className="shrink-0 h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-amber-700 disabled:opacity-50"
-          >
-            <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-            {busy ? "Regenerating…" : "Regenerate"}
-          </button>
-        </div>
-      )}
-
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
         {/* Period nav — shown once the window is determined, even on empty next period */}
@@ -1790,26 +1755,45 @@ function RotaPage() {
                 </span>
               ) : (
                 <>
-                  {canEdit && wardStatusMap.get(selectedWard) === "draft" && (
-                    <button
-                      type="button"
-                      onClick={handleClear}
-                      disabled={busy}
-                      className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                    >
-                      <Trash2 className="h-4 w-4" /> Clear draft
-                    </button>
-                  )}
-                  {canSubmit && wardStatusMap.get(selectedWard) === "draft" && (
-                    <button
-                      type="button"
-                      onClick={handleSubmitRota}
-                      disabled={busy}
-                      className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                    >
-                      <Send className="h-4 w-4" /> Submit for approval
-                    </button>
-                  )}
+                  {(() => {
+                    const wSlug = selectedWard.toLowerCase().replace(/\s+/g, "_");
+                    const regenNeeded =
+                      wardStatusMap.get(selectedWard) === "draft" && isRegenNeededFor(wSlug);
+                    return regenNeeded ? (
+                      <button
+                        type="button"
+                        onClick={() => void regenerateFromRota(wSlug, selectedWard)}
+                        disabled={busy}
+                        className="h-9 px-4 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        <RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                        {busy ? "Regenerating…" : "Regenerate"}
+                      </button>
+                    ) : (
+                      <>
+                        {canEdit && wardStatusMap.get(selectedWard) === "draft" && (
+                          <button
+                            type="button"
+                            onClick={handleClear}
+                            disabled={busy}
+                            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                          >
+                            <Trash2 className="h-4 w-4" /> Clear draft
+                          </button>
+                        )}
+                        {canSubmit && wardStatusMap.get(selectedWard) === "draft" && (
+                          <button
+                            type="button"
+                            onClick={handleSubmitRota}
+                            disabled={busy}
+                            className="h-9 px-3 rounded-md border text-sm inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                          >
+                            <Send className="h-4 w-4" /> Submit for approval
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                 </>
               )}
             </div>
@@ -1901,31 +1885,48 @@ function RotaPage() {
                         <Wand2 className="h-3 w-3" /> Generate
                       </button>
                     )}
-                    {status === "draft" && canEdit && (
+                    {status === "draft" && isRegenNeededFor("facility_wide") ? (
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleClearFacilityWide(key);
+                          void regenerateFromRota("facility_wide");
                         }}
                         disabled={busy}
-                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
+                        className="h-7 px-2 rounded border text-[11px] font-semibold inline-flex items-center gap-1 bg-amber-600 hover:bg-amber-700 text-white border-amber-600 disabled:opacity-50"
                       >
-                        <Trash2 className="h-3 w-3" /> Clear
+                        <RefreshCw className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+                        {busy ? "…" : "Regenerate"}
                       </button>
-                    )}
-                    {status === "draft" && canSubmit && (
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleSubmitFacilityWide(key);
-                        }}
-                        disabled={busy}
-                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
-                      >
-                        <Send className="h-3 w-3" /> Submit
-                      </button>
+                    ) : (
+                      <>
+                        {status === "draft" && canEdit && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleClearFacilityWide(key);
+                            }}
+                            disabled={busy}
+                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
+                          >
+                            <Trash2 className="h-3 w-3" /> Clear
+                          </button>
+                        )}
+                        {status === "draft" && canSubmit && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleSubmitFacilityWide(key);
+                            }}
+                            disabled={busy}
+                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 hover:bg-muted disabled:opacity-50"
+                          >
+                            <Send className="h-3 w-3" /> Submit
+                          </button>
+                        )}
+                      </>
                     )}
                     {isLocked && (
                       <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
