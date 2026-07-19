@@ -141,6 +141,7 @@ function RotaPage() {
     canEditRota,
     canAutoGenerate,
     canSubmitApproval,
+    isAdmin,
     user,
     nurseFacility,
     nurseId,

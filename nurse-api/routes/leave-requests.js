@@ -316,7 +316,8 @@ router.patch(
               SET shift = 'LEAVE'
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
-              AND shift != 'LEAVE'`,
+              AND shift != 'LEAVE'
+              AND status != 'draft'`,
           [leave.nurse_id, leave.from_date, leave.to_date],
         );
       }
