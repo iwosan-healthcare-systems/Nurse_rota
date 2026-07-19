@@ -314,12 +314,20 @@ router.patch(
     // Update the matching nurse record.
     // Prefer profile_id linkage (reliable); fall back to case-insensitive name
     // match for nurses that haven't been linked yet.
-    await pool.query(
-      `UPDATE nurses SET name = $1, email = lower($2), updated_at = NOW()
-       WHERE profile_id = $3
-          OR (profile_id IS NULL AND $4 IS NOT NULL AND LOWER(name) = LOWER($4))`,
-      [full_name.trim(), email.trim().toLowerCase(), req.params.id, oldName ?? null],
-    );
+    if (oldName) {
+      await pool.query(
+        `UPDATE nurses SET name = $1, email = lower($2), updated_at = NOW()
+         WHERE profile_id = $3
+            OR (profile_id IS NULL AND LOWER(name) = LOWER($4))`,
+        [full_name.trim(), email.trim().toLowerCase(), req.params.id, oldName],
+      );
+    } else {
+      await pool.query(
+        `UPDATE nurses SET name = $1, email = lower($2), updated_at = NOW()
+         WHERE profile_id = $3`,
+        [full_name.trim(), email.trim().toLowerCase(), req.params.id],
+      );
+    }
 
     res.json({ success: true });
   }),

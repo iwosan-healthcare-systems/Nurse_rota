@@ -2389,11 +2389,13 @@ function RotaPage() {
                   {showAllLeaves ? "See less" : `See ${genPendingLeaves.length - 5} more…`}
                 </button>
               )}
-              <p className="text-red-600 dark:text-red-500">
-                Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
-                before the schedule can be generated, so the system knows whether to mark those days
-                as leave or keep the nurse on shift.
-              </p>
+              {isAdmin && (
+                <p className="text-red-600 dark:text-red-500">
+                  Each pending request must be <strong>Approved</strong> or{" "}
+                  <strong>Rejected</strong> before the schedule can be generated, so the system
+                  knows whether to mark those days as leave or keep the nurse on shift.
+                </p>
+              )}
               {isAdmin ? (
                 <Link
                   to="/leave"
@@ -2552,10 +2554,12 @@ function RotaPage() {
                   {showAllFwLeaves ? "See less" : `See ${fwPendingLeaves.length - 5} more…`}
                 </button>
               )}
-              <p className="text-red-600 dark:text-red-500">
-                Each pending request must be <strong>Approved</strong> or <strong>Rejected</strong>{" "}
-                before the schedule can be generated.
-              </p>
+              {isAdmin && (
+                <p className="text-red-600 dark:text-red-500">
+                  Each pending request must be <strong>Approved</strong> or{" "}
+                  <strong>Rejected</strong> before the schedule can be generated.
+                </p>
+              )}
               {isAdmin ? (
                 <Link
                   to="/leave"
