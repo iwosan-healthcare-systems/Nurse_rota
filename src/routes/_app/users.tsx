@@ -73,6 +73,7 @@ type ProfileRow = {
   full_name: string | null;
   is_active: boolean;
   must_change_password: boolean;
+  password_changed_at: string | null;
 };
 
 type RoleRow = { user_id: string; role: string };
@@ -116,6 +117,24 @@ function UsersPage() {
       })) as UserRow[];
     },
   });
+
+  const { data: pwExpiryDays = 30 } = useQuery<number>({
+    queryKey: ["password-expiry-days"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () =>
+      api
+        .get<{ value: number }>("/portal-settings/password_expiry_days")
+        .then((r) => (typeof r.value === "number" ? r.value : 30))
+        .catch(() => 30),
+  });
+
+  function isPasswordExpired(user: UserRow): boolean {
+    if (!user.password_changed_at) return false;
+    if (user.roles.includes("admin")) return false;
+    const changedAt = new Date(user.password_changed_at);
+    const expiresAt = new Date(changedAt.getTime() + pwExpiryDays * 24 * 60 * 60 * 1000);
+    return expiresAt <= new Date();
+  }
 
   async function addRole(userId: string, role: AppRole) {
     const target = users.find((u) => u.id === userId);
@@ -1018,6 +1037,15 @@ function UserRowItem({
           >
             <AlertTriangle className="h-2.5 w-2.5" />
             Needs PW change
+          </span>
+        )}
+        {!user.must_change_password && isPasswordExpired(user) && (
+          <span
+            className="inline-flex items-center gap-0.5 text-[10px] bg-red-100 text-red-700 border border-red-200 rounded-full px-1.5 py-0.5 font-medium mt-0.5"
+            title="Password has expired — user cannot log in until admin resets it"
+          >
+            <AlertTriangle className="h-2.5 w-2.5" />
+            Password expired
           </span>
         )}
       </td>

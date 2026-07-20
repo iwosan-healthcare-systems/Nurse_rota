@@ -244,7 +244,7 @@ router.get(
   requireRole("admin", "cno"),
   wrap(async (req, res) => {
     const { rows } = await pool.query(
-      "SELECT id, email, full_name, is_active, must_change_password, created_at, updated_at FROM profiles ORDER BY full_name",
+      "SELECT id, email, full_name, is_active, must_change_password, password_changed_at, created_at, updated_at FROM profiles ORDER BY full_name",
     );
     res.json(rows);
   }),

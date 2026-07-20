@@ -1402,7 +1402,7 @@ function PasswordExpiryModal({
         current_password: currentPassword,
         new_password: newPassword,
       });
-      toast.success("Password updated — expiry reset");
+      toast.success("Password updated successfully");
       setCurrentPassword("");
       setNewPassword("");
       setConfirm("");
