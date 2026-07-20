@@ -55,6 +55,14 @@ const ALL_ROLES: AppRole[] = [
   "surgical_nurse",
 ];
 
+function isPasswordExpired(user: { password_changed_at: string | null; roles: string[] }, pwExpiryDays: number): boolean {
+  if (!user.password_changed_at) return false;
+  if (user.roles.includes("admin")) return false;
+  const changedAt = new Date(user.password_changed_at);
+  const expiresAt = new Date(changedAt.getTime() + pwExpiryDays * 24 * 60 * 60 * 1000);
+  return expiresAt <= new Date();
+}
+
 const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   admin: "bg-red-100 text-red-700 border-red-200",
   cno: "bg-violet-100 text-violet-700 border-violet-200",
@@ -127,14 +135,6 @@ function UsersPage() {
         .then((r) => (typeof r.value === "number" ? r.value : 30))
         .catch(() => 30),
   });
-
-  function isPasswordExpired(user: UserRow): boolean {
-    if (!user.password_changed_at) return false;
-    if (user.roles.includes("admin")) return false;
-    const changedAt = new Date(user.password_changed_at);
-    const expiresAt = new Date(changedAt.getTime() + pwExpiryDays * 24 * 60 * 60 * 1000);
-    return expiresAt <= new Date();
-  }
 
   async function addRole(userId: string, role: AppRole) {
     const target = users.find((u) => u.id === userId);
@@ -352,6 +352,7 @@ function UsersPage() {
                     <UserRowItem
                       key={u.id}
                       user={u}
+                      pwExpiryDays={pwExpiryDays}
                       onAdd={addRole}
                       onRemove={removeRole}
                       onDelete={deleteUser}
@@ -1005,6 +1006,7 @@ function formatRelativeTime(iso: string | null): string {
 
 function UserRowItem({
   user,
+  pwExpiryDays,
   onAdd,
   onRemove,
   onDelete,
@@ -1014,6 +1016,7 @@ function UserRowItem({
   onEdit,
 }: {
   user: UserRow;
+  pwExpiryDays: number;
   onAdd: (id: string, role: AppRole) => void;
   onRemove: (id: string, role: AppRole) => void;
   onDelete: (user: UserRow) => void;
@@ -1039,7 +1042,7 @@ function UserRowItem({
             Needs PW change
           </span>
         )}
-        {!user.must_change_password && isPasswordExpired(user) && (
+        {!user.must_change_password && isPasswordExpired(user, pwExpiryDays) && (
           <span
             className="inline-flex items-center gap-0.5 text-[10px] bg-red-100 text-red-700 border border-red-200 rounded-full px-1.5 py-0.5 font-medium mt-0.5"
             title="Password has expired — user cannot log in until admin resets it"
