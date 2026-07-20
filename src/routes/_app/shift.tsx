@@ -1076,9 +1076,19 @@ type AllShiftLog = {
   is_locum: boolean;
 };
 
+type EndModal = {
+  nurseId: string;
+  nurseName: string;
+  logId: string;
+  startedAt: string;
+  isLocum: boolean;
+};
+
 function AllNursesShiftView() {
   const [search, setSearch] = useState("");
-  const [ending, setEnding] = useState<string | null>(null);
+  const [endModal, setEndModal] = useState<EndModal | null>(null);
+  const [endTimeInput, setEndTimeInput] = useState("");
+  const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
 
   const lookback = new Date();
@@ -1099,7 +1109,7 @@ function AllNursesShiftView() {
   // Build per-nurse totals
   const hoursMap = new Map<string, number>();
   const shiftsMap = new Map<string, number>();
-  const activeMap = new Map<string, { logId: string; expectedEnd: string; isLocum: boolean }>();
+  const activeMap = new Map<string, { logId: string; startedAt: string; expectedEnd: string; isLocum: boolean }>();
   const lateMap = new Map<string, number>();
   for (const l of logs) {
     if (l.hours_logged != null) {
@@ -1108,6 +1118,7 @@ function AllNursesShiftView() {
     } else if (!l.ended_at) {
       activeMap.set(l.nurse_id, {
         logId: l.id,
+        startedAt: l.started_at,
         expectedEnd: l.expected_end_at,
         isLocum: l.is_locum,
       });
@@ -1117,32 +1128,44 @@ function AllNursesShiftView() {
     }
   }
 
-  async function handleAdminEndShift(nurseId: string) {
+  function openEndModal(nurseId: string, nurseName: string) {
     const active = activeMap.get(nurseId);
     if (!active) return;
-    setEnding(nurseId);
+    // Default end time to now, formatted for datetime-local input
+    const now = new Date();
+    const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+    setEndTimeInput(local);
+    setEndModal({ nurseId, nurseName, logId: active.logId, startedAt: active.startedAt, isLocum: active.isLocum });
+  }
+
+  async function confirmAdminEndShift() {
+    if (!endModal || !endTimeInput) return;
+    setSaving(true);
     try {
-      const endedAt = new Date(active.expectedEnd);
-      const startedAt = logs.find((l) => l.id === active.logId)?.started_at;
-      const hours = startedAt
-        ? Math.round(((endedAt.getTime() - new Date(startedAt).getTime()) / 3600000) * 100) / 100
-        : null;
-      await api.patch(`/shift-logs/${active.logId}`, {
+      const endedAt = new Date(endTimeInput);
+      const startedAt = new Date(endModal.startedAt);
+      if (endedAt <= startedAt) {
+        toast.error("End time must be after shift start time");
+        return;
+      }
+      const hours = Math.round(((endedAt.getTime() - startedAt.getTime()) / 3600000) * 100) / 100;
+      await api.patch(`/shift-logs/${endModal.logId}`, {
         ended_at: endedAt.toISOString(),
         hours_logged: hours,
       });
-      if (!active.isLocum && hours) {
+      if (!endModal.isLocum && hours > 0) {
         await api
-          .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
+          .post("/rpc/increment-nurse-hours", { p_nurse_id: endModal.nurseId, p_hours: hours })
           .catch(() => {});
       }
-      toast.success("Shift ended");
+      toast.success("Shift ended and hours recorded");
       qc.invalidateQueries({ queryKey: ["all-shift-logs-current"] });
       qc.invalidateQueries({ queryKey: ["nurses"] });
+      setEndModal(null);
     } catch {
       toast.error("Failed to end shift");
     } finally {
-      setEnding(null);
+      setSaving(false);
     }
   }
 
@@ -1269,11 +1292,10 @@ function AllNursesShiftView() {
                         </span>
                         <button
                           type="button"
-                          onClick={() => handleAdminEndShift(n.id)}
-                          disabled={ending === n.id}
-                          className="text-xs px-2 py-0.5 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground disabled:opacity-50 transition-colors"
+                          onClick={() => openEndModal(n.id, n.name)}
+                          className="text-xs px-2 py-0.5 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
                         >
-                          {ending === n.id ? "Ending…" : "End"}
+                          End shift
                         </button>
                       </div>
                     ) : hrs > 0 ? (
@@ -1289,6 +1311,71 @@ function AllNursesShiftView() {
         </table>
         </div>
       </div>
+
+      {/* ── Admin end-shift modal ─────────────────────────────────────────── */}
+      {endModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-card border rounded-xl shadow-xl p-6 w-full max-w-sm space-y-4">
+            <h2 className="font-semibold text-base">End shift for {endModal.nurseName}</h2>
+            <div className="space-y-1">
+              <p className="text-xs text-muted-foreground uppercase tracking-wide font-medium">
+                Shift started
+              </p>
+              <p className="text-sm font-medium">
+                {new Date(endModal.startedAt).toLocaleTimeString("en-GB", {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </p>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground uppercase tracking-wide font-medium" htmlFor="end-time-input">
+                Actual end time
+              </label>
+              <input
+                id="end-time-input"
+                type="datetime-local"
+                value={endTimeInput}
+                onChange={(e) => setEndTimeInput(e.target.value)}
+                className="h-9 w-full px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
+              />
+              {endTimeInput && (
+                <p className="text-xs text-muted-foreground">
+                  Hours logged:{" "}
+                  <span className="font-semibold text-foreground">
+                    {fmtHours(
+                      Math.max(
+                        0,
+                        Math.round(
+                          ((new Date(endTimeInput).getTime() - new Date(endModal.startedAt).getTime()) / 3600000) * 100,
+                        ) / 100,
+                      ),
+                    )}
+                  </span>
+                </p>
+              )}
+            </div>
+            <div className="flex gap-2 justify-end">
+              <button
+                type="button"
+                onClick={() => setEndModal(null)}
+                disabled={saving}
+                className="h-9 px-4 rounded-md border text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmAdminEndShift}
+                disabled={saving || !endTimeInput}
+                className="h-9 px-4 rounded-md bg-destructive text-destructive-foreground text-sm font-medium hover:bg-destructive/90 disabled:opacity-50"
+              >
+                {saving ? "Saving…" : "Confirm end"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

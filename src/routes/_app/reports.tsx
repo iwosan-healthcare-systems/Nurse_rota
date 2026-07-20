@@ -295,6 +295,15 @@ function ReportsContent() {
   const [leavePageSize, setLeavePageSize] = useState(20);
   const [missedPage, setMissedPage] = useState(1);
   const [missedPageSize, setMissedPageSize] = useState(20);
+  // Date range filters per tab
+  const [hoursDateFrom, setHoursDateFrom] = useState("");
+  const [hoursDateTo, setHoursDateTo] = useState("");
+  const [locumDateFrom, setLocumDateFrom] = useState("");
+  const [locumDateTo, setLocumDateTo] = useState("");
+  const [leaveDateFrom, setLeaveDateFrom] = useState("");
+  const [leaveDateTo, setLeaveDateTo] = useState("");
+  const [missedDateFrom, setMissedDateFrom] = useState("");
+  const [missedDateTo, setMissedDateTo] = useState("");
   const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
@@ -405,32 +414,76 @@ function ReportsContent() {
     [missedShiftLogs, scopedNurseIds],
   );
 
-  // Reset all paginated tables to page 1 when the facility filter changes
+  // Date-filtered views for the four heavy-table tabs
+  const filteredShiftLogs = useMemo(() => {
+    let data = scopedShiftLogs;
+    if (hoursDateFrom) data = data.filter((l) => l.shift_date >= hoursDateFrom);
+    if (hoursDateTo) data = data.filter((l) => l.shift_date <= hoursDateTo);
+    return data;
+  }, [scopedShiftLogs, hoursDateFrom, hoursDateTo]);
+
+  const filteredLocumRequests = useMemo(() => {
+    let data = scopedLocumRequests;
+    if (locumDateFrom) data = data.filter((r) => r.shift_date.slice(0, 10) >= locumDateFrom);
+    if (locumDateTo) data = data.filter((r) => r.shift_date.slice(0, 10) <= locumDateTo);
+    return data;
+  }, [scopedLocumRequests, locumDateFrom, locumDateTo]);
+
+  const filteredScopeLeave = useMemo(() => {
+    let data = scopedLeave;
+    if (leaveDateFrom) data = data.filter((l) => l.to_date >= leaveDateFrom);
+    if (leaveDateTo) data = data.filter((l) => l.from_date <= leaveDateTo);
+    return data;
+  }, [scopedLeave, leaveDateFrom, leaveDateTo]);
+
+  const filteredLeaveOnly = useMemo(
+    () => filteredScopeLeave.filter((l) => l.type !== "Swap"),
+    [filteredScopeLeave],
+  );
+
+  const filteredMissedLogs = useMemo(() => {
+    let data = scopedMissedLogs;
+    if (missedDateFrom) data = data.filter((l) => l.shift_date >= missedDateFrom);
+    if (missedDateTo) data = data.filter((l) => l.shift_date <= missedDateTo);
+    return data;
+  }, [scopedMissedLogs, missedDateFrom, missedDateTo]);
+
+  // Reset all paginated tables to page 1 when the facility filter or date filters change
   useEffect(() => {
     setHoursPage(1);
     setLocumPage(1);
     setLeavePage(1);
     setMissedPage(1);
-  }, [reportFacility]);
+  }, [
+    reportFacility,
+    hoursDateFrom,
+    hoursDateTo,
+    locumDateFrom,
+    locumDateTo,
+    leaveDateFrom,
+    leaveDateTo,
+    missedDateFrom,
+    missedDateTo,
+  ]);
 
-  // Paginate the three heavy tables (hooks must be unconditional)
+  // Paginate the four heavy tables (hooks must be unconditional)
   const { pageItems: pagedShiftLogs, totalPages: hoursTotalPages } = usePagination(
-    scopedShiftLogs,
+    filteredShiftLogs,
     hoursPageSize,
     hoursPage,
   );
   const { pageItems: pagedLocumRequests, totalPages: locumTotalPages } = usePagination(
-    scopedLocumRequests,
+    filteredLocumRequests,
     locumPageSize,
     locumPage,
   );
   const { pageItems: pagedLeaveOnly, totalPages: leaveTotalPages } = usePagination(
-    reportLeaveOnly,
+    filteredLeaveOnly,
     leavePageSize,
     leavePage,
   );
   const { pageItems: pagedMissedLogs, totalPages: missedTotalPages } = usePagination(
-    scopedMissedLogs,
+    filteredMissedLogs,
     missedPageSize,
     missedPage,
   );
@@ -477,6 +530,35 @@ function ReportsContent() {
     for (const log of locumShiftLogs) m.set(`${log.nurse_id}|${log.shift_date.slice(0, 10)}`, log);
     return m;
   }, [locumShiftLogs]);
+
+  // Filtered locum stats (driven by filteredLocumRequests so stats match the date filter)
+  const filteredLocumHoursMap = useMemo(() => {
+    const hours = new Map<string, number>();
+    for (const r of filteredLocumRequests) {
+      if (!r.accepted_by_nurse_id) continue;
+      const log = locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`);
+      if (log?.hours_logged != null)
+        hours.set(
+          r.accepted_by_nurse_id,
+          (hours.get(r.accepted_by_nurse_id) ?? 0) + Number(log.hours_logged),
+        );
+    }
+    return hours;
+  }, [filteredLocumRequests, locumLogMap]);
+
+  const filteredLocumShiftCountMap = useMemo(() => {
+    const shifts = new Map<string, number>();
+    for (const r of filteredLocumRequests) {
+      if (r.accepted_by_nurse_id)
+        shifts.set(r.accepted_by_nurse_id, (shifts.get(r.accepted_by_nurse_id) ?? 0) + 1);
+    }
+    return shifts;
+  }, [filteredLocumRequests]);
+
+  const filteredLocumTotalHours = useMemo(
+    () => [...filteredLocumHoursMap.values()].reduce((s, h) => s + h, 0),
+    [filteredLocumHoursMap],
+  );
 
   const { locumHoursMap, locumShiftCountMap } = useMemo(() => {
     const hours = new Map<string, number>();
@@ -655,10 +737,10 @@ function ReportsContent() {
   }
 
   async function exportDetailedLogs() {
-    if (scopedShiftLogs.length === 0) return toast.error("No shift logs to export");
+    if (filteredShiftLogs.length === 0) return toast.error("No shift logs to export");
     try {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-      const rows = scopedShiftLogs.map((l) => {
+      const rows = filteredShiftLogs.map((l) => {
         const nurse = nurseMap.get(l.nurse_id);
         return {
           Name: nurse?.name ?? "Unknown",
@@ -711,9 +793,9 @@ function ReportsContent() {
   }
 
   async function exportLocumReport() {
-    if (scopedLocumRequests.length === 0) return toast.error("No locum shifts to export");
+    if (filteredLocumRequests.length === 0) return toast.error("No locum shifts to export");
     try {
-      const rows = scopedLocumRequests.map((r) => {
+      const rows = filteredLocumRequests.map((r) => {
         const log = r.accepted_by_nurse_id
           ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
           : undefined;
@@ -746,9 +828,9 @@ function ReportsContent() {
   }
 
   async function exportLeaveRequests() {
-    const leaveOnly = scopedLeave.filter((l) => l.type !== "Swap");
-    const switches = scopedLeave.filter((l) => l.type === "Swap");
-    if (scopedLeave.length === 0) return toast.error("No leave requests to export");
+    const leaveOnly = filteredScopeLeave.filter((l) => l.type !== "Swap");
+    const switches = filteredScopeLeave.filter((l) => l.type === "Swap");
+    if (filteredScopeLeave.length === 0) return toast.error("No leave requests to export");
     try {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
 
@@ -797,10 +879,10 @@ function ReportsContent() {
   }
 
   async function exportMissedShifts() {
-    if (scopedMissedLogs.length === 0) return toast.error("No missed shifts to export");
+    if (filteredMissedLogs.length === 0) return toast.error("No missed shifts to export");
     try {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-      const rows = scopedMissedLogs.map((l) => {
+      const rows = filteredMissedLogs.map((l) => {
         const nurse = nurseMap.get(l.nurse_id);
         return {
           Date: fmtDate(l.shift_date),
@@ -1259,29 +1341,60 @@ ${sections}
       {/* ── Shift Hours ──────────────────────────────────────────────────── */}
       {tab === "hours" && (
         <div className="space-y-4">
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={exportCurrentHours}
-              className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Summary Excel
-            </button>
-            <button
-              type="button"
-              onClick={exportDetailedLogs}
-              className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-            >
-              <Download className="h-4 w-4" /> Detailed Logs
-            </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-muted-foreground">Date range:</span>
+            <input
+              type="date"
+              value={hoursDateFrom}
+              onChange={(e) => { setHoursDateFrom(e.target.value); setHoursPage(1); }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            />
+            <span className="text-sm text-muted-foreground">—</span>
+            <input
+              type="date"
+              value={hoursDateTo}
+              onChange={(e) => { setHoursDateTo(e.target.value); setHoursPage(1); }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            />
+            {(hoursDateFrom || hoursDateTo) && (
+              <button
+                type="button"
+                onClick={() => { setHoursDateFrom(""); setHoursDateTo(""); }}
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Clear
+              </button>
+            )}
+            <div className="ml-auto flex gap-2">
+              <button
+                type="button"
+                onClick={exportCurrentHours}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Summary Excel
+              </button>
+              <button
+                type="button"
+                onClick={exportDetailedLogs}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+              >
+                <Download className="h-4 w-4" /> Detailed Logs
+              </button>
+            </div>
           </div>
 
-          {scopedShiftLogs.length === 0 ? (
-            <EmptyState
-              icon={<Clock className="h-6 w-6" />}
-              title="No shift logs"
-              description="Shift logs appear here once nurses start tracking their shifts."
-            />
+          {filteredShiftLogs.length === 0 ? (
+            scopedShiftLogs.length === 0 ? (
+              <EmptyState
+                icon={<Clock className="h-6 w-6" />}
+                title="No shift logs"
+                description="Shift logs appear here once nurses start tracking their shifts."
+              />
+            ) : (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                No shift logs found for the selected date range.
+              </div>
+            )
           ) : (
             <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
               <div className="overflow-x-auto">
@@ -1380,7 +1493,7 @@ ${sections}
                 page={hoursPage}
                 totalPages={hoursTotalPages}
                 pageSize={hoursPageSize}
-                totalItems={scopedShiftLogs.length}
+                totalItems={filteredShiftLogs.length}
                 onPage={setHoursPage}
                 onPageSize={(s) => {
                   setHoursPageSize(s);
@@ -1397,44 +1510,75 @@ ${sections}
         <div className="space-y-4">
           {/* Stats */}
           <div className="grid grid-cols-2 lg:grid-cols-3 gap-3 sm:gap-4">
-            <Stat icon={Stethoscope} label="Shifts Filled" value={scopedLocumRequests.length} />
-            <Stat icon={Clock} label="Total Hours" value={totalLocumHours.toFixed(1)} />
+            <Stat icon={Stethoscope} label="Shifts Filled" value={filteredLocumRequests.length} />
+            <Stat icon={Clock} label="Total Hours" value={filteredLocumTotalHours.toFixed(1)} />
             <Stat
               icon={Users}
               label="Nurses Used"
-              value={new Set(scopedLocumRequests.map((r) => r.accepted_by_nurse_id)).size}
+              value={new Set(filteredLocumRequests.map((r) => r.accepted_by_nurse_id)).size}
             />
           </div>
 
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={exportLocumReport}
-              className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export Locum Report
-            </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-muted-foreground">Date range:</span>
+            <input
+              type="date"
+              value={locumDateFrom}
+              onChange={(e) => { setLocumDateFrom(e.target.value); setLocumPage(1); }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            />
+            <span className="text-sm text-muted-foreground">—</span>
+            <input
+              type="date"
+              value={locumDateTo}
+              onChange={(e) => { setLocumDateTo(e.target.value); setLocumPage(1); }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            />
+            {(locumDateFrom || locumDateTo) && (
+              <button
+                type="button"
+                onClick={() => { setLocumDateFrom(""); setLocumDateTo(""); }}
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Clear
+              </button>
+            )}
+            <div className="ml-auto">
+              <button
+                type="button"
+                onClick={exportLocumReport}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export Locum Report
+              </button>
+            </div>
           </div>
 
-          {scopedLocumRequests.length === 0 ? (
-            <EmptyState
-              icon={<Stethoscope className="h-6 w-6" />}
-              title="No locum shifts filled yet"
-              description="Hours appear here once nurses accept locum invitations and complete their shifts."
-            />
+          {filteredLocumRequests.length === 0 ? (
+            scopedLocumRequests.length === 0 ? (
+              <EmptyState
+                icon={<Stethoscope className="h-6 w-6" />}
+                title="No locum shifts filled yet"
+                description="Hours appear here once nurses accept locum invitations and complete their shifts."
+              />
+            ) : (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                No locum shifts found for the selected date range.
+              </div>
+            )
           ) : (
             <>
               {/* Per-nurse summary */}
               <div className="bg-card border rounded-xl p-5 shadow-soft">
                 <h2 className="font-semibold mb-4">Per-Nurse Summary</h2>
                 <div className="space-y-2">
-                  {[...locumHoursMap.entries()]
+                  {[...filteredLocumHoursMap.entries()]
                     .sort((a, b) => b[1] - a[1])
                     .map(([nurseId, hrs]) => {
                       const name =
-                        scopedLocumRequests.find((r) => r.accepted_by_nurse_id === nurseId)
+                        filteredLocumRequests.find((r) => r.accepted_by_nurse_id === nurseId)
                           ?.accepted_by_nurse_name ?? "Unknown";
-                      const shifts = locumShiftCountMap.get(nurseId) ?? 0;
+                      const shifts = filteredLocumShiftCountMap.get(nurseId) ?? 0;
                       return (
                         <div key={nurseId} className="flex items-center gap-3 text-sm">
                           <div className="w-40 truncate font-medium">{name}</div>
@@ -1442,7 +1586,7 @@ ${sections}
                             <div
                               className="h-full rounded-full bg-violet-400"
                               style={{
-                                width: `${Math.min(Math.round((hrs / Math.max(totalLocumHours, 1)) * 100), 100)}%`,
+                                width: `${Math.min(Math.round((hrs / Math.max(filteredLocumTotalHours, 1)) * 100), 100)}%`,
                               }}
                             />
                           </div>
@@ -1547,7 +1691,7 @@ ${sections}
                   page={locumPage}
                   totalPages={locumTotalPages}
                   pageSize={locumPageSize}
-                  totalItems={scopedLocumRequests.length}
+                  totalItems={filteredLocumRequests.length}
                   onPage={setLocumPage}
                   onPageSize={(s) => {
                     setLocumPageSize(s);
@@ -1563,8 +1707,8 @@ ${sections}
       {/* ── Leave & Requests ─────────────────────────────────────────────── */}
       {tab === "leave" &&
         (() => {
-          // Use component-level reportLeaveOnly / pagedLeaveOnly so pagination state is stable
-          const leaveOnly = reportLeaveOnly;
+          // Use filteredLeaveOnly so pagination and stats respect the date filter
+          const leaveOnly = filteredLeaveOnly;
           const switches = scopedLeave.filter((l: { type: string }) => l.type === "Swap");
           const pending = leaveOnly.filter((l: { status: string }) => l.status === "Pending");
           const approved = leaveOnly.filter((l: { status: string }) => l.status === "Approved");
@@ -1577,14 +1721,39 @@ ${sections}
 
           return (
             <>
-              <div className="flex justify-end mb-4">
-                <button
-                  type="button"
-                  onClick={exportLeaveRequests}
-                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-                >
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
-                </button>
+              <div className="flex items-center gap-2 flex-wrap mb-4">
+                <span className="text-sm text-muted-foreground">Date range:</span>
+                <input
+                  type="date"
+                  value={leaveDateFrom}
+                  onChange={(e) => { setLeaveDateFrom(e.target.value); setLeavePage(1); }}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                />
+                <span className="text-sm text-muted-foreground">—</span>
+                <input
+                  type="date"
+                  value={leaveDateTo}
+                  onChange={(e) => { setLeaveDateTo(e.target.value); setLeavePage(1); }}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                />
+                {(leaveDateFrom || leaveDateTo) && (
+                  <button
+                    type="button"
+                    onClick={() => { setLeaveDateFrom(""); setLeaveDateTo(""); }}
+                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                  >
+                    Clear
+                  </button>
+                )}
+                <div className="ml-auto">
+                  <button
+                    type="button"
+                    onClick={exportLeaveRequests}
+                    className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                  >
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
                 <Stat icon={PlaneTakeoff} label="Total Leave Requests" value={leaveOnly.length} />
@@ -1816,24 +1985,58 @@ ${sections}
           new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
         return (
           <div className="space-y-4">
-            <div className="flex items-center justify-between gap-2 flex-wrap">
-              <p className="text-sm text-muted-foreground">
-                Shifts where no clock-in was recorded.{" "}
-                <span className="font-medium text-foreground">{scopedMissedLogs.length}</span> missed{" "}
-                {reportFacility ? `in ${reportFacility}` : "across all facilities"}.
-              </p>
-              {scopedMissedLogs.length > 0 && (
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-sm text-muted-foreground">Date range:</span>
+              <input
+                type="date"
+                value={missedDateFrom}
+                onChange={(e) => { setMissedDateFrom(e.target.value); setMissedPage(1); }}
+                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+              />
+              <span className="text-sm text-muted-foreground">—</span>
+              <input
+                type="date"
+                value={missedDateTo}
+                onChange={(e) => { setMissedDateTo(e.target.value); setMissedPage(1); }}
+                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+              />
+              {(missedDateFrom || missedDateTo) && (
+                <button
+                  type="button"
+                  onClick={() => { setMissedDateFrom(""); setMissedDateTo(""); }}
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                >
+                  Clear
+                </button>
+              )}
+              {filteredMissedLogs.length > 0 && (
                 <button
                   type="button"
                   onClick={exportMissedShifts}
-                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted ml-auto"
                 >
                   <Download className="h-4 w-4" /> Export Excel
                 </button>
               )}
             </div>
-            {scopedMissedLogs.length === 0 ? (
-              <div className="py-16 text-center text-sm text-muted-foreground">No missed shifts recorded.</div>
+            <p className="text-sm text-muted-foreground">
+              Shifts where no clock-in was recorded.{" "}
+              <span className="font-medium text-foreground">{filteredMissedLogs.length}</span> missed{" "}
+              {reportFacility ? `in ${reportFacility}` : "across all facilities"}
+              {(missedDateFrom || missedDateTo) && (
+                <span>
+                  {" "}(filtered
+                  {missedDateFrom ? ` from ${fmtDate(missedDateFrom)}` : ""}
+                  {missedDateTo ? ` to ${fmtDate(missedDateTo)}` : ""})
+                </span>
+              )}.
+            </p>
+            {filteredMissedLogs.length === 0 ? (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                {scopedMissedLogs.length === 0
+                  ? "No missed shifts recorded."
+                  : "No missed shifts found for the selected date range."}
+              </div>
             ) : (
               <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
@@ -1879,7 +2082,7 @@ ${sections}
                   page={missedPage}
                   totalPages={missedTotalPages}
                   pageSize={missedPageSize}
-                  totalItems={scopedMissedLogs.length}
+                  totalItems={filteredMissedLogs.length}
                   onPage={setMissedPage}
                   onPageSize={(s) => { setMissedPageSize(s); setMissedPage(1); }}
                 />
