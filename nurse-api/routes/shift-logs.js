@@ -105,6 +105,9 @@ router.post(
       swap_note,
       is_leave,
       leave_request_id,
+      is_missed,
+      ended_at,
+      hours_logged,
     } = req.body;
 
     if (!shift_date || !shift_type || !started_at || !expected_end_at || !period_start)
@@ -129,8 +132,9 @@ router.post(
       `INSERT INTO shift_logs
      (nurse_id, shift_date, shift_type, started_at, expected_end_at, period_start,
       is_late, late_minutes, late_reason, latitude, longitude, ip_address,
-      is_locum, locum_request_id, is_swap, swap_note, is_leave, leave_request_id)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+      is_locum, locum_request_id, is_swap, swap_note, is_leave, leave_request_id,
+      is_missed, ended_at, hours_logged)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
      RETURNING *`,
       [
         resolvedNurseId,
@@ -151,6 +155,9 @@ router.post(
         swap_note || null,
         is_leave || false,
         leave_request_id || null,
+        is_missed || false,
+        ended_at ?? null,
+        hours_logged != null ? hours_logged : null,
       ],
     );
     res.status(201).json(rows[0]);

@@ -232,7 +232,7 @@ function ShiftPage() {
   // (a night shift still within its 17:00→08:00 window), so we query that date's log so the
   // nurse sees the correct state (active / completed / missed) rather than switching to today.
   const assignmentShiftDate = queryAssignment?.shift_date?.slice(0, 10) ?? today;
-  const { data: shiftLog } = useQuery<ShiftLog | null>({
+  const { data: shiftLog, isLoading: shiftLogLoading } = useQuery<ShiftLog | null>({
     queryKey: ["my-shift-log", nurseId, assignmentShiftDate],
     enabled: !!nurseId,
     queryFn: () =>
@@ -375,7 +375,8 @@ function ShiftPage() {
     // Skip management roles and matrons (synthetic assignments)
     if (activeRole && ["admin", "cno", "hr_admin"].includes(activeRole)) return;
     if (isMatronNurse) return;
-    if (shiftLog || missedRecordedRef.current || !nurseId) return;
+    // Wait until the shift log query has settled — never record while still loading.
+    if (shiftLogLoading || shiftLog || missedRecordedRef.current || !nurseId) return;
 
     // Determine the effective shift from locum or published assignment
     const effectiveShift = todayLocum?.shift ?? queryAssignment?.shift ?? null;
@@ -425,13 +426,14 @@ function ShiftPage() {
           locum_request_id: todayLocum?.id ?? null,
           is_swap: false,
           swap_note: null,
+          is_missed: true,
         })
         .catch(() => { missedRecordedRef.current = false; });
       qc.invalidateQueries({ queryKey: ["my-shift-log"] });
       qc.invalidateQueries({ queryKey: ["my-period-logs"] });
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [now]);
+  }, [now, shiftLogLoading]);
 
   // Only CNO, HR/Admin and System Admin see the all-nurses management view.
   // Chief Matron and Head Nurse work regular shifts so they get the personal tracker.
@@ -601,9 +603,10 @@ function ShiftPage() {
   const hasShiftToday = !!(assignment && isWorkShift(assignment.shift));
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;
-  // Shift window closed without a log being started → missed
+  // Shift window closed without a log being started → missed.
+  // Guard against the loading state: never show missed while shiftLog is still fetching.
   const isShiftMissed =
-    !shiftLog && hasShiftToday && isSchedulePublished && !!shiftEndTime && now >= shiftEndTime;
+    !shiftLogLoading && !shiftLog && hasShiftToday && isSchedulePublished && !!shiftEndTime && now >= shiftEndTime;
   // 0-hour log created by auto-record (late_reason sentinel)
   const isMissedLog =
     !!shiftLog && !!shiftLog.ended_at &&
