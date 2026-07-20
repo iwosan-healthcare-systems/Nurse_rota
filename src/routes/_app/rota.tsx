@@ -1448,6 +1448,9 @@ function RotaPage() {
     if (!canEdit) return;
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
     if (existing && existing.status !== "draft") return;
+    // LEAVE (approved leave) and LO (accepted locum) cells are locked — regenerate to change them.
+    if (existing?.shift === "LEAVE") return;
+    if (locumCellSet.has(`${nurseId}|${dateStr}`)) return;
     const rect = e.currentTarget.getBoundingClientRect();
     // Picker is ~220px wide, 40px tall. Clamp so it stays inside the viewport.
     const pickerW = 220;
@@ -1503,8 +1506,11 @@ function RotaPage() {
 
   async function swapCells(a: Assignment, b: Assignment) {
     if (!canEdit) return;
-    // Only swap cells that are both still in draft status.
+    // Only swap cells that are both still in draft status, and neither is LEAVE.
     if (a.status !== "draft" || b.status !== "draft") return;
+    if (a.shift === "LEAVE" || b.shift === "LEAVE") return;
+    if (locumCellSet.has(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`)) return;
+    if (locumCellSet.has(`${b.nurse_id}|${b.shift_date.slice(0, 10)}`)) return;
 
     // Optimistic: swap both shifts in the cache immediately.
     qc.setQueriesData<Assignment[]>({ queryKey: ["assignments"] }, (old) =>
@@ -2216,10 +2222,23 @@ function RotaPage() {
                             >
                               <button
                                 type="button"
-                                draggable={!!cell && canEdit && cell.status === "draft"}
+                                draggable={
+                                  !!cell &&
+                                  canEdit &&
+                                  cell.status === "draft" &&
+                                  cell.shift !== "LEAVE" &&
+                                  !isLocum
+                                }
                                 onClick={(e) => openShiftPicker(e, n.id, dateStr, n.ward)}
                                 onDragStart={(e) => {
-                                  if (!cell || !canEdit || cell.status !== "draft") return;
+                                  if (
+                                    !cell ||
+                                    !canEdit ||
+                                    cell.status !== "draft" ||
+                                    cell.shift === "LEAVE" ||
+                                    isLocum
+                                  )
+                                    return;
                                   // Write to ref immediately — visible to all handlers this frame
                                   draggingRef.current = cell;
                                   setDragging(cell);
@@ -2233,12 +2252,15 @@ function RotaPage() {
                                 onDragOver={(e) => {
                                   // Use ref — guaranteed current even before React re-renders.
                                   // Allow dropping on any OTHER draft cell (any date, any nurse row).
+                                  // Never allow dropping onto a LEAVE or LO cell.
                                   const src = draggingRef.current;
                                   if (
                                     src &&
                                     cell &&
                                     src.id !== cell.id &&
-                                    cell.status === "draft"
+                                    cell.status === "draft" &&
+                                    cell.shift !== "LEAVE" &&
+                                    !isLocum
                                   ) {
                                     e.preventDefault();
                                     e.dataTransfer.dropEffect = "move";
@@ -2247,7 +2269,13 @@ function RotaPage() {
                                 onDrop={(e) => {
                                   e.preventDefault();
                                   const src = draggingRef.current;
-                                  if (src && cell && src.id !== cell.id) {
+                                  if (
+                                    src &&
+                                    cell &&
+                                    src.id !== cell.id &&
+                                    cell.shift !== "LEAVE" &&
+                                    !isLocum
+                                  ) {
                                     swapCells(src, cell);
                                   }
                                   draggingRef.current = null;
@@ -2264,7 +2292,7 @@ function RotaPage() {
                                     cell?.status === "draft" &&
                                     "ring-2 ring-primary scale-105",
                                   dragging && dragging.id === cell?.id && "opacity-40",
-                                  isWindowLocked
+                                  isWindowLocked || cell?.shift === "LEAVE" || isLocum
                                     ? "cursor-not-allowed opacity-80"
                                     : !canEdit
                                       ? "cursor-default"
@@ -2275,9 +2303,13 @@ function RotaPage() {
                                     ? windowLockStatus === "published"
                                       ? "Published — this schedule is locked"
                                       : "Submitted for approval — return to draft to edit"
-                                    : canEdit
-                                      ? "Click to cycle · drag to swap with same-day shift"
-                                      : "View only"
+                                    : cell?.shift === "LEAVE"
+                                      ? "Approved leave — regenerate the rota to update"
+                                      : isLocum
+                                        ? "Accepted locum shift — cannot be manually edited"
+                                        : canEdit
+                                          ? "Click to cycle · drag to swap with same-day shift"
+                                          : "View only"
                                 }
                               >
                                 {cell ? (isLocum ? "LO" : cell.shift) : "—"}
