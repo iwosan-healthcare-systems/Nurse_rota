@@ -180,7 +180,7 @@ function ShiftPage() {
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
-      if (new Date().getHours() < 8) {
+      if (new Date().getHours() < 12) {
         const yd = new Date();
         yd.setDate(yd.getDate() - 1);
         const yesterdayStr = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
