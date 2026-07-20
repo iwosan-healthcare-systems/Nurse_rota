@@ -16,7 +16,7 @@ import {
   type GpsSettings,
 } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
-import { Check, X, Pencil, RotateCcw, ShieldAlert, Lock, MapPin, Plus, Trash2 } from "lucide-react";
+import { Check, X, Pencil, RotateCcw, ShieldAlert, Lock, MapPin, Plus, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -67,6 +67,12 @@ function MenuPermissionsPage() {
   const [gpsSaving, setGpsSaving] = useState(false);
   const [newFacilityName, setNewFacilityName] = useState("");
 
+  // Password expiry settings
+  const [pwExpiryDays, setPwExpiryDays] = useState(30);
+  const [pwExpiryEditing, setPwExpiryEditing] = useState(false);
+  const [pwExpiryDraft, setPwExpiryDraft] = useState(30);
+  const [pwExpirySaving, setPwExpirySaving] = useState(false);
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
@@ -83,6 +89,12 @@ function MenuPermissionsPage() {
       .get<{ value: GpsSettings }>("/portal-settings/gps_settings")
       .then(({ value }) => {
         if (value) setGpsSettings(value);
+      })
+      .catch(() => {});
+    api
+      .get<{ value: number }>("/portal-settings/password_expiry_days")
+      .then(({ value }) => {
+        if (typeof value === "number") setPwExpiryDays(value);
       })
       .catch(() => {});
   }, []);
@@ -182,6 +194,24 @@ function MenuPermissionsPage() {
       toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
     } finally {
       setGpsSaving(false);
+    }
+  }
+
+  async function savePwExpiry() {
+    if (pwExpiryDraft < 1 || pwExpiryDraft > 365) {
+      toast.error("Expiry must be between 1 and 365 days");
+      return;
+    }
+    setPwExpirySaving(true);
+    try {
+      await api.put("/portal-settings/password_expiry_days", { value: pwExpiryDraft });
+      setPwExpiryDays(pwExpiryDraft);
+      setPwExpiryEditing(false);
+      toast.success("Password expiry updated");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setPwExpirySaving(false);
     }
   }
 
@@ -558,6 +588,82 @@ function MenuPermissionsPage() {
         <p className="px-5 py-3 border-t text-xs text-muted-foreground">
           Use Google Maps to find accurate coordinates — right-click any location and copy the
           lat/lng. Changes take effect immediately.
+        </p>
+      </section>
+
+      {/* Password Security Settings */}
+      <section className="rounded-xl border bg-card overflow-hidden">
+        <div className="px-5 py-4 border-b flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold">Password Security</h2>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Set how long non-admin users can keep the same password. Admins are exempt.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            {pwExpiryEditing ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setPwExpiryEditing(false)}
+                  disabled={pwExpirySaving}
+                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={savePwExpiry}
+                  disabled={pwExpirySaving}
+                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                >
+                  {pwExpirySaving ? "Saving…" : "Save changes"}
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setPwExpiryDraft(pwExpiryDays);
+                  setPwExpiryEditing(true);
+                }}
+                className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-4 flex items-center gap-4">
+          <KeyRound className="h-4 w-4 text-muted-foreground shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-medium">Password expiry period</p>
+            <p className="text-xs text-muted-foreground">
+              Users are warned 5 days before expiry and must reset on or after the expiry date.
+            </p>
+          </div>
+          {pwExpiryEditing ? (
+            <div className="flex items-center gap-2">
+              <input
+                type="number"
+                min={1}
+                max={365}
+                step={1}
+                value={pwExpiryDraft}
+                onChange={(e) => setPwExpiryDraft(Number(e.target.value))}
+                className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <span className="text-xs text-muted-foreground">days</span>
+            </div>
+          ) : (
+            <span className="text-sm font-semibold tabular-nums">{pwExpiryDays} days</span>
+          )}
+        </div>
+
+        <p className="px-5 py-3 border-t text-xs text-muted-foreground">
+          A warning banner appears from 5 days before expiry until 1 day before. On the expiry date,
+          users must change their password before accessing the system.
         </p>
       </section>
     </div>

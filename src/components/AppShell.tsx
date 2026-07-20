@@ -93,13 +93,26 @@ export function AppShell() {
     needsRoleSelection,
     mustChangePassword,
     clearMustChangePassword,
+    passwordExpiresInDays,
+    clearPasswordExpiry,
     selectRole,
     signOut,
     loading,
   } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
+  const [showExpiryModal, setShowExpiryModal] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState<Record<string, AppRole[]>>({});
+
+  // Auto sign-out when an active session reaches password expiry.
+  // The login route already blocks expired passwords, but this handles the edge
+  // case where the clock ticks over while the user is already logged in.
+  useEffect(() => {
+    if (passwordExpiresInDays !== null && passwordExpiresInDays <= 0) {
+      toast.error("Your password has expired. You have been signed out — contact your administrator.");
+      signOut();
+    }
+  }, [passwordExpiresInDays, signOut]);
 
   useEffect(() => {
     api
@@ -174,6 +187,7 @@ export function AppShell() {
     );
   }
 
+
   const visibleNav = nav.filter((n) => {
     if (activeRole === "admin") return true;
     const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
@@ -234,6 +248,36 @@ export function AppShell() {
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-6">
+          {/* Password expiry warning banner: shown 1–5 days before expiry */}
+          {passwordExpiresInDays !== null &&
+            passwordExpiresInDays >= 1 &&
+            passwordExpiresInDays <= 5 && (
+              <div className="mb-4 flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                <ShieldAlert className="h-4 w-4 shrink-0" />
+                <p className="flex-1">
+                  Your password expires in{" "}
+                  <strong>
+                    {passwordExpiresInDays} {passwordExpiresInDays === 1 ? "day" : "days"}
+                  </strong>
+                  . Update it before it expires to avoid being locked out.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setShowExpiryModal(true)}
+                  className="shrink-0 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 transition-colors"
+                >
+                  Change password
+                </button>
+              </div>
+            )}
+          <PasswordExpiryModal
+            open={showExpiryModal}
+            onClose={() => setShowExpiryModal(false)}
+            onChanged={() => {
+              setShowExpiryModal(false);
+              clearPasswordExpiry();
+            }}
+          />
           {isPathPermitted ? (
             <Outlet />
           ) : (
@@ -1316,6 +1360,151 @@ function UserBlock({
       >
         <LogOut className="h-4 w-4" />
       </button>
+    </div>
+  );
+}
+
+function PasswordExpiryModal({
+  open,
+  onClose,
+  onChanged,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onChanged: () => void;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!currentPassword) {
+      toast.error("Current password is required");
+      return;
+    }
+    if (newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters");
+      return;
+    }
+    if (newPassword === currentPassword) {
+      toast.error("New password must be different from your current password");
+      return;
+    }
+    if (newPassword !== confirm) {
+      toast.error("Passwords do not match");
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.post("/auth/change-password-expiry", {
+        current_password: currentPassword,
+        new_password: newPassword,
+      });
+      toast.success("Password updated — expiry reset");
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirm("");
+      onChanged();
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to update password");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!open) return null;
+
+  const cls =
+    "w-full h-10 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring";
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4"
+      onClick={(e) => e.target === e.currentTarget && onClose()}
+    >
+      <form
+        onSubmit={submit}
+        className="w-full max-w-sm rounded-lg border bg-card p-6 shadow-xl space-y-5"
+      >
+        <div className="flex items-center gap-3">
+          <div className="h-10 w-10 rounded-lg bg-amber-100 text-amber-600 grid place-items-center shrink-0">
+            <ShieldAlert className="h-5 w-5" />
+          </div>
+          <div>
+            <p className="font-semibold leading-tight">Update your password</p>
+            <p className="text-sm text-muted-foreground">
+              Your password is expiring soon. Set a new one below.
+            </p>
+          </div>
+        </div>
+
+        <div className="space-y-3">
+          <div>
+            <label className="text-sm font-medium" htmlFor="ep-cur-pw">
+              Current password
+            </label>
+            <input
+              id="ep-cur-pw"
+              type="password"
+              required
+              placeholder="Your current password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className={cls}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium" htmlFor="ep-new-pw">
+              New password
+            </label>
+            <input
+              id="ep-new-pw"
+              type="password"
+              required
+              minLength={8}
+              placeholder="Min. 8 characters"
+              value={newPassword}
+              onChange={(e) => setNewPassword(e.target.value)}
+              className={cls}
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium" htmlFor="ep-confirm-pw">
+              Confirm new password
+            </label>
+            <input
+              id="ep-confirm-pw"
+              type="password"
+              required
+              minLength={8}
+              placeholder="Repeat password"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              className={cls}
+            />
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            className="flex-1 h-10 rounded-md border bg-card text-sm hover:bg-muted disabled:opacity-50"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !currentPassword || !newPassword || !confirm}
+            className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+          >
+            {busy ? "Saving…" : "Save password"}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

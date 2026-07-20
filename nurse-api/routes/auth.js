@@ -8,6 +8,19 @@ const DEFAULT_INITIAL_PASSWORD = "RotaLogin@123";
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+async function getPasswordExpiryDays() {
+  const { rows } = await pool.query(
+    "SELECT value FROM portal_settings WHERE key = 'password_expiry_days'",
+  );
+  return rows[0] ? parseInt(rows[0].value, 10) || 30 : 30;
+}
+
+function computeExpiresInDays(passwordChangedAt, expiryDays) {
+  const changedAt = new Date(passwordChangedAt);
+  const expiresAt = new Date(changedAt.getTime() + expiryDays * 24 * 60 * 60 * 1000);
+  return Math.floor((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+}
+
 router.post(
   "/login",
   wrap(async (req, res) => {
@@ -15,9 +28,9 @@ router.post(
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
     const { rows } = await pool.query(
-      `SELECT id, email, full_name, password_hash, is_active, must_change_password
-     FROM profiles WHERE lower(email) = lower($1)
-     ORDER BY created_at DESC LIMIT 1`,
+      `SELECT id, email, full_name, password_hash, is_active, must_change_password, password_changed_at
+       FROM profiles WHERE lower(email) = lower($1)
+       ORDER BY created_at DESC LIMIT 1`,
       [email.trim()],
     );
 
@@ -30,10 +43,22 @@ router.post(
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
-    const { rows: roleRows } = await pool.query("SELECT role FROM user_roles WHERE user_id = $1", [
-      user.id,
+    const [{ rows: roleRows }, expiryDays] = await Promise.all([
+      pool.query("SELECT role FROM user_roles WHERE user_id = $1", [user.id]),
+      getPasswordExpiryDays(),
     ]);
     const roles = roleRows.map((r) => r.role);
+    const isAdminUser = roles.includes("admin");
+    const passwordExpiresInDays = isAdminUser
+      ? null
+      : computeExpiresInDays(user.password_changed_at ?? new Date(), expiryDays);
+
+    // Reject expired passwords — admin must reset before the user can log back in.
+    if (passwordExpiresInDays !== null && passwordExpiresInDays <= 0) {
+      return res.status(401).json({
+        error: "Your password has expired. Contact your administrator to reset it.",
+      });
+    }
 
     // Try direct profile_id link first (exact, no name-collision risk)
     let { rows: nurseRows } = await pool.query(
@@ -78,6 +103,7 @@ router.post(
         full_name: user.full_name,
         roles,
         must_change_password: user.must_change_password,
+        password_expires_in_days: passwordExpiresInDays,
         nurse_id: nurse?.id ?? null,
         nurse_facility: nurse?.facility ?? null,
       },
@@ -90,14 +116,15 @@ router.get(
   requireAuth,
   wrap(async (req, res) => {
     const { rows } = await pool.query(
-      "SELECT id, email, full_name, is_active, must_change_password FROM profiles WHERE id = $1",
+      "SELECT id, email, full_name, is_active, must_change_password, password_changed_at FROM profiles WHERE id = $1",
       [req.user.userId],
     );
     if (!rows[0]) return res.status(404).json({ error: "User not found" });
 
-    const [{ rows: roleRows }, { rows: profileIdRows }] = await Promise.all([
+    const [{ rows: roleRows }, { rows: profileIdRows }, expiryDays] = await Promise.all([
       pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.user.userId]),
       pool.query("SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1", [req.user.userId]),
+      getPasswordExpiryDays(),
     ]);
 
     let nurseRows = profileIdRows;
@@ -112,9 +139,15 @@ router.get(
       }
     }
     const nurse = nurseRows[0] ?? null;
+    const meRoles = roleRows.map((r) => r.role);
+    const isAdminUser = meRoles.includes("admin");
+    const passwordExpiresInDays = isAdminUser
+      ? null
+      : computeExpiresInDays(rows[0].password_changed_at ?? new Date(), expiryDays);
     res.json({
       ...rows[0],
-      roles: roleRows.map((r) => r.role),
+      roles: meRoles,
+      password_expires_in_days: passwordExpiresInDays,
       nurse_id: nurse?.id ?? null,
       nurse_facility: nurse?.facility ?? null,
     });
@@ -143,13 +176,61 @@ router.post(
 
     const hash = await bcrypt.hash(new_password, 12);
     await pool.query(
-      "UPDATE profiles SET password_hash = $1, must_change_password = false, updated_at = NOW() WHERE id = $2",
+      `UPDATE profiles
+       SET password_hash = $1, must_change_password = false,
+           password_changed_at = NOW(), updated_at = NOW()
+       WHERE id = $2`,
       [hash, req.user.userId],
     );
 
     await pool.query(
       "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
       ["Changed password", req.user.userId, req.user.full_name, (req.user.roles || [])[0] ?? null],
+    );
+
+    res.json({ success: true });
+  }),
+);
+
+// Password change triggered from the expiry warning banner.
+// Current password is required to confirm the user's identity before changing it.
+router.post(
+  "/change-password-expiry",
+  requireAuth,
+  wrap(async (req, res) => {
+    const { current_password, new_password } = req.body;
+    if (!current_password) return res.status(400).json({ error: "Current password is required" });
+    if (!new_password || new_password.length < 8)
+      return res.status(400).json({ error: "Password must be at least 8 characters" });
+
+    const { rows } = await pool.query("SELECT password_hash FROM profiles WHERE id = $1", [
+      req.user.userId,
+    ]);
+    if (!rows[0]) return res.status(404).json({ error: "User not found" });
+
+    const valid = await bcrypt.compare(current_password, rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
+
+    if (current_password === new_password)
+      return res.status(400).json({ error: "New password must be different from your current password" });
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query(
+      `UPDATE profiles
+       SET password_hash = $1, must_change_password = false,
+           password_changed_at = NOW(), updated_at = NOW()
+       WHERE id = $2`,
+      [hash, req.user.userId],
+    );
+
+    await pool.query(
+      "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
+      [
+        "Changed password (expiry)",
+        req.user.userId,
+        req.user.full_name,
+        (req.user.roles || [])[0] ?? null,
+      ],
     );
 
     res.json({ success: true });
@@ -273,7 +354,8 @@ router.patch(
     );
     const hash = await bcrypt.hash(password, 12);
     await pool.query(
-      "UPDATE profiles SET password_hash = $1, must_change_password = true, updated_at = NOW() WHERE id = $2",
+      `UPDATE profiles SET password_hash = $1, must_change_password = true,
+       password_changed_at = NOW(), updated_at = NOW() WHERE id = $2`,
       [hash, req.params.id],
     );
     await pool.query(

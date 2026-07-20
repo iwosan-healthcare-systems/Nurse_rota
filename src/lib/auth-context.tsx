@@ -20,6 +20,7 @@ export interface ApiUser {
   full_name: string | null;
   roles: AppRole[];
   must_change_password: boolean;
+  password_expires_in_days: number | null;
   nurse_id: string | null;
   nurse_facility: string | null;
 }
@@ -36,6 +37,8 @@ interface AuthCtx {
   needsRoleSelection: boolean;
   mustChangePassword: boolean;
   clearMustChangePassword: () => void;
+  passwordExpiresInDays: number | null;
+  clearPasswordExpiry: () => void;
   selectRole: (role: AppRole) => void;
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
@@ -85,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
+  const [passwordExpiresInDays, setPasswordExpiresInDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -193,6 +197,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(me);
     setRoles(me.roles);
     setMustChangePassword(me.must_change_password);
+    setPasswordExpiresInDays(me.password_expires_in_days ?? null);
 
     if (me.roles.length === 1) {
       setActiveRole(me.roles[0]);
@@ -222,6 +227,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setMustChangePassword(false);
   }
 
+  function clearPasswordExpiry() {
+    setPasswordExpiresInDays(null);
+  }
+
   function signOut() {
     if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
     clearToken();
@@ -229,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setRoles([]);
     setActiveRole(null);
     setMustChangePassword(false);
+    setPasswordExpiresInDays(null);
   }
 
   const ar = activeRole;
@@ -250,6 +260,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     needsRoleSelection: roles.length > 1 && activeRole === null,
     mustChangePassword,
     clearMustChangePassword,
+    passwordExpiresInDays,
+    clearPasswordExpiry,
     selectRole,
     hasRole,
     hasAnyRole,
