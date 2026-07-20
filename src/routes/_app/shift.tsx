@@ -55,6 +55,7 @@ type ShiftLog = {
   leave_request_id: string | null;
   is_swap: boolean;
   swap_note: string | null;
+  is_missed: boolean;
 };
 
 type Assignment = {
@@ -356,9 +357,7 @@ function ShiftPage() {
   const leavePeriodHours = currentPeriodLogs
     .filter((l) => l.is_leave)
     .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
-  const missedPeriodCount = currentPeriodLogs.filter(
-    (l) => l.late_reason === "Missed shift",
-  ).length;
+  const missedPeriodCount = currentPeriodLogs.filter((l) => l.is_missed).length;
 
   // ── Auto-end: check every minute whether the shift's expected end has passed ──
   useEffect(() => {
@@ -607,11 +606,7 @@ function ShiftPage() {
   // Guard against the loading state: never show missed while shiftLog is still fetching.
   const isShiftMissed =
     !shiftLogLoading && !shiftLog && hasShiftToday && isSchedulePublished && !!shiftEndTime && now >= shiftEndTime;
-  // 0-hour log created by auto-record (late_reason sentinel)
-  const isMissedLog =
-    !!shiftLog && !!shiftLog.ended_at &&
-    Number(shiftLog.hours_logged) === 0 &&
-    shiftLog.late_reason === "Missed shift";
+  const isMissedLog = !!shiftLog && shiftLog.is_missed;
   const elapsed = isActive
     ? fmtDuration(Math.max(0, now.getTime() - new Date(shiftLog.started_at).getTime()))
     : null;
@@ -913,7 +908,7 @@ function ShiftPage() {
           </div>
           <p className="text-3xl font-bold">{fmtHours(currentPeriodHours - swapPeriodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap && l.late_reason !== "Missed shift").length} shifts completed
+            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap && !l.is_missed).length} shifts completed
             {missedPeriodCount > 0 && ` · ${missedPeriodCount} missed`}
           </p>
           {(swapPeriodHours > 0 || leavePeriodHours > 0) && (

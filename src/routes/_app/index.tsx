@@ -100,6 +100,7 @@ type ShiftLog = {
   hours_logged: number | null;
   is_swap: boolean;
   swap_note: string | null;
+  is_missed: boolean;
 };
 
 type WardRecord = {
@@ -235,7 +236,10 @@ function NurseDashboard() {
   const totalMinutes = Math.round(periodHours * 60);
   const targetHours = nurseRecord?.target_hours ?? 185;
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
-  const completedShiftCount = regularLogs.filter((l) => l.hours_logged !== null).length;
+  const completedShiftCount = regularLogs.filter(
+    (l) => l.hours_logged !== null && !l.is_missed,
+  ).length;
+  const missedShiftCount = regularLogs.filter((l) => l.is_missed).length;
 
   const shiftLabel: Record<string, string> = {
     M: "Morning",
@@ -309,7 +313,7 @@ function NurseDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         <Stat
           icon={Timer}
           label="Hours this period"
@@ -322,6 +326,13 @@ function NurseDashboard() {
           label="Shifts completed"
           value={completedShiftCount}
           hint="This 28-day cycle"
+        />
+        <Stat
+          icon={AlertTriangle}
+          label="Missed shifts"
+          value={missedShiftCount}
+          hint="This 28-day cycle"
+          tone={missedShiftCount > 0 ? "danger" : "default"}
         />
         <Stat
           icon={PlaneTakeoff}

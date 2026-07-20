@@ -48,9 +48,18 @@ async function autoEndOverdueShifts() {
         sa.nurse_id,
         sa.shift_date,
         (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
-        sa.shift_date::timestamp    AS started_at,
-        sa.shift_date::timestamp    AS expected_end_at,
-        sa.shift_date::timestamp    AS ended_at,
+        CASE WHEN sa.shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '17 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '8 hours'
+        END AS started_at,
+        CASE WHEN sa.shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+        END AS expected_end_at,
+        CASE WHEN sa.shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+        END AS ended_at,
         COALESCE(
           (SELECT MIN(s2.shift_date)
            FROM shift_assignments s2
@@ -66,8 +75,8 @@ async function autoEndOverdueShifts() {
       FROM shift_assignments sa
       WHERE sa.status = 'published'
         AND (
-          (sa.shift NOT IN ('N', 'NC') AND sa.shift_date < CURRENT_DATE)
-          OR (sa.shift IN ('N', 'NC') AND sa.shift_date + INTERVAL '1 day 8 hours' < NOW())
+          (sa.shift NOT IN ('N', 'NC') AND sa.shift_date::timestamp + INTERVAL '17 hours' < NOW())
+          OR (sa.shift IN ('N', 'NC') AND sa.shift_date::timestamp + INTERVAL '1 day 8 hours' < NOW())
         )
         AND sa.shift NOT IN ('LEAVE', 'OFF')
         AND NOT EXISTS (
