@@ -154,6 +154,26 @@ function RotaPage() {
   const canSubmit = canSubmitApproval;
   const qc = useQueryClient();
 
+  const { data: workflowStatus } = useQuery<{
+    firstRotaPublished: boolean;
+    nextPeriodStart?: string;
+    leaveIsClosed?: boolean;
+    nextRotaStage?: string;
+  }>({
+    queryKey: ["workflow-status"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get("/rpc/workflow-status"),
+  });
+
+  const fmtWD = (d?: string) =>
+    d
+      ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+
   // Only admin, CNO, and HR can switch facilities; everyone else is locked to their own.
   const canFilterFacility =
     activeRole === "admin" || activeRole === "cno" || activeRole === "hr_admin";
@@ -1541,6 +1561,38 @@ function RotaPage() {
               : "Generate a schedule to view the rota"
         }
       />
+
+      {/* Workflow banner — generate or submit draft */}
+      {canGenerate &&
+        workflowStatus?.firstRotaPublished &&
+        workflowStatus.leaveIsClosed &&
+        (workflowStatus.nextRotaStage === "none" || workflowStatus.nextRotaStage === "draft") && (
+          <div
+            className={`flex items-start gap-3 rounded-lg border px-4 py-3 mb-2 text-sm ${
+              workflowStatus.nextRotaStage === "draft"
+                ? "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700"
+                : "border-blue-300 bg-blue-50 text-blue-800 dark:bg-blue-950/20 dark:text-blue-300 dark:border-blue-700"
+            }`}
+          >
+            {workflowStatus.nextRotaStage === "draft" ? (
+              <Send className="mt-0.5 h-4 w-4 shrink-0" />
+            ) : (
+              <Wand2 className="mt-0.5 h-4 w-4 shrink-0" />
+            )}
+            <div>
+              <p className="font-medium">
+                {workflowStatus.nextRotaStage === "draft"
+                  ? "Draft rota ready — submit for approval"
+                  : "Time to generate the next rota"}
+              </p>
+              <p className="mt-0.5 opacity-80">
+                {workflowStatus.nextRotaStage === "draft"
+                  ? `The draft schedule for the period starting ${fmtWD(workflowStatus.nextPeriodStart)} is ready. Review it below and submit for approval.`
+                  : `Leave window for the period starting ${fmtWD(workflowStatus.nextPeriodStart)} is closed. Generate the schedule below.`}
+              </p>
+            </div>
+          </div>
+        )}
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">

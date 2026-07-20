@@ -267,6 +267,26 @@ function ApprovalsPage() {
     queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
   });
 
+  const { data: workflowStatus } = useQuery<{
+    firstRotaPublished: boolean;
+    nextPeriodStart?: string;
+    leaveIsClosed?: boolean;
+    nextRotaStage?: string;
+  }>({
+    queryKey: ["workflow-status"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get("/rpc/workflow-status"),
+  });
+
+  const fmtWD = (d?: string) =>
+    d
+      ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+
   function regenNotifKey(win: RotaWindow) {
     if (!win.facility) return null;
     return `rota_regenerate_needed_${win.facility.toLowerCase().replace(/\s+/g, "_")}_${win.startDate}`;
@@ -1030,6 +1050,53 @@ td.sm{text-align:left;color:#444;min-width:55px}
   return (
     <div className="space-y-5">
       <PageHeader title="Approval Workflow" subtitle="Draft → Chief Matron → CNO → Published" />
+
+      {/* Workflow stage banners */}
+      {workflowStatus?.firstRotaPublished && (
+        <div className="space-y-2">
+          {/* Approve1: chief matron action needed */}
+          {(canApproveChiefMatron || isAdmin) &&
+            workflowStatus.nextRotaStage === "submitted" && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Draft rota awaiting Chief Matron approval</p>
+                  <p className="mt-0.5 opacity-80">
+                    The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been submitted. Review and approve it below.
+                  </p>
+                </div>
+              </div>
+            )}
+
+          {/* Approve2: CNO action needed */}
+          {(canApproveCno || isAdmin) &&
+            workflowStatus.nextRotaStage === "approved_chief" && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Rota awaiting CNO final approval</p>
+                  <p className="mt-0.5 opacity-80">
+                    Chief Matron has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. CNO sign-off is required to publish.
+                  </p>
+                </div>
+              </div>
+            )}
+
+          {/* Publish reminder */}
+          {(canPublishRota || isAdmin) &&
+            workflowStatus.nextRotaStage === "approved_cno" && (
+              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Rota approved — ready to publish</p>
+                  <p className="mt-0.5 opacity-80">
+                    CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it so nurses can view their schedule.
+                  </p>
+                </div>
+              </div>
+            )}
+        </div>
+      )}
 
       {isLoading ? (
         <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>

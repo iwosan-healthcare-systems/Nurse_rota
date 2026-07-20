@@ -665,6 +665,41 @@ function ManagementAlerts() {
       .map((r) => r.notif_key) ?? [];
   const pendingLeaveNotifKeys = [...new Set([...facilityPlcKeys, ...userPlcKeys])];
 
+  const { data: workflowStatus } = useQuery<{
+    firstRotaPublished: boolean;
+    nextPeriodStart?: string;
+    leaveIsClosed?: boolean;
+    nextRotaStage?: string;
+  }>({
+    queryKey: ["workflow-status"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get("/rpc/workflow-status"),
+  });
+
+  const fmtWD = (d?: string) =>
+    d
+      ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+          day: "numeric",
+          month: "short",
+          year: "numeric",
+        })
+      : "";
+
+  const wfReady = !!workflowStatus?.firstRotaPublished;
+  const stage = workflowStatus?.nextRotaStage;
+  const canWfGenPub = activeRole === "head_nurse" || isAdmin;
+  const canWfA1 = activeRole === "chief_matron" || isAdmin;
+  const canWfA2 = activeRole === "cno" || isAdmin;
+  const showWfGenerate =
+    wfReady &&
+    workflowStatus?.leaveIsClosed &&
+    canWfGenPub &&
+    (stage === "none" || stage === "draft");
+  const showWfApprove1 = wfReady && stage === "submitted" && canWfA1;
+  const showWfApprove2 = wfReady && stage === "approved_chief" && canWfA2;
+  const showWfPublish = wfReady && stage === "approved_cno" && canWfGenPub;
+  const showWorkflowBanner = showWfGenerate || showWfApprove1 || showWfApprove2 || showWfPublish;
+
   const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
   const showPendingLeaveMatron = canApproveLeave && !isAdmin && pendingLeaveNotifKeys.length > 0;
   const generalPendingCount = pendingLeave.filter((l) => l.type !== "Swap").length;
@@ -676,12 +711,83 @@ function ManagementAlerts() {
     !showRegenAlert &&
     !showPendingLeaveMatron &&
     !showGeneralPendingForMatron &&
-    !showPendingLeaveInfo
+    !showPendingLeaveInfo &&
+    !showWorkflowBanner
   )
     return null;
 
+  const wfPeriodStr = fmtWD(workflowStatus?.nextPeriodStart);
+
   return (
     <div className="space-y-3">
+      {showWfGenerate && (
+        <div
+          className={`rounded-xl border-2 p-4 flex items-start gap-3 ${
+            stage === "draft"
+              ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
+              : "border-blue-400 bg-blue-50 dark:bg-blue-950/30"
+          }`}
+        >
+          <Clock
+            className={`h-5 w-5 shrink-0 mt-0.5 ${stage === "draft" ? "text-amber-600" : "text-blue-600"}`}
+          />
+          <div className="flex-1 min-w-0">
+            <p
+              className={`font-bold ${stage === "draft" ? "text-amber-800 dark:text-amber-300" : "text-blue-800 dark:text-blue-300"}`}
+            >
+              {stage === "draft"
+                ? "Draft rota ready — submit for approval"
+                : "Time to generate the next rota"}
+            </p>
+            <p
+              className={`text-sm mt-1 ${stage === "draft" ? "text-amber-700 dark:text-amber-400" : "text-blue-700 dark:text-blue-400"}`}
+            >
+              {stage === "draft"
+                ? `The draft schedule for ${wfPeriodStr} is ready. Go to the Rota page to review and submit it.`
+                : `Leave window for ${wfPeriodStr} is closed. Go to the Rota page to generate the schedule.`}
+            </p>
+          </div>
+        </div>
+      )}
+      {showWfApprove1 && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Draft rota awaiting Chief Matron approval
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              The rota for {wfPeriodStr} has been submitted. Go to Approvals to review and approve.
+            </p>
+          </div>
+        </div>
+      )}
+      {showWfApprove2 && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Rota awaiting CNO final approval
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              Chief Matron approved the rota for {wfPeriodStr}. Go to Approvals for CNO sign-off.
+            </p>
+          </div>
+        </div>
+      )}
+      {showWfPublish && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Rota approved — ready to publish
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              CNO has approved the rota for {wfPeriodStr}. Go to Approvals to publish it.
+            </p>
+          </div>
+        </div>
+      )}
       {showPendingLeaveInfo && (
         <div className="rounded-xl border-2 border-orange-400 bg-orange-50 dark:bg-orange-950/30 p-4 flex items-start gap-3">
           <AlertTriangle className="h-5 w-5 shrink-0 text-orange-600 mt-0.5" />

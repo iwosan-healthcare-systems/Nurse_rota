@@ -480,7 +480,7 @@ function RotaReminderBell({
       return { kind: "approve1" as const, key: `workflow_1st_${nextPeriodStart}`, nextPeriodStart };
     }
     if (isHeadOrAdmin && leaveIsClosed && (nextRotaStage === "none" || nextRotaStage === "draft")) {
-      return { kind: "generate" as const, key: `workflow_gen_${nextPeriodStart}`, nextPeriodStart };
+      return { kind: "generate" as const, key: `workflow_gen_${nextPeriodStart}`, nextPeriodStart, nextRotaStage };
     }
     return null;
   })();
@@ -901,9 +901,13 @@ function RotaReminderBell({
                       const isOverdue = isPub && (workflowItem as { overdue?: boolean }).overdue;
                       const isApprove = wKind === "approve1" || wKind === "approve2";
 
+                      const hasDraft =
+                        wKind === "generate" &&
+                        (workflowItem as { nextRotaStage?: string }).nextRotaStage === "draft";
+
                       const title =
                         wKind === "generate"
-                          ? "Generate Next Rota"
+                          ? hasDraft ? "Submit Draft Rota" : "Generate Next Rota"
                           : wKind === "approve1"
                             ? "1st Approval Required"
                             : wKind === "approve2"
@@ -914,7 +918,9 @@ function RotaReminderBell({
 
                       const bodyText =
                         wKind === "generate"
-                          ? `Leave window is closed. Generate the rota for the period starting ${fmtDate(workflowItem.nextPeriodStart)}.`
+                          ? hasDraft
+                            ? `Leave window is closed. The draft rota for ${fmtDate(workflowItem.nextPeriodStart)} is ready — review and submit it for approval.`
+                            : `Leave window is closed. Generate the rota for the period starting ${fmtDate(workflowItem.nextPeriodStart)}.`
                           : wKind === "approve1"
                             ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} has been submitted and is awaiting your first approval.`
                             : wKind === "approve2"
@@ -925,7 +931,9 @@ function RotaReminderBell({
 
                       const pageHint =
                         wKind === "generate"
-                          ? "Open the Rota page and generate the schedule."
+                          ? hasDraft
+                            ? "Open the Rota page, review the draft, and submit for approval."
+                            : "Open the Rota page and generate the schedule."
                           : wKind === "approve1" || wKind === "approve2"
                             ? "Open the Approvals page to review and approve."
                             : "Open the Approvals page and publish the rota.";
