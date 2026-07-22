@@ -20,7 +20,6 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { ApiError } from "@/lib/api";
 import { isGlobalHead, isInternType, isMatron, isPorterType, isNADayType } from "@/lib/auto-schedule";
 import { FacilityChips } from "@/components/FacilityChips";
 import { xlsWorkbook, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
@@ -248,24 +247,12 @@ function ApprovalsPage() {
     canApproveChiefMatron,
     canApproveCno,
     canPublishRota,
-    canSubmitApproval,
     canRevertPublished,
   } = useAuth();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [showAllPeriods, setShowAllPeriods] = useState(false);
-  // windowKey → pending leave count that blocked the last submission attempt
-  const [pendingLeaveBlocked, setPendingLeaveBlocked] = useState<Record<string, number>>({});
-
-  // Pull notification_state to check for persistent "rota_regenerate_needed_" flags.
-  // Shares the same cache key as AppShell and Rota page so no extra network request is needed.
-  const { data: allNotifs } = useQuery({
-    queryKey: ["notif-state", user?.id],
-    enabled: !!user?.id,
-    staleTime: 60 * 1000,
-    queryFn: () => api.get<{ notif_key: string; is_read: boolean }[]>("/notifications"),
-  });
 
   const { data: workflowStatus } = useQuery<{
     firstRotaPublished: boolean;
@@ -287,17 +274,6 @@ function ApprovalsPage() {
         })
       : "";
 
-  function regenNotifKey(win: RotaWindow) {
-    if (!win.facility) return null;
-    return `rota_regenerate_needed_${win.facility.toLowerCase().replace(/\s+/g, "_")}_${win.startDate}`;
-  }
-  function isRegenNeeded(win: RotaWindow): boolean {
-    const key = regenNotifKey(win);
-    if (!key) return false;
-    const row = allNotifs?.find((r) => r.notif_key === key);
-    return !!row && !row.is_read;
-  }
-
   // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
   const lockedFacility =
     isAdmin || activeRole === "cno" || activeRole === "hr_admin"
@@ -308,7 +284,6 @@ function ApprovalsPage() {
   const canApproveChief = canApproveChiefMatron;
   const canApproveCNO = canApproveCno;
   const canPublish = canPublishRota;
-  const canSubmit = canSubmitApproval;
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
@@ -430,6 +405,9 @@ function ApprovalsPage() {
     const nonPublished: RotaWindow[] = [];
 
     for (const win of facilityWindows) {
+      // Drafts aren't part of the approval workflow yet — submission only happens
+      // from the Rota page, so a draft never appears here until it's submitted.
+      if (win.status === "draft") continue;
       if (win.status === "published") {
         if (win.endDate < cutoffYmd) continue; // archived — show in Reports only
         const wardKey = `${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? "__COVERAGE__"}`;
@@ -490,53 +468,6 @@ function ApprovalsPage() {
       return e instanceof Error ? e.message : "Update failed";
     }
     return null;
-  }
-
-  async function submitDraft(win: RotaWindow) {
-    const wk = winKey(win);
-    setBusy(wk);
-    try {
-      await api.patch(
-        `/shift-assignments?${(() => {
-          let candidates = allNurses.filter((n) => n.facility === win.facility);
-          if (win.ward === null && win.roleGroup)
-            candidates = candidates.filter((n) => roleGroupOf(n.role) === win.roleGroup);
-          const qs = new URLSearchParams({
-            nurse_ids: candidates.map((n) => n.id).join(","),
-            shift_date_from: win.startDate,
-            shift_date_to: win.endDate,
-            status: "draft",
-          });
-          if (win.ward !== null) qs.set("ward", win.ward);
-          else qs.set("ward_null", "true");
-          return qs.toString();
-        })()}`,
-        { status: "submitted" },
-      );
-      setPendingLeaveBlocked((prev) => { const n = { ...prev }; delete n[wk]; return n; });
-      const targetLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
-      await api
-        .post("/audit-logs", {
-          actor_id: user?.id,
-          actor_name: user?.email ?? null,
-          action: "Submitted rota for approval",
-          target: `${targetLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
-        })
-        .catch(() => {});
-      toast.success("Submitted to Chief Matron");
-      qc.invalidateQueries({ queryKey: ["approvals"] });
-      qc.invalidateQueries({ queryKey: ["assignments"] });
-    } catch (e) {
-      if (e instanceof ApiError && e.code === "PENDING_LEAVES_EXIST") {
-        const count = (e.data.pendingCount as number) ?? 1;
-        setPendingLeaveBlocked((prev) => ({ ...prev, [wk]: count }));
-        toast.error(e.message, { duration: 8000 });
-      } else {
-        toast.error(e instanceof Error ? e.message : "Submission failed");
-      }
-    } finally {
-      setBusy(null);
-    }
   }
 
   type AssignmentStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
@@ -842,13 +773,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         (win.status === "approved_chief" && canApproveCNO) ||
         (win.status === "approved_cno" && canPublish));
 
-    const showActions =
-      (win.status === "draft" && canSubmit) ||
-      canApprove ||
-      canReject ||
-      win.status === "published";
-    const pendingLeaveCount = pendingLeaveBlocked[winKey(win)] ?? 0;
-    const regenNeeded = isRegenNeeded(win) || pendingLeaveCount > 0;
+    const showActions = canApprove || canReject || win.status === "published";
 
     return (
       <div key={key} className="rounded-xl border bg-card overflow-hidden flex flex-col">
@@ -937,42 +862,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {/* Actions */}
         {showActions && (
           <div className="border-t bg-muted/30 mt-auto">
-            {/* Pending-leave / regen-needed warning banner */}
-            {win.status === "draft" && canSubmit && regenNeeded && (
-              <div className="px-4 py-2.5 flex items-start gap-2 bg-amber-50 dark:bg-amber-950/30 border-b border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
-                <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
-                <p className="text-xs leading-snug">
-                  {pendingLeaveCount > 0 ? (
-                    <>
-                      <span className="font-semibold">
-                        {pendingLeaveCount} pending leave request{pendingLeaveCount > 1 ? "s" : ""}
-                      </span>{" "}
-                      must be approved or rejected by the matron before this rota can be submitted.{" "}
-                      <a href="/leave" className="underline font-medium">Go to Leave page</a>.{" "}
-                      After the matron acts, go to the <strong>Rota page</strong> and click{" "}
-                      <strong>Regenerate</strong> to apply the changes, then return here to submit.
-                    </>
-                  ) : (
-                    <>
-                      Leave has been reviewed. Go to the{" "}
-                      <a href="/rota" className="underline font-medium">Rota page</a> and click{" "}
-                      <strong>Regenerate</strong> to apply the approved leave, then return here to submit.
-                    </>
-                  )}
-                </p>
-              </div>
-            )}
             <div className="px-4 py-2.5 flex items-center justify-end gap-2 flex-wrap">
-            {win.status === "draft" && canSubmit && !regenNeeded && (
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => submitDraft(win)}
-                className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50"
-              >
-                <Send className="h-3.5 w-3.5" /> Submit
-              </button>
-            )}
             {canReject && (
               <button
                 type="button"

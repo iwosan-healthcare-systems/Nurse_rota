@@ -788,6 +788,23 @@ function RotaPage() {
     return map;
   }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
 
+  // Nurses in the selected ward who have zero assignments in the current period —
+  // i.e. newly added or reactivated staff that need their own schedule generated.
+  const unscheduledWardNurses = useMemo(() => {
+    if (!selectedWard || !canGenerate || isLoading) return [];
+    const assignedIds = new Set(assignments.map((a) => a.nurse_id));
+    return nurses.filter(
+      (n) =>
+        n.facility === effectiveFacility &&
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isPorterType(n.role) &&
+        !isInternType(n.role) &&
+        parseWards(n.ward)[0] === selectedWard &&
+        !assignedIds.has(n.id),
+    );
+  }, [selectedWard, canGenerate, isLoading, assignments, nurses, effectiveFacility]);
+
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
   const facilityWideCardGroups = useMemo(() => {
@@ -1152,6 +1169,138 @@ function RotaPage() {
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
+  }
+
+  // Generate a schedule from today to end-of-period for nurses in the selected ward
+  // who have no assignments yet — new staff or reactivated staff.
+  async function handleGenerateForUnscheduled() {
+    if (!effectiveFacility || !selectedWard || !canGenerate) return;
+    if (!unscheduledWardNurses.length) return;
+
+    const today = todayYmd();
+    const periodEnd = ymd(endDate);
+
+    const facilityNurses = nurses.filter((n) => n.facility === effectiveFacility);
+    const allWardNurses = facilityNurses.filter(
+      (n) =>
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isInternType(n.role) &&
+        !isPorterType(n.role) &&
+        parseWards(n.ward)[0] === selectedWard,
+    );
+
+    if (!allWardNurses.length) return;
+
+    setBusy(true);
+    try {
+      // Compute period offset the same way handleGenerate does
+      let periodOffset = 0;
+      const facilityIds = facilityNurses.map((n) => n.id);
+      if (facilityIds.length > 0) {
+        const dayBefore = new Date(startDate);
+        dayBefore.setDate(dayBefore.getDate() - 1);
+        const epochRows = await api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
+          )
+          .catch(() => []);
+        if (epochRows[0]?.shift_date) {
+          const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
+          periodOffset = Math.round(
+            (startDate.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
+          );
+        }
+      }
+
+      let previousAssignments: { nurse_id: string; shift_date: string; shift: ShiftCode }[] = [];
+      if (periodOffset > 0 && facilityIds.length > 0) {
+        const prevTo = new Date(startDate);
+        prevTo.setDate(prevTo.getDate() - 1);
+        const prevFrom = new Date(startDate);
+        prevFrom.setDate(prevFrom.getDate() - 5);
+        previousAssignments = await api
+          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
+          )
+          .catch(() => []);
+      }
+
+      const wardDef = facilityFilteredWards.filter(
+        (w) => w.name === selectedWard && (!w.facility || w.facility === effectiveFacility),
+      );
+
+      const { assignments: draft } = generateSchedule({
+        nurses: allWardNurses,
+        wards: wardDef,
+        leave,
+        startDate,
+        days: DAYS,
+        facility: effectiveFacility,
+        periodOffset,
+        previousAssignments,
+      });
+
+      const targetIds = new Set(unscheduledWardNurses.map((n) => n.id));
+
+      // Only keep generated assignments for the target nurses, from today onward
+      const targetDraft = draft.filter(
+        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today,
+      );
+
+      // Clear any stale draft assignments for target nurses in the remaining window
+      const targetIdList = Array.from(targetIds);
+      for (let i = 0; i < targetIdList.length; i += 100) {
+        await api
+          .del(
+            `/shift-assignments?nurse_ids=${targetIdList.slice(i, i + 100).join(",")}&from=${today}&to=${periodEnd}&neq_status=published`,
+          )
+          .catch(() => {});
+      }
+
+      // Skip any published slots
+      const pubRows = await api
+        .get<{ nurse_id: string; shift_date: string }[]>(
+          `/shift-assignments?from=${today}&to=${periodEnd}&status=published`,
+        )
+        .catch(() => []);
+      const publishedKeys = new Set(pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
+
+      // If the ward is already published, slot the new staff straight into the
+      // published schedule so exports, reports, and the approvals page reflect them
+      // immediately without requiring a second approval cycle.
+      const wardCurrentStatus = wardStatusMap.get(selectedWard);
+      const assignStatus =
+        wardCurrentStatus === "published" ? ("published" as const) : ("draft" as const);
+
+      const toInsert = targetDraft
+        .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
+        .map((d) => ({ ...d, created_by: user?.id ?? null, status: assignStatus }));
+
+      for (let i = 0; i < toInsert.length; i += 500) {
+        await api.post("/shift-assignments/upsert", toInsert.slice(i, i + 500));
+      }
+
+      const names = unscheduledWardNurses.map((n) => n.name).join(", ");
+      await logAudit(
+        assignStatus === "published"
+          ? "Published schedule for new/reactivated staff (ward already published)"
+          : "Generated draft schedule for new/reactivated staff",
+        `${selectedWard} · ${today} → ${periodEnd} (${names})`,
+      );
+
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["approvals"] });
+      toast.success(
+        assignStatus === "published"
+          ? `Schedule published for ${names} — visible in reports and exports`
+          : `Draft schedule generated for ${names} — submit for approval when ready`,
+      );
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function handleGenerateFacilityWide() {
@@ -1835,6 +1984,22 @@ function RotaPage() {
                 </span>
               ) : (
                 <>
+                  {/* Generate for new / reactivated staff in this ward */}
+                  {unscheduledWardNurses.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateForUnscheduled()}
+                      disabled={busy}
+                      className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                      {busy
+                        ? "Generating…"
+                        : unscheduledWardNurses.length === 1
+                          ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
+                          : `Generate for ${unscheduledWardNurses.length} new staff`}
+                    </button>
+                  )}
                   {(() => {
                     const wSlug = selectedWard.toLowerCase().replace(/\s+/g, "_");
                     const regenNeeded =
