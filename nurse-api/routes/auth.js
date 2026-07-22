@@ -241,7 +241,7 @@ router.post(
 router.get(
   "/admin/users",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     const { rows } = await pool.query(
       "SELECT id, email, full_name, is_active, must_change_password, password_changed_at, created_at, updated_at FROM profiles ORDER BY full_name",
@@ -253,7 +253,7 @@ router.get(
 router.post(
   "/admin/create-user",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     const { email, full_name, role, nurse_id } = req.body;
     const password = req.body.password || DEFAULT_INITIAL_PASSWORD;
@@ -320,7 +320,7 @@ router.delete(
 router.patch(
   "/admin/users/:id/ban",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     await pool.query("UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1", [
       req.params.id,
@@ -332,7 +332,7 @@ router.patch(
 router.patch(
   "/admin/users/:id/unban",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     await pool.query("UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1", [
       req.params.id,
@@ -344,7 +344,7 @@ router.patch(
 router.patch(
   "/admin/users/:id/reset-password",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required" });

@@ -49,6 +49,7 @@ const ALL_ROLES: AppRole[] = [
   "chief_matron",
   "head_nurse",
   "hr_admin",
+  "service_support",
   "nurse",
   "porter",
   "nursing_assistant",
@@ -69,6 +70,7 @@ const ROLE_BADGE_COLORS: Record<AppRole, string> = {
   chief_matron: "bg-blue-100 text-blue-700 border-blue-200",
   head_nurse: "bg-amber-100 text-amber-700 border-amber-200",
   hr_admin: "bg-teal-100 text-teal-700 border-teal-200",
+  service_support: "bg-cyan-100 text-cyan-700 border-cyan-200",
   nurse: "bg-muted text-muted-foreground border-border",
   porter: "bg-orange-100 text-orange-700 border-orange-200",
   nursing_assistant: "bg-sky-100 text-sky-700 border-sky-200",
@@ -92,7 +94,9 @@ type UserRow = ProfileRow & {
 };
 
 function UsersPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, hasRole } = useAuth();
+  const isServiceSupport = hasRole("service_support");
+  const canAccessPage = isAdmin || isServiceSupport;
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
@@ -106,7 +110,7 @@ function UsersPage() {
 
   const { data: users = [], isLoading } = useQuery({
     queryKey: ["user-profiles"],
-    enabled: isAdmin,
+    enabled: canAccessPage,
     queryFn: async () => {
       const [profs, rls] = await Promise.all([
         api.get<ProfileRow[]>("/auth/admin/users"),
@@ -234,7 +238,7 @@ function UsersPage() {
 
   const { pageItems: pageUsers, totalPages } = usePagination(filtered, pageSize, page);
 
-  if (!isAdmin) {
+  if (!canAccessPage) {
     return (
       <div className="py-20 text-center text-sm text-muted-foreground">
         Administrator access required.
@@ -353,6 +357,7 @@ function UsersPage() {
                       key={u.id}
                       user={u}
                       pwExpiryDays={pwExpiryDays}
+                      isAdmin={isAdmin}
                       onAdd={addRole}
                       onRemove={removeRole}
                       onDelete={deleteUser}
@@ -1007,6 +1012,7 @@ function formatRelativeTime(iso: string | null): string {
 function UserRowItem({
   user,
   pwExpiryDays,
+  isAdmin,
   onAdd,
   onRemove,
   onDelete,
@@ -1017,6 +1023,7 @@ function UserRowItem({
 }: {
   user: UserRow;
   pwExpiryDays: number;
+  isAdmin: boolean;
   onAdd: (id: string, role: AppRole) => void;
   onRemove: (id: string, role: AppRole) => void;
   onDelete: (user: UserRow) => void;
@@ -1026,7 +1033,9 @@ function UserRowItem({
   onEdit: (user: UserRow) => void;
 }) {
   const [adding, setAdding] = useState<AppRole | "">("");
-  const available = ALL_ROLES.filter((r) => !user.roles.includes(r));
+  // Service Support cannot assign or revoke the admin role
+  const assignableRoles = isAdmin ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "admin");
+  const available = assignableRoles.filter((r) => !user.roles.includes(r));
 
   return (
     <tr className="border-t hover:bg-muted/30">
@@ -1068,14 +1077,16 @@ function UserRowItem({
                 className={`inline-flex items-center gap-1 rounded-full border text-[11px] px-2 py-0.5 ${ROLE_BADGE_COLORS[r]}`}
               >
                 {ROLE_LABELS[r]}
-                <button
-                  type="button"
-                  onClick={() => onRemove(user.id, r)}
-                  className="hover:text-destructive ml-0.5"
-                  title={`Revoke ${ROLE_LABELS[r]}`}
-                >
-                  <Trash2 className="h-2.5 w-2.5" />
-                </button>
+                {(isAdmin || r !== "admin") && (
+                  <button
+                    type="button"
+                    onClick={() => onRemove(user.id, r)}
+                    className="hover:text-destructive ml-0.5"
+                    title={`Revoke ${ROLE_LABELS[r]}`}
+                  >
+                    <Trash2 className="h-2.5 w-2.5" />
+                  </button>
+                )}
               </span>
             ))
           )}
@@ -1169,14 +1180,16 @@ function UserRowItem({
               <UserCheck className="h-3.5 w-3.5" />
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => onDelete(user)}
-            title="Delete user"
-            className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => onDelete(user)}
+              title="Delete user"
+              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
       </td>
     </tr>

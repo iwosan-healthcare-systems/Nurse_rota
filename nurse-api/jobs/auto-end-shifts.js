@@ -90,6 +90,83 @@ async function autoEndOverdueShifts() {
         `[auto-end] ${new Date().toISOString()} — recorded ${missed.rowCount} missed shift(s)`,
       );
     }
+
+    // Credit approved leave hours for dates that have now arrived.
+    // At approval time, only past/today shifts are credited immediately; future shifts
+    // land here once their shift_date reaches CURRENT_DATE.
+    const leaveCredit = await pool.query(`
+      INSERT INTO shift_logs
+        (nurse_id, shift_date, shift_type,
+         started_at, expected_end_at, ended_at,
+         period_start, hours_logged,
+         is_leave, is_missed, is_locum, is_swap,
+         leave_request_id)
+      SELECT
+        sa.nurse_id,
+        sa.shift_date,
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 'N' ELSE 'M' END::shift_code,
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '17 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '8 hours'
+        END,
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+        END,
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
+          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
+          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+        END,
+        COALESCE(
+          (SELECT MIN(s2.shift_date)
+           FROM shift_assignments s2
+           WHERE s2.status = 'published'
+             AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
+          sa.shift_date
+        ),
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 15 ELSE 9 END,
+        true,
+        false,
+        false,
+        false,
+        lr.id
+      FROM shift_assignments sa
+      JOIN leave_requests lr
+        ON lr.nurse_id = sa.nurse_id
+        AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+        AND lr.status = 'Approved'
+        AND lr.type != 'Swap'
+      WHERE sa.shift = 'LEAVE'
+        AND sa.status = 'published'
+        AND sa.shift_date <= CURRENT_DATE
+        AND sa.pre_leave_shift IN ('M', 'MWC', 'N', 'NC')
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_logs sl
+          WHERE sl.nurse_id = sa.nurse_id
+            AND sl.shift_date = sa.shift_date
+            AND sl.is_leave = true
+        )
+      RETURNING nurse_id, hours_logged
+    `);
+
+    for (const row of leaveCredit.rows) {
+      if (row.hours_logged > 0) {
+        await pool
+          .query("SELECT increment_nurse_hours($1, $2)", [row.nurse_id, row.hours_logged])
+          .catch((err) =>
+            console.error(
+              `[auto-end] leave hours increment failed for ${row.nurse_id}:`,
+              err.message,
+            ),
+          );
+      }
+    }
+
+    if (leaveCredit.rowCount > 0) {
+      console.log(
+        `[auto-end] ${new Date().toISOString()} — credited ${leaveCredit.rowCount} leave shift(s)`,
+      );
+    }
   } catch (err) {
     console.error("[auto-end] Error:", err.message);
   }

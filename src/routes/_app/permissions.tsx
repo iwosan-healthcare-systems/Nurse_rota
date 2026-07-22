@@ -22,6 +22,7 @@ const ROLES: AppRole[] = [
   "chief_matron",
   "head_nurse",
   "hr_admin",
+  "service_support",
   "nurse",
   "surgical_nurse",
   "porter",
@@ -93,20 +94,20 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "print_staff_list",
     label: "Print Staff Directory (by facility / ward)",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"],
   },
   {
     key: "print_schedule",
     label: "Print / Download Published Schedule",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"],
   },
   {
     key: "view_reports",
     label: "View Reports",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"],
   },
-  { key: "view_audit", label: "View Audit Log", roles: ["admin"] },
-  { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin"] },
+  { key: "view_audit", label: "View Audit Log", roles: ["admin", "service_support"] },
+  { key: "manage_roles", label: "Assign / Revoke Roles", roles: ["admin", "service_support"] },
   {
     key: "request_locum",
     label: "Initiate Locum Shift Request",

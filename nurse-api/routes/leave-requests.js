@@ -316,7 +316,8 @@ router.patch(
       ) {
         await client.query(
           `UPDATE shift_assignments
-              SET shift = 'LEAVE'
+              SET pre_leave_shift = shift,
+                  shift = 'LEAVE'
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
               AND shift != 'LEAVE'

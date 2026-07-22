@@ -10,12 +10,13 @@ const ALL: AppRole[] = [
   "chief_matron",
   "head_nurse",
   "hr_admin",
+  "service_support",
   "nurse",
   "surgical_nurse",
   "porter",
   "nursing_assistant",
 ];
-const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
+const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"];
 const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 
 export type NavDef = { key: string; label: string; defaultRoles: AppRole[] };
@@ -34,8 +35,8 @@ export const NAV_DEFINITIONS: NavDef[] = [
     label: "Reports",
     defaultRoles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
   },
-  { key: "/audit", label: "Audit Log", defaultRoles: ["admin", "cno"] },
-  { key: "/users", label: "User Profiles", defaultRoles: ["admin"] },
+  { key: "/audit", label: "Audit Log", defaultRoles: ["admin", "cno", "service_support"] },
+  { key: "/users", label: "User Profiles", defaultRoles: ["admin", "service_support"] },
   { key: "/permissions", label: "Permissions", defaultRoles: ["admin"] },
   { key: "/menu-permissions", label: "Menu Access", defaultRoles: ["admin"] },
 ];

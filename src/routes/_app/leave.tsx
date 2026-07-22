@@ -255,8 +255,12 @@ function LeavePage() {
             `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
           );
           const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date));
+          const today = new Date().toISOString().slice(0, 10);
           const shiftsToCredit = publishedShifts.filter(
-            (s) => !alreadyLogged.has(s.shift_date) && (s.shift === "M" || s.shift === "N"),
+            (s) =>
+              !alreadyLogged.has(s.shift_date) &&
+              (s.shift === "M" || s.shift === "N") &&
+              s.shift_date <= today,
           );
 
           if (shiftsToCredit.length > 0) {

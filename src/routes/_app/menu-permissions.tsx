@@ -39,6 +39,7 @@ const ROLES: AppRole[] = [
   "chief_matron",
   "head_nurse",
   "hr_admin",
+  "service_support",
   "nurse",
   "surgical_nurse",
   "porter",

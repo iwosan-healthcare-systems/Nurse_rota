@@ -204,6 +204,24 @@ function NurseDashboard() {
       ),
   });
 
+  const { data: todayLocum } = useQuery<{
+    id: string;
+    shift: "M" | "N";
+    ward: string;
+    facility: string;
+  } | null>({
+    queryKey: ["my-locum-today-dash", nurseId, today],
+    enabled: !!nurseId,
+    queryFn: async () => {
+      const arr = await api
+        .get<{ id: string; shift: "M" | "N"; ward: string; facility: string }[]>(
+          `/locum/requests?accepted_by_nurse_id=${nurseId}&shift_date=${today}&status=filled&limit=1`,
+        )
+        .catch(() => []);
+      return arr[0] ?? null;
+    },
+  });
+
   const { data: activeLog } = useQuery<ShiftLog | null>({
     queryKey: ["my-active-log", nurseId, today],
     enabled: !!nurseId,
@@ -228,6 +246,17 @@ function NurseDashboard() {
     enabled: !!nurseId,
     queryFn: () => api.get<LeaveRequest[]>(`/leave-requests?nurse_id=${nurseId}&limit=5`),
   });
+
+  const locumAssignment: Assignment | null = todayLocum
+    ? {
+        shift: todayLocum.shift,
+        shift_date: today,
+        ward: `${todayLocum.ward} · ${todayLocum.facility}`,
+        status: "published",
+      }
+    : null;
+
+  const effectiveAssignment = locumAssignment ?? todayAssignment;
 
   const regularLogs = periodLogs.filter((l) => !l.is_swap);
   const additionalLogs = periodLogs.filter((l) => l.is_swap && l.hours_logged != null);
@@ -376,26 +405,33 @@ function NurseDashboard() {
               Track <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
-          {todayAssignment ? (
+          {effectiveAssignment ? (
             <div className="space-y-3">
-              <span
-                className={cn(
-                  "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border",
-                  shiftColor[todayAssignment.shift] ?? shiftColor.OFF,
+              <div className="flex items-center gap-2 flex-wrap">
+                <span
+                  className={cn(
+                    "inline-flex items-center px-3 py-1 rounded-full text-sm font-semibold border",
+                    shiftColor[effectiveAssignment.shift] ?? shiftColor.OFF,
+                  )}
+                >
+                  {shiftLabel[effectiveAssignment.shift] ?? effectiveAssignment.shift}
+                </span>
+                {locumAssignment && (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 border border-purple-200">
+                    Bank Shift (Locum)
+                  </span>
                 )}
-              >
-                {shiftLabel[todayAssignment.shift] ?? todayAssignment.shift}
-              </span>
-              {shiftTime[todayAssignment.shift] && (
+              </div>
+              {shiftTime[effectiveAssignment.shift] && (
                 <p className="text-sm text-muted-foreground">
                   <Clock className="h-3.5 w-3.5 inline mr-1" />
-                  {shiftTime[todayAssignment.shift]}
+                  {shiftTime[effectiveAssignment.shift]}
                 </p>
               )}
-              {todayAssignment.ward && (
+              {effectiveAssignment.ward && (
                 <p className="text-sm text-muted-foreground">
                   <MapPin className="h-3.5 w-3.5 inline mr-1" />
-                  {todayAssignment.ward}
+                  {effectiveAssignment.ward}
                 </p>
               )}
               {isShiftActive && (
@@ -405,8 +441,8 @@ function NurseDashboard() {
                 </div>
               )}
               {!activeLog &&
-                todayAssignment.status === "published" &&
-                (todayAssignment.shift === "M" || todayAssignment.shift === "N") && (
+                effectiveAssignment.status === "published" &&
+                (effectiveAssignment.shift === "M" || effectiveAssignment.shift === "N") && (
                   <Link
                     to="/shift"
                     className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"
@@ -425,6 +461,7 @@ function NurseDashboard() {
               No assignment for today
             </p>
           )}
+
         </div>
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">

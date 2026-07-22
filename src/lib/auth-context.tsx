@@ -9,6 +9,7 @@ export type AppRole =
   | "chief_matron"
   | "head_nurse"
   | "hr_admin"
+  | "service_support"
   | "nurse"
   | "porter"
   | "nursing_assistant"
@@ -266,7 +267,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasRole,
     hasAnyRole,
     isAdmin: ar === "admin",
-    canManageRoles: cap("manage_roles", ["admin"]),
+    canManageRoles: cap("manage_roles", ["admin", "service_support"]),
     canDelete: cap("delete_staff", ["admin"]),
     canManageStaff: cap("manage_staff", ["admin", "hr_admin"]),
     canManageWards: cap("manage_wards", ["admin", "cno"]),
@@ -298,6 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       "chief_matron",
       "head_nurse",
       "hr_admin",
+      "service_support",
     ]),
     canPrintSchedule: cap("print_schedule", [
       "admin",
@@ -305,14 +307,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       "chief_matron",
       "head_nurse",
       "hr_admin",
+      "service_support",
     ]),
     canRequestLocum: cap("request_locum", ["admin", "chief_matron"]),
     canApproveLocum: cap("approve_locum", ["admin", "cno"]),
     canSendLocumInvites: cap("send_locum_invites", ["admin", "chief_matron"]),
     canViewLocumHours: cap("view_locum_hours", ["admin", "cno", "chief_matron", "hr_admin"]),
     canViewLocumRequests: cap("view_locum_requests", ["admin", "cno", "chief_matron", "head_nurse"]),
-    canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
-    canViewAudit: cap("view_audit", ["admin"]),
+    canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"]),
+    canViewAudit: cap("view_audit", ["admin", "service_support"]),
     signOut,
   };
 
@@ -350,6 +353,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   chief_matron: "Chief Matron",
   head_nurse: "Head Nurse",
   hr_admin: "HR / Admin",
+  service_support: "Service Support",
   nurse: "Nurse",
   porter: "Porter",
   nursing_assistant: "Nursing Assistant",
@@ -362,6 +366,7 @@ export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
   chief_matron: "Review and approve rotas, manage leave and ward staffing",
   head_nurse: "Provide coverage across wards, manage schedules and approve leave",
   hr_admin: "Manage staff records, leave requests and HR administration",
+  service_support: "Manage user accounts, reset passwords, assign roles and view audit logs",
   nurse: "View your schedule, submit leave requests and access rota",
   porter: "View your schedule, submit leave requests and access rota",
   nursing_assistant: "View your schedule, submit leave requests and access rota",

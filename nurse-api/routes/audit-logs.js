@@ -5,7 +5,7 @@ const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
   "/",
-  requireRole("admin", "cno"),
+  requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     const conditions = [];
     const params = [];
