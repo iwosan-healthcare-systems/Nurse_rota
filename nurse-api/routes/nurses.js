@@ -10,6 +10,11 @@ router.get(
     const params = [];
     const conditions = [];
 
+    // Exclude deactivated nurses unless the caller explicitly requests them
+    if (req.query.include_inactive !== "true") {
+      conditions.push("is_active = true");
+    }
+
     if (req.query.ward) {
       conditions.push(`ward = $${params.length + 1}`);
       params.push(req.query.ward);

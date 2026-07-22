@@ -322,9 +322,32 @@ router.patch(
   requireAuth,
   requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
-    await pool.query("UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1", [
-      req.params.id,
-    ]);
+    const profileId = req.params.id;
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        "UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1",
+        [profileId],
+      );
+      // Mark the linked nurse record inactive and wipe all future shift assignments
+      const { rows: nurseRows } = await client.query(
+        "UPDATE nurses SET is_active = false WHERE profile_id = $1 RETURNING id",
+        [profileId],
+      );
+      if (nurseRows[0]) {
+        await client.query(
+          "DELETE FROM shift_assignments WHERE nurse_id = $1 AND shift_date >= CURRENT_DATE",
+          [nurseRows[0].id],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
     res.json({ success: true });
   }),
 );
@@ -334,9 +357,11 @@ router.patch(
   requireAuth,
   requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
+    const profileId = req.params.id;
     await pool.query("UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1", [
-      req.params.id,
+      profileId,
     ]);
+    await pool.query("UPDATE nurses SET is_active = true WHERE profile_id = $1", [profileId]);
     res.json({ success: true });
   }),
 );
