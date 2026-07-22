@@ -882,6 +882,49 @@ function RotaPage() {
     } as Record<FacilityWideGroup, string>;
   }, [assignments, nurses, effectiveFacility]);
 
+  // Per-group: nurses in a published facility-wide group who have zero assignments.
+  const unscheduledFwMap = useMemo(() => {
+    if (!canGenerate || !effectiveFacility) return new Map<FacilityWideGroup, typeof nurses>();
+    const assignedIds = new Set(assignments.map((a) => a.nurse_id));
+    const fac = nurses.filter((n) => n.facility === effectiveFacility);
+    const getGroup = (key: FacilityWideGroup) => {
+      if (key === "matron") return fac.filter((n) => isMatron(n.role));
+      if (key === "head") return fac.filter((n) => isGlobalHead(n.role));
+      if (key === "porter") return fac.filter((n) => isPorterType(n.role));
+      return fac.filter((n) => isInternType(n.role));
+    };
+    const result = new Map<FacilityWideGroup, typeof nurses>();
+    for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
+      if (facilityWideStatusMap[key] === "published") {
+        const unscheduled = getGroup(key).filter((n) => !assignedIds.has(n.id));
+        if (unscheduled.length) result.set(key, unscheduled);
+      }
+    }
+    return result;
+  }, [canGenerate, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
+
+  // Per-group: nurses in a published facility-wide group who have only draft assignments.
+  const draftOnlyFwMap = useMemo(() => {
+    if (!canGenerate || !effectiveFacility) return new Map<FacilityWideGroup, typeof nurses>();
+    const publishedIds = new Set(assignments.filter((a) => a.status === "published").map((a) => a.nurse_id));
+    const draftIds = new Set(assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id));
+    const fac = nurses.filter((n) => n.facility === effectiveFacility);
+    const getGroup = (key: FacilityWideGroup) => {
+      if (key === "matron") return fac.filter((n) => isMatron(n.role));
+      if (key === "head") return fac.filter((n) => isGlobalHead(n.role));
+      if (key === "porter") return fac.filter((n) => isPorterType(n.role));
+      return fac.filter((n) => isInternType(n.role));
+    };
+    const result = new Map<FacilityWideGroup, typeof nurses>();
+    for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
+      if (facilityWideStatusMap[key] === "published") {
+        const draftOnly = getGroup(key).filter((n) => draftIds.has(n.id) && !publishedIds.has(n.id));
+        if (draftOnly.length) result.set(key, draftOnly);
+      }
+    }
+    return result;
+  }, [canGenerate, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
+
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
     setGenForm({
@@ -1333,6 +1376,137 @@ function RotaPage() {
       await logAudit(
         "Published draft schedule for new/reactivated staff to existing rota",
         `${selectedWard} · (${names})`,
+      );
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["approvals"] });
+      toast.success(`Published to rota for ${names}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to publish");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleGenerateForUnscheduledFw(
+    key: FacilityWideGroup,
+    targetNurses: (typeof nurses)[number][],
+  ) {
+    if (!effectiveFacility || !canGenerate || !targetNurses.length) return;
+    setBusy(true);
+    try {
+      const today = todayYmd();
+      const periodEnd = ymd(endDate);
+      const startDate = new Date(today + "T00:00:00");
+
+      const fac = nurses.filter((n) => n.facility === effectiveFacility);
+      const getGroup = (k: FacilityWideGroup) => {
+        if (k === "matron") return fac.filter((n) => isMatron(n.role));
+        if (k === "head") return fac.filter((n) => isGlobalHead(n.role));
+        if (k === "porter") return fac.filter((n) => isPorterType(n.role));
+        return fac.filter((n) => isInternType(n.role));
+      };
+      const allGroupNurses = getGroup(key);
+      const facilityIds = fac.map((n) => n.id);
+
+      let periodOffset = 0;
+      if (facilityIds.length > 0) {
+        const dayBefore = new Date(startDate);
+        dayBefore.setDate(dayBefore.getDate() - 1);
+        const epochRows = await api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
+          )
+          .catch(() => []);
+        if (epochRows[0]?.shift_date) {
+          const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
+          periodOffset = Math.round(
+            (startDate.getTime() - epochDate.getTime()) / (24 * 60 * 60 * 1000),
+          );
+        }
+      }
+
+      let previousAssignments: { nurse_id: string; shift_date: string; shift: ShiftCode }[] = [];
+      if (periodOffset > 0 && facilityIds.length > 0) {
+        const prevTo = new Date(startDate);
+        prevTo.setDate(prevTo.getDate() - 1);
+        const prevFrom = new Date(startDate);
+        prevFrom.setDate(prevFrom.getDate() - 5);
+        previousAssignments = await api
+          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
+            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
+          )
+          .catch(() => []);
+      }
+
+      const { assignments: draft } = generateSchedule({
+        nurses: allGroupNurses,
+        wards: facilityFilteredWards.filter((w) => !w.facility || w.facility === effectiveFacility),
+        leave,
+        startDate,
+        days: DAYS,
+        facility: effectiveFacility,
+        periodOffset,
+        previousAssignments,
+      });
+
+      const targetIds = new Set(targetNurses.map((n) => n.id));
+      const targetDraft = draft.filter((d) => targetIds.has(d.nurse_id) && d.shift_date >= today);
+
+      const targetIdList = Array.from(targetIds);
+      for (let i = 0; i < targetIdList.length; i += 100) {
+        await api
+          .del(
+            `/shift-assignments?nurse_ids=${targetIdList.slice(i, i + 100).join(",")}&from=${today}&to=${periodEnd}&neq_status=published`,
+          )
+          .catch(() => {});
+      }
+
+      const pubRows = await api
+        .get<{ nurse_id: string; shift_date: string }[]>(
+          `/shift-assignments?from=${today}&to=${periodEnd}&status=published`,
+        )
+        .catch(() => []);
+      const publishedKeys = new Set(
+        pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`),
+      );
+
+      const toInsert = targetDraft
+        .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
+        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+      for (let i = 0; i < toInsert.length; i += 500) {
+        await api.post("/shift-assignments/upsert", toInsert.slice(i, i + 500));
+      }
+
+      const names = targetNurses.map((n) => n.name).join(", ");
+      await logAudit(
+        "Generated draft for new/reactivated facility-wide staff",
+        `${key} · ${today} → ${periodEnd} (${names})`,
+      );
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      toast.success(`Draft generated for ${names} — review, edit if needed, then submit`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handlePublishNewFwStaff(targetNurses: (typeof nurses)[number][]) {
+    if (!targetNurses.length) return;
+    setBusy(true);
+    try {
+      const nurseIds = new Set(targetNurses.map((n) => n.id));
+      const draftAssignments = assignments.filter(
+        (a) => a.status === "draft" && nurseIds.has(a.nurse_id),
+      );
+      await api.post(
+        "/shift-assignments/upsert",
+        draftAssignments.map((a) => ({ ...a, status: "published" as const })),
+      );
+      const names = targetNurses.map((n) => n.name).join(", ");
+      await logAudit(
+        "Published draft for new/reactivated facility-wide staff to existing rota",
+        `(${names})`,
       );
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -2249,10 +2423,46 @@ function RotaPage() {
                       </>
                     )}
                     {isLocked && (
-                      <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                        <Clock className="h-3 w-3" />
-                        {statusLabel[status]}
-                      </span>
+                      <>
+                        <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                          <Clock className="h-3 w-3" />
+                          {statusLabel[status]}
+                        </span>
+                        {/* New/reactivated nurse in a published group — generate their draft */}
+                        {status === "published" && (unscheduledFwMap.get(key)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleGenerateForUnscheduledFw(key, unscheduledFwMap.get(key)!);
+                            }}
+                            disabled={busy}
+                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 disabled:opacity-50"
+                          >
+                            <CalendarDays className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+                            {busy ? "…" : unscheduledFwMap.get(key)!.length === 1
+                              ? `Generate for ${unscheduledFwMap.get(key)![0].name.split(" ")[0]}`
+                              : `Generate for ${unscheduledFwMap.get(key)!.length} staff`}
+                          </button>
+                        )}
+                        {/* Draft exists for new staff — submit directly to published rota */}
+                        {status === "published" && (draftOnlyFwMap.get(key)?.length ?? 0) > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handlePublishNewFwStaff(draftOnlyFwMap.get(key)!);
+                            }}
+                            disabled={busy}
+                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white border-blue-600 disabled:opacity-50"
+                          >
+                            <CheckCircle className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+                            {busy ? "…" : draftOnlyFwMap.get(key)!.length === 1
+                              ? `Submit for ${draftOnlyFwMap.get(key)![0].name.split(" ")[0]}`
+                              : `Submit for ${draftOnlyFwMap.get(key)!.length} staff`}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

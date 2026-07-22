@@ -562,11 +562,18 @@ function ApprovalsPage() {
   }
 
   async function fetchWindowData(win: RotaWindow) {
-    const endDate = scheduleEndDate(win.startDate);
+    // Use the actual last date in the window cluster, not a fixed startDate+27
+    // calculation — newly-added staff may have assignments that start after the
+    // period begin, and we must not cut them off.
+    const endDate = win.endDate > scheduleEndDate(win.startDate)
+      ? win.endDate
+      : scheduleEndDate(win.startDate);
+
+    // Fetch nurses fresh from the server so newly added or reactivated staff are
+    // always included even if the React Query cache hasn't been invalidated yet.
     type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null };
-    let scopedNurses: NurseRow[] = (allNurses as NurseRow[]).filter(
-      (n) => n.facility === win.facility,
-    );
+    const freshNurses = await api.get<NurseRow[]>("/nurses");
+    let scopedNurses = freshNurses.filter((n) => n.facility === win.facility);
     if (win.ward !== null) {
       // Mirror the wardNurses filter in rota.tsx: exclude all facility-level roles
       // (matron, coverage/head, intern, porter, NA-day) even if their nurse profile
