@@ -326,15 +326,26 @@ router.patch(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      await client.query(
-        "UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1",
+      // Deactivate the login account
+      const { rows: profileRows } = await client.query(
+        "UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING full_name",
         [profileId],
       );
-      // Mark the linked nurse record inactive and wipe all future shift assignments
-      const { rows: nurseRows } = await client.query(
-        "UPDATE nurses SET is_active = false WHERE profile_id = $1 RETURNING id",
+
+      // Find linked nurse record — try exact profile_id first, fall back to name match
+      let { rows: nurseRows } = await client.query(
+        "UPDATE nurses SET is_active = false, profile_id = $1 WHERE profile_id = $1 RETURNING id",
         [profileId],
       );
+      if (!nurseRows[0] && profileRows[0]?.full_name) {
+        ({ rows: nurseRows } = await client.query(
+          `UPDATE nurses SET is_active = false, profile_id = $1
+           WHERE LOWER(name) = LOWER($2) RETURNING id`,
+          [profileId, profileRows[0].full_name],
+        ));
+      }
+
+      // Clear all future and current shift assignments for the deactivated nurse
       if (nurseRows[0]) {
         await client.query(
           "DELETE FROM shift_assignments WHERE nurse_id = $1 AND shift_date >= CURRENT_DATE",
@@ -358,10 +369,21 @@ router.patch(
   requireRole("admin", "cno", "service_support"),
   wrap(async (req, res) => {
     const profileId = req.params.id;
-    await pool.query("UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1", [
-      profileId,
-    ]);
-    await pool.query("UPDATE nurses SET is_active = true WHERE profile_id = $1", [profileId]);
+    const { rows: profileRows } = await pool.query(
+      "UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1 RETURNING full_name",
+      [profileId],
+    );
+    // Restore by profile_id first, fall back to name
+    const { rowCount } = await pool.query(
+      "UPDATE nurses SET is_active = true WHERE profile_id = $1",
+      [profileId],
+    );
+    if (!rowCount && profileRows[0]?.full_name) {
+      await pool.query(
+        "UPDATE nurses SET is_active = true, profile_id = $1 WHERE LOWER(name) = LOWER($2)",
+        [profileId, profileRows[0].full_name],
+      );
+    }
     res.json({ success: true });
   }),
 );
