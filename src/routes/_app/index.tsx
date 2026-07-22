@@ -213,12 +213,29 @@ function NurseDashboard() {
     queryKey: ["my-locum-today-dash", nurseId, today],
     enabled: !!nurseId,
     queryFn: async () => {
-      const arr = await api
-        .get<{ id: string; shift: "M" | "N"; ward: string; facility: string }[]>(
-          `/locum/requests?accepted_by_nurse_id=${nurseId}&shift_date=${today}&status=filled&limit=1`,
-        )
+      const invites = await api
+        .get<{
+          id: string;
+          status: string;
+          locum_request: {
+            id: string;
+            shift: "M" | "N";
+            ward: string;
+            facility: string;
+            shift_date: string;
+          } | null;
+        }[]>(`/locum/invites?nurse_id=${nurseId}&status=accepted`)
         .catch(() => []);
-      return arr[0] ?? null;
+      const todayInvite = invites.find(
+        (inv) => inv.locum_request?.shift_date?.slice(0, 10) === today,
+      );
+      if (!todayInvite?.locum_request) return null;
+      return {
+        id: todayInvite.locum_request.id,
+        shift: todayInvite.locum_request.shift,
+        ward: todayInvite.locum_request.ward,
+        facility: todayInvite.locum_request.facility,
+      };
     },
   });
 
