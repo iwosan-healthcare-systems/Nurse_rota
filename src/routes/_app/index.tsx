@@ -204,39 +204,25 @@ function NurseDashboard() {
       ),
   });
 
-  const { data: todayLocum } = useQuery<{
+  type LocumInviteForDash = {
     id: string;
-    shift: "M" | "N";
-    ward: string;
-    facility: string;
-  } | null>({
-    queryKey: ["my-locum-today-dash", nurseId, today],
+    status: string;
+    locum_request: {
+      id: string;
+      shift: "M" | "N";
+      ward: string;
+      facility: string;
+      shift_date: string;
+    } | null;
+  };
+
+  const { data: acceptedLocumInvites = [] } = useQuery<LocumInviteForDash[]>({
+    queryKey: ["my-accepted-locums", nurseId],
     enabled: !!nurseId,
-    queryFn: async () => {
-      const invites = await api
-        .get<{
-          id: string;
-          status: string;
-          locum_request: {
-            id: string;
-            shift: "M" | "N";
-            ward: string;
-            facility: string;
-            shift_date: string;
-          } | null;
-        }[]>(`/locum/invites?nurse_id=${nurseId}&status=accepted`)
-        .catch(() => []);
-      const todayInvite = invites.find(
-        (inv) => inv.locum_request?.shift_date?.slice(0, 10) === today,
-      );
-      if (!todayInvite?.locum_request) return null;
-      return {
-        id: todayInvite.locum_request.id,
-        shift: todayInvite.locum_request.shift,
-        ward: todayInvite.locum_request.ward,
-        facility: todayInvite.locum_request.facility,
-      };
-    },
+    queryFn: () =>
+      api
+        .get<LocumInviteForDash[]>(`/locum/invites?nurse_id=${nurseId}&status=accepted`)
+        .catch(() => []),
   });
 
   const { data: activeLog } = useQuery<ShiftLog | null>({
@@ -264,6 +250,11 @@ function NurseDashboard() {
     queryFn: () => api.get<LeaveRequest[]>(`/leave-requests?nurse_id=${nurseId}&limit=5`),
   });
 
+  const todayLocumInvite = acceptedLocumInvites.find(
+    (inv) => inv.locum_request?.shift_date?.slice(0, 10) === today,
+  );
+  const todayLocum = todayLocumInvite?.locum_request ?? null;
+
   const locumAssignment: Assignment | null = todayLocum
     ? {
         shift: todayLocum.shift,
@@ -274,6 +265,33 @@ function NurseDashboard() {
     : null;
 
   const effectiveAssignment = locumAssignment ?? todayAssignment;
+
+  // Map of upcoming locum dates (next 7 days) → locum info, for "Next 7 days" bank badge
+  const upcomingLocumMap = new Map<string, { shift: "M" | "N"; ward: string; facility: string }>(
+    acceptedLocumInvites
+      .filter((inv) => {
+        const d = inv.locum_request?.shift_date?.slice(0, 10);
+        return d && d > today && d <= end7;
+      })
+      .map((inv) => [
+        inv.locum_request!.shift_date.slice(0, 10),
+        { shift: inv.locum_request!.shift, ward: inv.locum_request!.ward, facility: inv.locum_request!.facility },
+      ]),
+  );
+
+  // Days with a locum but no published shift_assignment (e.g. nurse not in that facility's rota)
+  const locumOnlyUpcoming: Assignment[] = Array.from(upcomingLocumMap.entries())
+    .filter(([d]) => !upcomingAssignments.some((a) => a.shift_date.slice(0, 10) === d))
+    .map(([d, lr]) => ({
+      shift: lr.shift,
+      shift_date: d,
+      ward: `${lr.ward} · ${lr.facility}`,
+      status: "published" as const,
+    }));
+
+  const mergedUpcoming = [...upcomingAssignments, ...locumOnlyUpcoming].sort((a, b) =>
+    a.shift_date.localeCompare(b.shift_date),
+  );
 
   const regularLogs = periodLogs.filter((l) => !l.is_swap);
   const additionalLogs = periodLogs.filter((l) => l.is_swap && l.hours_logged != null);
@@ -492,33 +510,40 @@ function NurseDashboard() {
               View rota <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
-          {upcomingAssignments.length === 0 ? (
+          {mergedUpcoming.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">
               No upcoming shifts found
             </p>
           ) : (
             <div className="space-y-2">
-              {upcomingAssignments.map((a) => {
-                const dt = new Date(a.shift_date.slice(0, 10) + "T00:00:00");
+              {mergedUpcoming.map((a) => {
+                const d = a.shift_date.slice(0, 10);
+                const isLocum = upcomingLocumMap.has(d);
+                const dt = new Date(d + "T00:00:00");
                 return (
-                  <div key={a.shift_date} className="flex items-center justify-between text-sm">
-                    <div className="flex items-center gap-2">
-                      <span className="w-24 text-muted-foreground">
-                        {dt.toLocaleDateString("en-GB", {
-                          weekday: "short",
-                          day: "numeric",
-                          month: "short",
-                        })}
+                  <div key={d} className="flex items-center justify-between text-sm">
+                    <span className="w-24 text-muted-foreground">
+                      {dt.toLocaleDateString("en-GB", {
+                        weekday: "short",
+                        day: "numeric",
+                        month: "short",
+                      })}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      {isLocum && (
+                        <span className="text-xs px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 border border-purple-200 font-semibold dark:bg-purple-950/30 dark:text-purple-300 dark:border-purple-800">
+                          Bank
+                        </span>
+                      )}
+                      <span
+                        className={cn(
+                          "text-xs px-2 py-0.5 rounded-full font-semibold border",
+                          shiftColor[a.shift] ?? shiftColor.OFF,
+                        )}
+                      >
+                        {shiftLabel[a.shift] ?? a.shift}
                       </span>
                     </div>
-                    <span
-                      className={cn(
-                        "text-xs px-2 py-0.5 rounded-full font-semibold border",
-                        shiftColor[a.shift] ?? shiftColor.OFF,
-                      )}
-                    >
-                      {shiftLabel[a.shift] ?? a.shift}
-                    </span>
                   </div>
                 );
               })}
