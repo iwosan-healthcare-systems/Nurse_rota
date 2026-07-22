@@ -219,6 +219,8 @@ function StaffPage() {
       await api.patch(`/auth/admin/users/${userId}/ban`);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
+      void qc.invalidateQueries({ queryKey: ["nurses"] });
+      void qc.invalidateQueries({ queryKey: ["assignments"] });
       toast.success("Login deactivated");
     } catch (e) {
       toast.error((e as Error).message);
@@ -230,6 +232,8 @@ function StaffPage() {
       await api.patch(`/auth/admin/users/${userId}/unban`);
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
+      void qc.invalidateQueries({ queryKey: ["nurses"] });
+      void qc.invalidateQueries({ queryKey: ["assignments"] });
       toast.success("Login reactivated");
     } catch (e) {
       toast.error((e as Error).message);

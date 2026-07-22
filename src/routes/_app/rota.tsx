@@ -7,6 +7,7 @@ import { NURSE_TIER_ROLES } from "@/lib/auth-context";
 import {
   AlertTriangle,
   CalendarDays,
+  CheckCircle,
   Users,
   Wand2,
   Trash2,
@@ -805,6 +806,30 @@ function RotaPage() {
     );
   }, [selectedWard, canGenerate, isLoading, assignments, nurses, effectiveFacility]);
 
+  // Nurses in the selected ward who have draft-only assignments while the ward
+  // overall is published — these were generated for new/reactivated staff and
+  // are awaiting a direct publish (no approval chain required).
+  const newStaffWithDraft = useMemo(() => {
+    if (!selectedWard || wardStatusMap.get(selectedWard) !== "published") return [];
+    const publishedNurseIds = new Set(
+      assignments.filter((a) => a.status === "published").map((a) => a.nurse_id),
+    );
+    const draftNurseIds = new Set(
+      assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
+    );
+    return nurses.filter(
+      (n) =>
+        n.facility === effectiveFacility &&
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isPorterType(n.role) &&
+        !isInternType(n.role) &&
+        parseWards(n.ward)[0] === selectedWard &&
+        draftNurseIds.has(n.id) &&
+        !publishedNurseIds.has(n.id),
+    );
+  }, [selectedWard, wardStatusMap, assignments, nurses, effectiveFacility]);
+
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
   const facilityWideCardGroups = useMemo(() => {
@@ -1266,16 +1291,9 @@ function RotaPage() {
         .catch(() => []);
       const publishedKeys = new Set(pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
 
-      // If the ward is already published, slot the new staff straight into the
-      // published schedule so exports, reports, and the approvals page reflect them
-      // immediately without requiring a second approval cycle.
-      const wardCurrentStatus = wardStatusMap.get(selectedWard);
-      const assignStatus =
-        wardCurrentStatus === "published" ? ("published" as const) : ("draft" as const);
-
       const toInsert = targetDraft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
-        .map((d) => ({ ...d, created_by: user?.id ?? null, status: assignStatus }));
+        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
 
       for (let i = 0; i < toInsert.length; i += 500) {
         await api.post("/shift-assignments/upsert", toInsert.slice(i, i + 500));
@@ -1283,21 +1301,44 @@ function RotaPage() {
 
       const names = unscheduledWardNurses.map((n) => n.name).join(", ");
       await logAudit(
-        assignStatus === "published"
-          ? "Published schedule for new/reactivated staff (ward already published)"
-          : "Generated draft schedule for new/reactivated staff",
+        "Generated draft schedule for new/reactivated staff",
         `${selectedWard} · ${today} → ${periodEnd} (${names})`,
       );
 
       qc.invalidateQueries({ queryKey: ["assignments"] });
-      qc.invalidateQueries({ queryKey: ["approvals"] });
-      toast.success(
-        assignStatus === "published"
-          ? `Schedule published for ${names} — visible in reports and exports`
-          : `Draft schedule generated for ${names} — submit for approval when ready`,
-      );
+      toast.success(`Draft generated for ${names} — review, edit if needed, then submit`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Directly publishes draft assignments for new/reactivated staff in an
+  // already-published ward — bypasses the approval chain since the ward is
+  // already approved and this only adds staff who weren't part of the original schedule.
+  async function handlePublishNewStaff() {
+    if (!newStaffWithDraft.length) return;
+    setBusy(true);
+    try {
+      const nurseIds = new Set(newStaffWithDraft.map((n) => n.id));
+      const draftAssignments = assignments.filter(
+        (a) => a.status === "draft" && nurseIds.has(a.nurse_id),
+      );
+      await api.post(
+        "/shift-assignments/upsert",
+        draftAssignments.map((a) => ({ ...a, status: "published" as const })),
+      );
+      const names = newStaffWithDraft.map((n) => n.name).join(", ");
+      await logAudit(
+        "Published draft schedule for new/reactivated staff to existing rota",
+        `${selectedWard} · (${names})`,
+      );
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["approvals"] });
+      toast.success(`Published to rota for ${names}`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to publish");
     } finally {
       setBusy(false);
     }
@@ -1960,28 +2001,62 @@ function RotaPage() {
           {selectedWard && (
             <div className="flex items-center gap-2 mt-3 flex-wrap">
               {isWindowLocked ? (
-                <span
-                  className={cn(
-                    "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
-                    windowLockStatus === "published"
-                      ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
-                      : windowLockStatus === "approved_cno"
-                        ? "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
-                        : windowLockStatus === "approved_chief"
-                          ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300"
-                          : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
+                <>
+                  <span
+                    className={cn(
+                      "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
+                      windowLockStatus === "published"
+                        ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
+                        : windowLockStatus === "approved_cno"
+                          ? "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
+                          : windowLockStatus === "approved_chief"
+                            ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300"
+                            : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
+                    )}
+                  >
+                    {windowLockStatus === "published" ? (
+                      <Lock className="h-3.5 w-3.5" />
+                    ) : (
+                      <Clock className="h-3.5 w-3.5" />
+                    )}
+                    {windowLockStatus === "published" && "Published — read only"}
+                    {windowLockStatus === "approved_cno" && "CNO Approved — awaiting publication"}
+                    {windowLockStatus === "approved_chief" && "Chief Matron Approved — awaiting CNO"}
+                    {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
+                  </span>
+                  {/* New/reactivated staff in a published ward — generate their draft first */}
+                  {windowLockStatus === "published" && canGenerate && unscheduledWardNurses.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateForUnscheduled()}
+                      disabled={busy}
+                      className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                      {busy
+                        ? "Generating…"
+                        : unscheduledWardNurses.length === 1
+                          ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
+                          : `Generate for ${unscheduledWardNurses.length} new staff`}
+                    </button>
                   )}
-                >
-                  {windowLockStatus === "published" ? (
-                    <Lock className="h-3.5 w-3.5" />
-                  ) : (
-                    <Clock className="h-3.5 w-3.5" />
+                  {/* Draft exists for new staff — submit to publish directly to existing rota */}
+                  {windowLockStatus === "published" && canGenerate && newStaffWithDraft.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void handlePublishNewStaff()}
+                      disabled={busy}
+                      className="h-9 px-4 rounded-md bg-blue-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      <CheckCircle className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                      {busy
+                        ? "Publishing…"
+                        : newStaffWithDraft.length === 1
+                          ? `Submit for ${newStaffWithDraft[0].name.split(" ")[0]}`
+                          : `Submit for ${newStaffWithDraft.length} staff`}
+                    </button>
                   )}
-                  {windowLockStatus === "published" && "Published — read only"}
-                  {windowLockStatus === "approved_cno" && "CNO Approved — awaiting publication"}
-                  {windowLockStatus === "approved_chief" && "Chief Matron Approved — awaiting CNO"}
-                  {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
-                </span>
+                </>
               ) : (
                 <>
                   {/* Generate for new / reactivated staff in this ward */}

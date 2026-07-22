@@ -179,6 +179,8 @@ function UsersPage() {
       void logAudit("Deactivated login", user.full_name ?? user.email ?? user.id);
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      void qc.invalidateQueries({ queryKey: ["nurses"] });
+      void qc.invalidateQueries({ queryKey: ["assignments"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to deactivate user");
     }
@@ -191,6 +193,8 @@ function UsersPage() {
       void logAudit("Reactivated login", user.full_name ?? user.email ?? user.id);
       void qc.invalidateQueries({ queryKey: ["user-profiles"] });
       void qc.invalidateQueries({ queryKey: ["profile-names"] });
+      void qc.invalidateQueries({ queryKey: ["nurses"] });
+      void qc.invalidateQueries({ queryKey: ["assignments"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to reactivate user");
     }
