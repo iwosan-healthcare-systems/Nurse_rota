@@ -197,19 +197,19 @@ function LeavePage() {
   const activeRows = activeTab === "leave" ? leaveRows : switchRows;
 
   // Standard credited hours per shift type (matches official shift windows).
-  const LEAVE_SHIFT_HOURS: Record<"M" | "N", number> = { M: 9, N: 15 };
+  const LEAVE_SHIFT_HOURS: Record<"M" | "N" | "MWC" | "NC", number> = { M: 9, N: 15, MWC: 9, NC: 15 };
 
   function buildLeaveShiftLog(
     nurseId: string,
     leaveId: string,
     shiftDate: string,
-    shift: "M" | "N",
+    shift: "M" | "N" | "MWC" | "NC",
   ) {
-    const startH = shift === "M" ? 8 : 17;
+    const isMorningType = shift === "M" || shift === "MWC";
     const startedAt = new Date(`${shiftDate}T00:00:00`);
-    startedAt.setHours(startH, 0, 0, 0);
+    startedAt.setHours(isMorningType ? 8 : 17, 0, 0, 0);
     const endedAt = new Date(startedAt);
-    if (shift === "M") {
+    if (isMorningType) {
       endedAt.setHours(17, 0, 0, 0);
     } else {
       endedAt.setDate(endedAt.getDate() + 1);
@@ -218,7 +218,7 @@ function LeavePage() {
     return {
       nurse_id: nurseId,
       shift_date: shiftDate,
-      shift_type: shift as "M" | "N",
+      shift_type: shift,
       started_at: startedAt.toISOString(),
       ended_at: endedAt.toISOString(),
       expected_end_at: endedAt.toISOString(),
@@ -251,7 +251,7 @@ function LeavePage() {
     try {
       if (status === "Approved" && l.nurse_id) {
         const publishedShifts = await api.get<{ id: string; shift_date: string; shift: string }[]>(
-          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published&shift_in=M,N`,
+          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published&shift_in=M,N,MWC,NC`,
         );
 
         if (publishedShifts.length > 0) {
@@ -266,7 +266,7 @@ function LeavePage() {
           const shiftsToCredit = publishedShifts.filter(
             (s) =>
               !alreadyLogged.has(s.shift_date) &&
-              (s.shift === "M" || s.shift === "N") &&
+              (s.shift === "M" || s.shift === "N" || s.shift === "MWC" || s.shift === "NC") &&
               s.shift_date <= today,
           );
 
@@ -275,12 +275,12 @@ function LeavePage() {
               .post(
                 "/shift-logs/bulk",
                 shiftsToCredit.map((s) =>
-                  buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N"),
+                  buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N" | "MWC" | "NC"),
                 ),
               )
               .catch(() => {});
             const totalHours = shiftsToCredit.reduce(
-              (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N"] ?? 0),
+              (sum, s) => sum + (LEAVE_SHIFT_HOURS[s.shift as "M" | "N" | "MWC" | "NC"] ?? 0),
               0,
             );
             await api
@@ -295,8 +295,8 @@ function LeavePage() {
             review_note: note || null,
           });
 
-          const mDates = publishedShifts.filter((s) => s.shift === "M").map((s) => s.shift_date);
-          const nDates = publishedShifts.filter((s) => s.shift === "N").map((s) => s.shift_date);
+          const mDates = publishedShifts.filter((s) => s.shift === "M" || s.shift === "MWC").map((s) => s.shift_date);
+          const nDates = publishedShifts.filter((s) => s.shift === "N" || s.shift === "NC").map((s) => s.shift_date);
           const parts: string[] = [];
           if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
           if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
