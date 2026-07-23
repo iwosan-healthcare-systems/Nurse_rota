@@ -79,5 +79,5 @@ jobs:
               echo "Skipping already-applied migration: $name"
             fi
           done
-          pm2 reload nurse-api || pm2 start server.js --name nurse-api --cwd /home/ubuntu/nurse-api
+          pm2 reload nurse-api || pm2 start server.js --name nurse-api --cwd /home/ubuntu/nurse-api -i 2
           pm2 save
