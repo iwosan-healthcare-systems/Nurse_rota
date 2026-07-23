@@ -227,9 +227,30 @@ router.post(
       }
     }
 
+    // Capture the rota stage at the moment of request so reports can show
+    // whether leave was requested before/after the rota was submitted or published.
+    let rotaStageAtRequest = "no_rota";
+    if (nurse_id) {
+      const { rows: stageRows } = await pool.query(
+        `SELECT CASE
+           WHEN EXISTS (
+             SELECT 1 FROM shift_assignments
+             WHERE nurse_id = $1 AND shift_date BETWEEN $2 AND $3 AND status = 'published'
+           ) THEN 'published'
+           WHEN EXISTS (
+             SELECT 1 FROM shift_assignments
+             WHERE nurse_id = $1 AND shift_date BETWEEN $2 AND $3 AND status = 'draft'
+           ) THEN 'draft'
+           ELSE 'no_rota'
+         END AS stage`,
+        [nurse_id, from_date, to_date],
+      );
+      rotaStageAtRequest = stageRows[0]?.stage ?? "no_rota";
+    }
+
     const { rows } = await pool.query(
-      `INSERT INTO leave_requests (nurse_id, nurse_name, type, from_date, to_date, reason, requested_by, switch_nurse_b)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      `INSERT INTO leave_requests (nurse_id, nurse_name, type, from_date, to_date, reason, requested_by, switch_nurse_b, rota_stage_at_request)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [
         nurse_id || null,
         nurse_name,
@@ -239,6 +260,7 @@ router.post(
         reason || null,
         requested_by || null,
         switch_nurse_b || null,
+        rotaStageAtRequest,
       ],
     );
     res.status(201).json(rows[0]);

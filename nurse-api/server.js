@@ -41,6 +41,7 @@ app.use('/api/audit-logs',        requireAuth, require('./routes/audit-logs'));
 app.use('/api/portal-settings',   requireAuth, require('./routes/portal-settings'));
 app.use('/api/notifications',     requireAuth, require('./routes/notifications'));
 app.use('/api/nurse-period-hours',requireAuth, require('./routes/nurse-period-hours'));
+app.use('/api/rota-transitions',  requireAuth, require('./routes/rota-transitions'));
 app.use('/api/rpc',               requireAuth, require('./routes/rpc'));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));

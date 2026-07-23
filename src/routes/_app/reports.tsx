@@ -98,6 +98,7 @@ type LeaveRequest = {
   type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave" | "Leave of Absence";
   reason: string | null;
   created_at: string;
+  rota_stage_at_request: "no_rota" | "draft" | "published" | null;
 };
 type ArchiveAssignment = {
   nurse_id: string;
@@ -834,6 +835,9 @@ function ReportsContent() {
     try {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
 
+      const rotaStageLabel = (s: LeaveRequest["rota_stage_at_request"]) =>
+        s === "published" ? "After publish" : s === "draft" ? "Before submission" : s === "no_rota" ? "No rota yet" : "–";
+
       const leaveRows = leaveOnly.map((l) => ({
         Nurse: nurseMap.get(l.nurse_id ?? "")?.name ?? "Unknown",
         Facility: nurseMap.get(l.nurse_id ?? "")?.facility ?? "",
@@ -842,6 +846,7 @@ function ReportsContent() {
         From: fmtDate(l.from_date),
         To: fmtDate(l.to_date),
         Status: l.status,
+        "Rota Stage": rotaStageLabel(l.rota_stage_at_request),
         "Requested Date": fmtDate(l.created_at),
         Reason: l.reason ?? "",
       }));
@@ -863,7 +868,7 @@ function ReportsContent() {
         wb,
         leaveRows.length ? leaveRows : [{ Note: "No leave requests" }],
         "Leave Requests",
-        [26, 10, 16, 14, 12, 12, 10, 14, 32],
+        [26, 10, 16, 14, 12, 12, 10, 16, 14, 32],
       );
       xlsAddJsonSheet(
         wb,
@@ -1842,6 +1847,7 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">From</th>
                       <th className="text-left px-4 py-3 font-semibold">To</th>
                       <th className="text-left px-4 py-3 font-semibold">Status</th>
+                      <th className="text-left px-4 py-3 font-semibold">Rota Stage</th>
                       <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
                     </tr>
                   </thead>
@@ -1873,6 +1879,17 @@ ${sections}
                               {l.status}
                             </span>
                           </td>
+                          <td className="px-4 py-3">
+                            {l.rota_stage_at_request === "published" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-sky-100 text-sky-700">After publish</span>
+                            ) : l.rota_stage_at_request === "draft" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700">Before submission</span>
+                            ) : l.rota_stage_at_request === "no_rota" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">No rota yet</span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">–</span>
+                            )}
+                          </td>
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
                             {fmtDate(l.created_at)}
                           </td>
@@ -1892,7 +1909,7 @@ ${sections}
                           .flatMap(([facility, fRows]) => [
                             <tr key={`hdr-${facility}`}>
                               <td
-                                colSpan={6}
+                                colSpan={7}
                                 className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
                               >
                                 {facility}

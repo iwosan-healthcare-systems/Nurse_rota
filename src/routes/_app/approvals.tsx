@@ -491,6 +491,16 @@ function ApprovalsPage() {
         target: `${targetLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
+    api.post("/rota-transitions", {
+      facility: win.facility,
+      ward: win.ward ?? null,
+      role_group: win.roleGroup ?? null,
+      period_start: win.startDate,
+      period_end: win.endDate,
+      status: nextStatus,
+      actor_id: user?.id,
+      actor_name: user?.email ?? null,
+    }).catch(() => {});
     if (nextStatus === "published") {
       const nextStart = scheduleEndDate(win.startDate);
       const nextStartDt = new Date(nextStart + "T00:00:00");
@@ -518,8 +528,9 @@ function ApprovalsPage() {
 
   async function reject(win: RotaWindow) {
     if (!confirm("Return this rota to draft? The submitter will need to resubmit.")) return;
+    const fromStatus = win.status;
     setBusy(winKey(win));
-    const err = await scopedStatusUpdate(win, "draft", win.status);
+    const err = await scopedStatusUpdate(win, "draft", fromStatus);
     setBusy(null);
     if (err) return toast.error(err);
     const rejectLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
@@ -527,10 +538,21 @@ function ApprovalsPage() {
       .post("/audit-logs", {
         actor_id: user?.id,
         actor_name: user?.email ?? null,
-        action: "Rota returned to draft",
+        action: `Rota returned to draft (was: ${fromStatus.replace(/_/g, " ")})`,
         target: `${rejectLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
+    api.post("/rota-transitions", {
+      facility: win.facility,
+      ward: win.ward ?? null,
+      role_group: win.roleGroup ?? null,
+      period_start: win.startDate,
+      period_end: win.endDate,
+      status: "draft",
+      event_type: "revert",
+      actor_id: user?.id,
+      actor_name: user?.email ?? null,
+    }).catch(() => {});
     toast.success("Returned to draft");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -556,6 +578,17 @@ function ApprovalsPage() {
         target: `${revertLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
+    api.post("/rota-transitions", {
+      facility: win.facility,
+      ward: win.ward ?? null,
+      role_group: win.roleGroup ?? null,
+      period_start: win.startDate,
+      period_end: win.endDate,
+      status: "draft",
+      event_type: "revert",
+      actor_id: user?.id,
+      actor_name: user?.email ?? null,
+    }).catch(() => {});
     toast.success("Rota unpublished — schedule is unchanged and now editable");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });

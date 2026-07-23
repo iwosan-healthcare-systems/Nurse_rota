@@ -1234,6 +1234,16 @@ function RotaPage() {
       "Submitted rota for approval",
       `${ymd(startDate)} → ${ymd(endDate)} (${selectedWard || effectiveFacility || "all wards"})`,
     );
+    api.post("/rota-transitions", {
+      facility: effectiveFacility,
+      ward: selectedWard || null,
+      role_group: null,
+      period_start: ymd(startDate),
+      period_end: ymd(endDate),
+      status: "submitted",
+      actor_id: user?.id,
+      actor_name: user?.email ?? null,
+    }).catch(() => {});
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -1800,6 +1810,16 @@ function RotaPage() {
         "Submitted facility-wide rota for approval",
         `${labels[key]} · ${effectiveFacility} · ${ymd(startDate)} → ${ymd(endDate)}`,
       );
+      api.post("/rota-transitions", {
+        facility: effectiveFacility,
+        ward: null,
+        role_group: key,
+        period_start: ymd(startDate),
+        period_end: ymd(endDate),
+        status: "submitted",
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+      }).catch(() => {});
       toast.success(`${labels[key]} schedule submitted to Chief Matron`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
