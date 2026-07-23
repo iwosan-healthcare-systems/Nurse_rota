@@ -40,6 +40,7 @@ dist-ssr
 # SSH keys (used locally to set up GitHub Actions secrets — never commit)
 github_actions_key
 github_actions_key.pub
+ProductionKey.pem
 
 # nurse-api
 nurse-api/.env
