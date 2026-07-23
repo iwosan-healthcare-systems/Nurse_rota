@@ -118,10 +118,22 @@ router.post(
     const isAdmin = userRoles.some((r) => ["admin", "cno"].includes(r));
     let resolvedNurseId = nurse_id;
     if (!isAdmin) {
-      const { rows: nurseRows } = await pool.query(
-        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+      let { rows: nurseRows } = await pool.query(
+        "SELECT id FROM nurses WHERE profile_id = $1 LIMIT 1",
         [req.user.userId],
       );
+      if (!nurseRows[0]) {
+        const { rows: byName } = await pool.query(
+          "SELECT id FROM nurses WHERE LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1)) LIMIT 1",
+          [req.user.userId],
+        );
+        if (byName[0]) {
+          nurseRows = byName;
+          pool
+            .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id])
+            .catch(() => {});
+        }
+      }
       if (!nurseRows[0])
         return res.status(403).json({ error: "Nurse record not found for this account" });
       resolvedNurseId = nurseRows[0].id;
@@ -228,11 +240,16 @@ router.patch(
     if (isAdmin) {
       query = `UPDATE shift_logs SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`;
     } else {
-      // Enforce ownership: only update if the shift log belongs to this user's nurse record
+      // Enforce ownership: only update if the shift log belongs to this user's nurse record.
+      // Prefer profile_id (reliable); fall back to case-insensitive name match for
+      // nurses that haven't been linked yet.
       values.push(req.user.userId);
       query = `UPDATE shift_logs SET ${sets.join(", ")}
       WHERE id = $${values.length - 1}
-      AND nurse_id = (SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $${values.length}) LIMIT 1)
+      AND nurse_id = COALESCE(
+        (SELECT id FROM nurses WHERE profile_id = $${values.length}),
+        (SELECT id FROM nurses WHERE LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $${values.length})) LIMIT 1)
+      )
       RETURNING *`;
     }
 

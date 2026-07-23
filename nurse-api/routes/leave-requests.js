@@ -127,6 +127,9 @@ router.post(
     if (from_date < today) {
       return res.status(400).json({ error: "Cannot submit a request for past dates" });
     }
+    if (to_date < from_date) {
+      return res.status(400).json({ error: "End date cannot be before the start date" });
+    }
 
     // Block leave requests for dates where the nurse's rota is currently under review.
     if (type !== "Swap" && nurse_id) {

@@ -214,7 +214,11 @@ router.patch(
         return res.status(403).json({ error: "Forbidden" });
       }
       const { rows: ownNurse } = await pool.query(
-        "SELECT id FROM nurses WHERE name = (SELECT full_name FROM profiles WHERE id = $1) LIMIT 1",
+        `SELECT id FROM nurses WHERE profile_id = $1
+         UNION ALL
+         SELECT id FROM nurses WHERE profile_id IS NULL
+           AND LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1))
+         LIMIT 1`,
         [req.user.userId],
       );
       if (!ownNurse[0] || ownNurse[0].id !== ids[0]) {

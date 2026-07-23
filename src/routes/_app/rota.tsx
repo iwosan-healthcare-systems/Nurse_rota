@@ -1312,8 +1312,9 @@ function RotaPage() {
       const targetIds = new Set(unscheduledWardNurses.map((n) => n.id));
 
       // Only keep generated assignments for the target nurses, from today onward
+      // and never beyond the period end (hard cap prevents off-by-one overshoot).
       const targetDraft = draft.filter(
-        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today,
+        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today && d.shift_date <= periodEnd,
       );
 
       // Clear any stale draft assignments for target nurses in the remaining window
@@ -1396,7 +1397,10 @@ function RotaPage() {
     try {
       const today = todayYmd();
       const periodEnd = ymd(endDate);
-      const startDate = new Date(today + "T00:00:00");
+      // Use the period's startDate (outer scope) — NOT today — so generateSchedule
+      // produces exactly DAYS assignments starting at the period boundary. We then
+      // filter down to >= today for the target nurses. Using today here would shift
+      // the 28-day window forward and produce one extra day beyond periodEnd.
 
       const fac = nurses.filter((n) => n.facility === effectiveFacility);
       const getGroup = (k: FacilityWideGroup) => {
@@ -1442,7 +1446,7 @@ function RotaPage() {
         nurses: allGroupNurses,
         wards: facilityFilteredWards.filter((w) => !w.facility || w.facility === effectiveFacility),
         leave,
-        startDate,
+        startDate, // period start (outer scope), not today
         days: DAYS,
         facility: effectiveFacility,
         periodOffset,
@@ -1450,7 +1454,10 @@ function RotaPage() {
       });
 
       const targetIds = new Set(targetNurses.map((n) => n.id));
-      const targetDraft = draft.filter((d) => targetIds.has(d.nurse_id) && d.shift_date >= today);
+      // Cap at periodEnd — never generate beyond the current schedule window.
+      const targetDraft = draft.filter(
+        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today && d.shift_date <= periodEnd,
+      );
 
       const targetIdList = Array.from(targetIds);
       for (let i = 0; i < targetIdList.length; i += 100) {
@@ -1813,8 +1820,11 @@ function RotaPage() {
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
     if (existing && existing.status !== "draft") return;
     // LEAVE (approved leave) and LO (accepted locum) cells are locked — regenerate to change them.
+    // Admins can still override a locum-locked cell — needed to manually reconcile a cell that
+    // shows as "accepted" in locum_requests but never actually flipped in shift_assignments
+    // (e.g. the nurse's shift-assignments PATCH failed after they accepted the invite).
     if (existing?.shift === "LEAVE") return;
-    if (locumCellSet.has(`${nurseId}|${dateStr}`)) return;
+    if (locumCellSet.has(`${nurseId}|${dateStr}`) && !isAdmin) return;
     const rect = e.currentTarget.getBoundingClientRect();
     // Picker is ~220px wide, 40px tall. Clamp so it stays inside the viewport.
     const pickerW = 220;

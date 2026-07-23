@@ -157,6 +157,10 @@ function ShiftPage() {
   const pendingGeoRef = useRef<{ lat: number; lng: number; ip: string | null } | null>(null);
   const [geoChecking, setGeoChecking] = useState(false);
   const [geoError, setGeoError] = useState<string | null>(null);
+  // Guards against a double-tap / slow-network double-submit creating two shift logs.
+  // Ref for synchronous re-entry check (state updates are async), state to drive the UI.
+  const startingRef = useRef(false);
+  const [starting, setStarting] = useState(false);
   const [lateDialog, setLateDialog] = useState<{
     open: boolean;
     reason: string;
@@ -458,31 +462,36 @@ function ShiftPage() {
 
   async function startShift(lateReason?: string, lateMins?: number) {
     if (!nurseId || !assignment || !isWorkShift(assignment.shift)) return;
-
-    // MWC records as M, NC records as N in shift_logs (DB only stores M/N).
-    const shiftType = normalizeShiftType(assignment.shift);
-    const actualNow = new Date();
-    // Clamp to the official start (8:00 / 17:00) so nurses who arrive during
-    // the 15-minute early window don't accumulate hours before the shift begins.
-    const officialStart = new Date();
-    officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
-    const startedAt = actualNow < officialStart ? officialStart : actualNow;
-    const expectedEnd = calcExpectedEnd(shiftType, startedAt);
-    const geo = pendingGeoRef.current;
-    pendingGeoRef.current = null;
-
-    // Find the period start
-    const lookback = new Date();
-    lookback.setDate(lookback.getDate() - 27);
-    const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-    const winRows = await api.get<{ shift_date: string }[]>(
-      `/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`,
-    );
-    const periodStart = winRows[0]?.shift_date ?? today;
-
-    const recordedLate = (lateMins ?? 0) > 0;
+    // Re-entry guard: a slow network double-tap (main button or late-dialog confirm)
+    // must not create two shift_log rows for the same shift.
+    if (startingRef.current) return;
+    startingRef.current = true;
+    setStarting(true);
 
     try {
+      // MWC records as M, NC records as N in shift_logs (DB only stores M/N).
+      const shiftType = normalizeShiftType(assignment.shift);
+      const actualNow = new Date();
+      // Clamp to the official start (8:00 / 17:00) so nurses who arrive during
+      // the 15-minute early window don't accumulate hours before the shift begins.
+      const officialStart = new Date();
+      officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
+      const startedAt = actualNow < officialStart ? officialStart : actualNow;
+      const expectedEnd = calcExpectedEnd(shiftType, startedAt);
+      const geo = pendingGeoRef.current;
+      pendingGeoRef.current = null;
+
+      // Find the period start
+      const lookback = new Date();
+      lookback.setDate(lookback.getDate() - 27);
+      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
+      const winRows = await api.get<{ shift_date: string }[]>(
+        `/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`,
+      );
+      const periodStart = winRows[0]?.shift_date ?? today;
+
+      const recordedLate = (lateMins ?? 0) > 0;
+
       await api.post("/shift-logs", {
         nurse_id: nurseId,
         shift_date: assignment.shift_date.slice(0, 10),
@@ -503,15 +512,20 @@ function ShiftPage() {
           ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
           : null,
       });
+
+      setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
+      toast.success(
+        recordedLate
+          ? `Shift started — ${lateMins}m late. Reason recorded.`
+          : "Shift started — clock is running",
+      );
     } catch (e) {
-      return toast.error(e instanceof Error ? e.message : "Failed to start shift");
+      toast.error(e instanceof Error ? e.message : "Failed to start shift");
+      return;
+    } finally {
+      startingRef.current = false;
+      setStarting(false);
     }
-    setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
-    toast.success(
-      recordedLate
-        ? `Shift started — ${lateMins}m late. Reason recorded.`
-        : "Shift started — clock is running",
-    );
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
     qc.invalidateQueries({ queryKey: ["my-period-logs"] });
   }
@@ -800,10 +814,10 @@ function ShiftPage() {
                   <button
                     type="button"
                     onClick={() => void startShift(lateDialog.reason, lateDialog.capturedMinutes)}
-                    disabled={!lateDialog.reason.trim()}
+                    disabled={!lateDialog.reason.trim() || starting}
                     className="flex-1 h-9 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
-                    <PlayCircle className="h-4 w-4" /> Confirm & Start Shift
+                    <PlayCircle className="h-4 w-4" /> {starting ? "Starting…" : "Confirm & Start Shift"}
                   </button>
                   <button
                     type="button"
@@ -833,11 +847,11 @@ function ShiftPage() {
               {!shiftLog && !lateDialog.open && (
                 <button
                   type="button"
-                  disabled={!canStartShift || !isSchedulePublished || geoChecking}
+                  disabled={!canStartShift || !isSchedulePublished || geoChecking || starting}
                   onClick={() => void handleStartClick()}
                   className={cn(
                     "flex-1 h-11 rounded-lg text-sm font-semibold inline-flex items-center justify-center gap-2 transition",
-                    canStartShift && isSchedulePublished && !geoChecking
+                    canStartShift && isSchedulePublished && !geoChecking && !starting
                       ? "bg-emerald-600 text-white hover:bg-emerald-700"
                       : "bg-muted text-muted-foreground cursor-not-allowed",
                   )}
@@ -846,6 +860,11 @@ function ShiftPage() {
                     <>
                       <MapPin className="h-5 w-5 animate-pulse" />
                       Checking location…
+                    </>
+                  ) : starting ? (
+                    <>
+                      <PlayCircle className="h-5 w-5 animate-pulse" />
+                      Starting shift…
                     </>
                   ) : (
                     <>
@@ -1074,6 +1093,7 @@ type AllShiftLog = {
   is_late: boolean;
   late_minutes: number | null;
   is_locum: boolean;
+  is_swap: boolean;
 };
 
 type EndModal = {
@@ -1082,6 +1102,7 @@ type EndModal = {
   logId: string;
   startedAt: string;
   isLocum: boolean;
+  isSwap: boolean;
 };
 
 function AllNursesShiftView() {
@@ -1109,18 +1130,24 @@ function AllNursesShiftView() {
   // Build per-nurse totals
   const hoursMap = new Map<string, number>();
   const shiftsMap = new Map<string, number>();
-  const activeMap = new Map<string, { logId: string; startedAt: string; expectedEnd: string; isLocum: boolean }>();
+  const activeMap = new Map<string, { logId: string; startedAt: string; expectedEnd: string; isLocum: boolean; isSwap: boolean }>();
   const lateMap = new Map<string, number>();
   for (const l of logs) {
     if (l.hours_logged != null) {
-      hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + Number(l.hours_logged));
-      shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
+      // Locum/swap hours are tracked separately and never credited to the nurse's regular
+      // period total (see increment-nurse-hours calls below) — exclude them here too so this
+      // column matches what's actually on the nurse's record instead of over-counting.
+      if (!l.is_locum && !l.is_swap) {
+        hoursMap.set(l.nurse_id, (hoursMap.get(l.nurse_id) ?? 0) + Number(l.hours_logged));
+        shiftsMap.set(l.nurse_id, (shiftsMap.get(l.nurse_id) ?? 0) + 1);
+      }
     } else if (!l.ended_at) {
       activeMap.set(l.nurse_id, {
         logId: l.id,
         startedAt: l.started_at,
         expectedEnd: l.expected_end_at,
         isLocum: l.is_locum,
+        isSwap: l.is_swap,
       });
     }
     if (l.is_late) {
@@ -1135,7 +1162,14 @@ function AllNursesShiftView() {
     const now = new Date();
     const local = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}T${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
     setEndTimeInput(local);
-    setEndModal({ nurseId, nurseName, logId: active.logId, startedAt: active.startedAt, isLocum: active.isLocum });
+    setEndModal({
+      nurseId,
+      nurseName,
+      logId: active.logId,
+      startedAt: active.startedAt,
+      isLocum: active.isLocum,
+      isSwap: active.isSwap,
+    });
   }
 
   async function confirmAdminEndShift() {
@@ -1153,7 +1187,7 @@ function AllNursesShiftView() {
         ended_at: endedAt.toISOString(),
         hours_logged: hours,
       });
-      if (!endModal.isLocum && hours > 0) {
+      if (!endModal.isLocum && !endModal.isSwap && hours > 0) {
         await api
           .post("/rpc/increment-nurse-hours", { p_nurse_id: endModal.nurseId, p_hours: hours })
           .catch(() => {});

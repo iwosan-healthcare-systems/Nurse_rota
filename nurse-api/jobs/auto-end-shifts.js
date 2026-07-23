@@ -1,7 +1,30 @@
 const cron = require("node-cron");
 const pool = require("../db");
 
+// Arbitrary fixed key for this job's mutex. The API runs as multiple PM2 instances
+// behind one port (see db.js), and node-cron's "*/5 * * * *" fires in every
+// process at the same wall-clock tick — without this lock, every instance would
+// race to auto-end/miss/credit the same rows concurrently.
+const AUTO_END_LOCK_KEY = 729312;
+
 async function autoEndOverdueShifts() {
+  const lockClient = await pool.connect();
+  try {
+    const { rows: lockRows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [
+      AUTO_END_LOCK_KEY,
+    ]);
+    if (!lockRows[0].locked) return; // another instance already holds the lock this tick
+
+    await runAutoEndOverdueShifts();
+  } catch (err) {
+    console.error("[auto-end] Error:", err.message);
+  } finally {
+    await lockClient.query("SELECT pg_advisory_unlock($1)", [AUTO_END_LOCK_KEY]).catch(() => {});
+    lockClient.release();
+  }
+}
+
+async function runAutoEndOverdueShifts() {
   try {
     const result = await pool.query(`
       UPDATE shift_logs

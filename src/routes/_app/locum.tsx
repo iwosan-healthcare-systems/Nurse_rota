@@ -443,13 +443,32 @@ function LocumPage() {
     });
 
     // Update this nurse's shift assignment OFF → locum shift type (always, for every acceptee)
+    let shiftFlipped = !invite.locum_request;
     if (nurseId && invite.locum_request) {
-      await api
-        .patch(
+      try {
+        await api.patch(
           `/shift-assignments?nurse_ids=${nurseId}&shift_date_from=${invite.locum_request.shift_date.slice(0, 10)}&shift_date_to=${invite.locum_request.shift_date.slice(0, 10)}&shift=OFF`,
           { shift: invite.locum_request.shift },
-        )
-        .catch(() => {});
+        );
+        shiftFlipped = true;
+      } catch {
+        shiftFlipped = false;
+        // Surface the desync to managers — the invite is accepted but the rota cell is
+        // still OFF and locked against editing until an admin reconciles it on the Rota page.
+        await api
+          .post("/notifications/upsert", [
+            {
+              user_id: invite.locum_request.requested_by,
+              notif_key: `locum_flip_failed_${invite.id}`,
+              is_read: false,
+            },
+          ])
+          .catch(() => {});
+        await logAudit(
+          "Locum shift-assignment update failed",
+          `${fullName ?? "Nurse"} accepted the invite but the rota cell for ${fmtDate(invite.locum_request.shift_date)} could not be updated — needs manual reconciliation on the Rota page.`,
+        );
+      }
     }
 
     // Only close remaining pending invites and notify matron/CNO when ALL spots are filled.
@@ -502,11 +521,17 @@ function LocumPage() {
       "Locum shift accepted",
       `${invite.locum_request?.ward} · ${invite.locum_request?.shift === "M" ? "Morning" : "Night"} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
     );
-    toast.success(
-      claimed.status === "filled"
-        ? "Locum shift accepted! Your schedule has been updated."
-        : "Locum shift accepted! All needed nurses are not yet confirmed — your slot is secured.",
-    );
+    if (!shiftFlipped) {
+      toast.error(
+        "Locum shift accepted, but your rota cell could not be updated automatically. Contact an admin to confirm your schedule.",
+      );
+    } else {
+      toast.success(
+        claimed.status === "filled"
+          ? "Locum shift accepted! Your schedule has been updated."
+          : "Locum shift accepted! All needed nurses are not yet confirmed — your slot is secured.",
+      );
+    }
     qc.invalidateQueries({ queryKey: ["locum-invites"] });
     qc.invalidateQueries({ queryKey: ["locum-my"] });
     qc.invalidateQueries({ queryKey: ["locum-all"] });

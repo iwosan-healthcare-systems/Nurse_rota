@@ -84,6 +84,13 @@ function fmtDateLeave(d: string) {
   });
 }
 
+// Local calendar date, not UTC — new Date().toISOString().slice(0,10) reads the UTC date,
+// which lags the real local date by one day during the ~00:00–01:00 WAT window (UTC+1).
+function todayYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function LeavePage() {
   const {
     user,
@@ -255,7 +262,7 @@ function LeavePage() {
             `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
           );
           const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date));
-          const today = new Date().toISOString().slice(0, 10);
+          const today = todayYmd();
           const shiftsToCredit = publishedShifts.filter(
             (s) =>
               !alreadyLogged.has(s.shift_date) &&
@@ -1168,7 +1175,7 @@ function SwitchTable({
 
 function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }) {
   const qc = useQueryClient();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayYmd();
   const [type, setType] = useState(row.type);
   const [from, setFrom] = useState(row.from_date.slice(0, 10));
   const [to, setTo] = useState(row.to_date.slice(0, 10));
@@ -1269,7 +1276,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       api.get<{ id: string; name: string; facility: string | null }[]>("/nurses"),
   });
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayYmd();
   const [type, setType] = useState("Annual");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -1366,6 +1373,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     }
     if (from < today) {
       toast.error("Leave requests cannot be submitted for past dates");
+      return;
+    }
+    if (to < from) {
+      toast.error("End date cannot be before the start date");
       return;
     }
     if (datesInApprovalRota) {
@@ -1651,7 +1662,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [exchangeMode, setExchangeMode] = useState<"leave" | "direct">("leave");
   const [facility, setFacility] = useState(lockedFacility ?? "");
   const [nurseAId, setNurseAId] = useState("");
-  const today = new Date().toISOString().slice(0, 10);
+  const today = todayYmd();
   const [nurseBId, setNurseBId] = useState("");
   const [wardB, setWardB] = useState("");
   const [date, setDate] = useState("");

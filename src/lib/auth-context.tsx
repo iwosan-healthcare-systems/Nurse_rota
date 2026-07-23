@@ -289,7 +289,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       "porter",
       "nursing_assistant",
     ]),
-    canRequestShiftSwitch: cap("request_shift_switch", ["admin", "chief_matron"]),
+    canRequestShiftSwitch: cap("request_shift_switch", ["admin", "cno", "chief_matron"]),
     canApproveShiftSwitch: cap("approve_shift_switch", ["admin", "cno"]),
     canCreateLogin: ar === "admin",
     canEditTargetHours: cap("edit_target_hours", ["admin", "cno"]),
