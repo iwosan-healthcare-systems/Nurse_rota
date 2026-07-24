@@ -39,14 +39,20 @@ jobs:
           pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat --cwd /home/ubuntu/nurse-api-uat
           pm2 save
 
-  deploy-production:
-    name: Deploy Production (master)
+  build-frontend:
+    name: Build frontend (master)
     if: github.ref == 'refs/heads/master'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
 
       - name: Install dependencies
         run: npm ci
@@ -55,6 +61,28 @@ jobs:
         run: npm run build
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+
+  deploy-production:
+    name: Deploy Production (master)
+    if: github.ref == 'refs/heads/master'
+    needs: build-frontend
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
 
       - name: Deploy frontend (Production)
         run: rsync -a --delete dist/ /home/ubuntu/public_html/
