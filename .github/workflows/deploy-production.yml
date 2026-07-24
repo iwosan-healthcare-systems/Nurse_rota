@@ -10,37 +10,53 @@ jobs:
   deploy-uat-api:
     name: Deploy UAT API (develop)
     if: github.ref == 'refs/heads/develop'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Deploy API and restart PM2 (UAT)
-        run: |
-          rsync -a --delete --exclude node_modules --exclude .env nurse-api/ /home/ubuntu/nurse-api-uat/
-          cd /home/ubuntu/nurse-api-uat
-          npm install --production
-          PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -c \
-            "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
-          for f in $(ls migrations/*.sql 2>/dev/null | sort); do
-            name=$(basename "$f")
-            applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -tAc \
-              "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
-            if [ "$applied" = "0" ]; then
-              echo "Applying migration: $name"
-              PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -f "$f"
-              PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -c \
-                "INSERT INTO schema_migrations (name) VALUES ('$name');"
-            else
-              echo "Skipping already-applied migration: $name"
-            fi
-          done
-          pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat --cwd /home/ubuntu/nurse-api-uat
-          pm2 save
+      - name: Deploy API to VPS (UAT)
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "nurse-api/*"
+          target: "/root/nurse-api-uat"
+          strip_components: 1
 
-  build-frontend:
-    name: Build frontend (master)
+      - name: Install API dependencies, migrate DB, and restart PM2 (UAT)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            cd /root/nurse-api-uat
+            npm install --production
+            PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -c \
+              "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
+            for f in $(ls migrations/*.sql 2>/dev/null | sort); do
+              name=$(basename "$f")
+              applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -tAc \
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
+              if [ "$applied" = "0" ]; then
+                echo "Applying migration: $name"
+                PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -f "$f"
+                PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 127.0.0.1 -U nurseapp_uat -d nurse_rota_uat -c \
+                  "INSERT INTO schema_migrations (name) VALUES ('$name');"
+              else
+                echo "Skipping already-applied migration: $name"
+              fi
+            done
+            pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat
+            pm2 save
+
+  deploy-production:
+    name: Deploy Production (master)
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
 
@@ -62,50 +78,51 @@ jobs:
         env:
           VITE_API_URL: ${{ secrets.VITE_API_URL }}
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - name: Deploy frontend to VPS (Production)
+        uses: appleboy/scp-action@v0.1.7
         with:
-          name: frontend-dist
-          path: dist/
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "dist/*"
+          target: "/home/nrotaiwosanhealt/public_html"
+          strip_components: 1
 
-  deploy-production:
-    name: Deploy Production (master)
-    if: github.ref == 'refs/heads/master'
-    needs: build-frontend
-    runs-on: self-hosted
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
+      - name: Deploy API to VPS (Production)
+        uses: appleboy/scp-action@v0.1.7
         with:
-          name: frontend-dist
-          path: dist/
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          source: "nurse-api/*"
+          target: "/root/nurse-api"
+          strip_components: 1
 
-      - name: Deploy frontend (Production)
-        run: rsync -a --delete dist/ /home/ubuntu/public_html/
-
-      - name: Deploy API and restart PM2 (Production)
-        run: |
-          rsync -a --delete --exclude node_modules --exclude .env nurse-api/ /home/ubuntu/nurse-api/
-          cd /home/ubuntu/nurse-api
-          npm install --production
-          PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -c \
-            "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
-          for f in $(ls migrations/*.sql 2>/dev/null | sort); do
-            name=$(basename "$f")
-            applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -tAc \
-              "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
-            if [ "$applied" = "0" ]; then
-              echo "Applying migration: $name"
-              PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -f "$f"
-              PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -c \
-                "INSERT INTO schema_migrations (name) VALUES ('$name');"
-            else
-              echo "Skipping already-applied migration: $name"
-            fi
-          done
-          pm2 reload nurse-api || pm2 start server.js --name nurse-api --cwd /home/ubuntu/nurse-api -i 2
-          pm2 save
+      - name: Install API dependencies, migrate DB, and restart PM2 (Production)
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          script: |
+            export NVM_DIR="$HOME/.nvm"
+            source "$NVM_DIR/nvm.sh"
+            cd /root/nurse-api
+            npm install --production
+            PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -c \
+              "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ DEFAULT NOW());"
+            for f in $(ls migrations/*.sql 2>/dev/null | sort); do
+              name=$(basename "$f")
+              applied=$(PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -tAc \
+                "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
+              if [ "$applied" = "0" ]; then
+                echo "Applying migration: $name"
+                PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -f "$f"
+                PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 127.0.0.1 -U nurseapp -d nurse_rota -c \
+                  "INSERT INTO schema_migrations (name) VALUES ('$name');"
+              else
+                echo "Skipping already-applied migration: $name"
+              fi
+            done
+            pm2 reload nurse-api || pm2 start server.js --name nurse-api
+            pm2 save
