@@ -1129,14 +1129,14 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
       </div>
 
       {total === 0 ? (
-        <div className="h-64 flex items-center justify-center">
+        <div className="h-48 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No approved leave in this scope yet.
           </p>
         </div>
       ) : (
-        <div className="h-64 flex items-center gap-8">
-          <div className="h-64 w-64 shrink-0">
+        <div className="h-48 flex items-center gap-8">
+          <div className="h-48 w-48 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1171,7 +1171,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5 max-h-64 overflow-y-auto pr-1">
+          <div className="min-w-0 flex-1 space-y-2.5 max-h-48 overflow-y-auto pr-1">
             {data.map((d) => (
               <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2 min-w-0">
@@ -1263,17 +1263,17 @@ function WeeklyHoursCard() {
       </div>
 
       {isLoading ? (
-        <div className="h-64 flex items-center justify-center">
+        <div className="h-48 flex items-center justify-center">
           <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       ) : chartData.length === 0 ? (
-        <div className="h-64 flex items-center justify-center">
+        <div className="h-48 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No shift hours logged in this window yet.
           </p>
         </div>
       ) : (
-        <div className="h-64">
+        <div className="h-48">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -1371,7 +1371,7 @@ function ManagementDashboard() {
     : "Live staffing, approvals and rota health across all facilities";
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <PageHeader
         title={fullName ? `Welcome, ${fullName.split(" ")[0]}` : "Operations Dashboard"}
         subtitle={subtitle}
