@@ -1401,7 +1401,7 @@ function ManagementDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">
