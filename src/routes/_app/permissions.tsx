@@ -55,7 +55,15 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "request_leave",
     label: "Request Leave",
-    roles: ["admin", "chief_matron", "head_nurse", "nurse", "surgical_nurse", "porter", "nursing_assistant"],
+    roles: [
+      "admin",
+      "chief_matron",
+      "head_nurse",
+      "nurse",
+      "surgical_nurse",
+      "porter",
+      "nursing_assistant",
+    ],
   },
   {
     key: "approve_leave",
@@ -166,7 +174,9 @@ function PermissionsPage() {
       .then(({ value }) => {
         if (value) setCapabilities(mergeCapabilities(value));
       })
-      .catch(() => {/* non-critical */});
+      .catch(() => {
+        /* non-critical */
+      });
   }, []);
 
   function startEdit() {
@@ -291,7 +301,9 @@ function PermissionsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="text-left px-4 py-3 font-medium">Capability</th>
+                <th className="text-left px-4 py-3 font-medium sticky left-0 bg-muted/40 z-10">
+                  Capability
+                </th>
                 {ROLES.map((r) => (
                   <th key={r} className="px-3 py-3 font-medium text-center whitespace-nowrap">
                     {ROLE_LABELS[r]}
@@ -302,17 +314,21 @@ function PermissionsPage() {
             <tbody>
               {activeCaps.map((cap) => (
                 <tr key={cap.key} className="border-t">
-                  <td className="px-4 py-2.5 font-medium">{cap.label}</td>
+                  <td className="px-4 py-2.5 font-medium sticky left-0 bg-card z-10">
+                    {cap.label}
+                  </td>
                   {ROLES.map((r) => (
                     <td key={r} className="px-3 py-2.5 text-center">
                       {editing ? (
-                        <input
-                          type="checkbox"
-                          aria-label={`${cap.label} — ${ROLE_LABELS[r]}`}
-                          checked={cap.roles.includes(r)}
-                          onChange={() => toggleRole(cap.key, r)}
-                          className="h-4 w-4 accent-primary cursor-pointer"
-                        />
+                        <label className="inline-grid place-items-center h-8 w-8 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            aria-label={`${cap.label} — ${ROLE_LABELS[r]}`}
+                            checked={cap.roles.includes(r)}
+                            onChange={() => toggleRole(cap.key, r)}
+                            className="h-4 w-4 accent-primary cursor-pointer"
+                          />
+                        </label>
                       ) : cap.roles.includes(r) ? (
                         <Check className="h-4 w-4 text-emerald-600 inline" />
                       ) : (

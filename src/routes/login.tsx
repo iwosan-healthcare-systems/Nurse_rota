@@ -85,7 +85,10 @@ function LoginPage() {
 
     setBusy(true);
     try {
-      const data = await api.post<{ token: string; user: ApiUser }>('/auth/login', { email, password });
+      const data = await api.post<{ token: string; user: ApiUser }>("/auth/login", {
+        email,
+        password,
+      });
       setToken(data.token);
 
       const nextUser = data.user;
@@ -153,7 +156,9 @@ function LoginPage() {
             workflow — built for the nursing department.
           </p>
         </div>
-        <p className="text-xs text-sidebar-foreground/50">© Iwosan Lagoon Hospitals</p>
+        <p className="text-xs text-sidebar-foreground/50">
+          © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+        </p>
       </div>
 
       <div className="flex items-center justify-center p-6">
@@ -243,6 +248,9 @@ function LoginPage() {
               {isChoosingRole ? "Open dashboard" : "Sign in"}
             </button>
           </form>
+          <p className="lg:hidden text-xs text-muted-foreground text-center mt-8">
+            © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+          </p>
         </div>
       </div>
     </div>

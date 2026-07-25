@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
@@ -16,7 +17,18 @@ import {
   type GpsSettings,
 } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
-import { Check, X, Pencil, RotateCcw, ShieldAlert, Lock, MapPin, Plus, Trash2, KeyRound } from "lucide-react";
+import {
+  Check,
+  X,
+  Pencil,
+  RotateCcw,
+  ShieldAlert,
+  Lock,
+  MapPin,
+  Plus,
+  Trash2,
+  KeyRound,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -347,7 +359,9 @@ function MenuPermissionsPage() {
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="text-left px-4 py-3 font-medium">Page</th>
+                <th className="text-left px-4 py-3 font-medium sticky left-0 bg-muted/40 z-10">
+                  Page
+                </th>
                 {ROLES.map((r) => (
                   <th key={r} className="px-3 py-3 font-medium text-center whitespace-nowrap">
                     {ROLE_LABELS[r]}
@@ -364,7 +378,7 @@ function MenuPermissionsPage() {
 
                 return (
                   <tr key={def.key} className="border-t">
-                    <td className="px-4 py-2.5">
+                    <td className="px-4 py-2.5 sticky left-0 bg-card z-10">
                       <span className="font-medium">{def.label}</span>
                       {isLocked && (
                         <span className="ml-2 inline-flex items-center gap-1 text-[10px] text-muted-foreground">
@@ -380,17 +394,24 @@ function MenuPermissionsPage() {
                       return (
                         <td key={role} className="px-3 py-2.5 text-center">
                           {editing ? (
-                            <input
-                              type="checkbox"
-                              aria-label={`${def.label} — ${ROLE_LABELS[role]}`}
-                              checked={checked}
-                              disabled={cellLocked}
-                              onChange={() => toggleRole(def.key, role)}
+                            <label
                               className={cn(
-                                "h-4 w-4 accent-primary",
-                                cellLocked ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                                "inline-grid place-items-center h-8 w-8",
+                                cellLocked ? "cursor-not-allowed" : "cursor-pointer",
                               )}
-                            />
+                            >
+                              <input
+                                type="checkbox"
+                                aria-label={`${def.label} — ${ROLE_LABELS[role]}`}
+                                checked={checked}
+                                disabled={cellLocked}
+                                onChange={() => toggleRole(def.key, role)}
+                                className={cn(
+                                  "h-4 w-4 accent-primary",
+                                  cellLocked ? "cursor-not-allowed opacity-50" : "cursor-pointer",
+                                )}
+                              />
+                            </label>
                           ) : checked ? (
                             <Check
                               className={cn(

@@ -308,7 +308,7 @@ function WardCard({
               type="button"
               aria-label={`Edit ${w.name}`}
               onClick={onEdit}
-              className="h-7 w-7 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
+              className="h-8 w-8 grid place-items-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground"
             >
               <Pencil className="h-3.5 w-3.5" />
             </button>
@@ -316,7 +316,7 @@ function WardCard({
               type="button"
               aria-label={`Remove ${w.name}`}
               onClick={onDelete}
-              className="h-7 w-7 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
+              className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

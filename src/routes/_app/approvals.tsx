@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import {
@@ -20,7 +21,13 @@ import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import { isGlobalHead, isInternType, isMatron, isPorterType, isNADayType } from "@/lib/auto-schedule";
+import {
+  isGlobalHead,
+  isInternType,
+  isMatron,
+  isPorterType,
+  isNADayType,
+} from "@/lib/auto-schedule";
 import { FacilityChips } from "@/components/FacilityChips";
 import { xlsWorkbook, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
 
@@ -96,7 +103,10 @@ function groupIntoWindows(
 
   // Group by facility + ward (for ward nurses) or facility + roleGroup (for facility-wide nurses).
   const byKey = new Map<string, PendingRow[]>();
-  const keyMeta = new Map<string, { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }>();
+  const keyMeta = new Map<
+    string,
+    { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }
+  >();
 
   for (const row of rows) {
     const fac = nurseToFacility.get(row.nurse_id) ?? null;
@@ -130,8 +140,7 @@ function groupIntoWindows(
     for (let i = 1; i < sorted.length; i++) {
       const prev = cluster[cluster.length - 1];
       const diff = Math.round(
-        (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) /
-          86400000,
+        (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
       // Split at an actual data gap OR when the span from the cluster's first date
       // hits 28 days — consecutive periods share no date gap so diff alone won't split them.
@@ -276,9 +285,7 @@ function ApprovalsPage() {
 
   // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
   const lockedFacility =
-    isAdmin || activeRole === "cno" || activeRole === "hr_admin"
-      ? null
-      : (nurseFacility ?? null);
+    isAdmin || activeRole === "cno" || activeRole === "hr_admin" ? null : (nurseFacility ?? null);
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
   const canApproveChief = canApproveChiefMatron;
@@ -288,9 +295,9 @@ function ApprovalsPage() {
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
     queryFn: () =>
-      api.get<{ id: string; name: string; role: string; ward: string | null; facility: string | null }[]>(
-        "/nurses",
-      ),
+      api.get<
+        { id: string; name: string; role: string; ward: string | null; facility: string | null }[]
+      >("/nurses"),
   });
 
   const { data: rows = [], isLoading } = useQuery({
@@ -316,10 +323,7 @@ function ApprovalsPage() {
     () => new Map(allNurses.map((n) => [n.id, n.facility])),
     [allNurses],
   );
-  const nurseToRole = useMemo(
-    () => new Map(allNurses.map((n) => [n.id, n.role])),
-    [allNurses],
-  );
+  const nurseToRole = useMemo(() => new Map(allNurses.map((n) => [n.id, n.role])), [allNurses]);
 
   const windows = useMemo(
     () => groupIntoWindows(rows, nurseToFacility, nurseToRole),
@@ -479,7 +483,8 @@ function ApprovalsPage() {
       : scopedStatusUpdate(win, nextStatus, win.status));
     setBusy(null);
     if (err) return toast.error(err);
-    const targetLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+    const targetLabel =
+      win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
@@ -491,16 +496,18 @@ function ApprovalsPage() {
         target: `${targetLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
-    api.post("/rota-transitions", {
-      facility: win.facility,
-      ward: win.ward ?? null,
-      role_group: win.roleGroup ?? null,
-      period_start: win.startDate,
-      period_end: win.endDate,
-      status: nextStatus,
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-    }).catch(() => {});
+    api
+      .post("/rota-transitions", {
+        facility: win.facility,
+        ward: win.ward ?? null,
+        role_group: win.roleGroup ?? null,
+        period_start: win.startDate,
+        period_end: win.endDate,
+        status: nextStatus,
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+      })
+      .catch(() => {});
     if (nextStatus === "published") {
       const nextStart = scheduleEndDate(win.startDate);
       const nextStartDt = new Date(nextStart + "T00:00:00");
@@ -513,9 +520,7 @@ function ApprovalsPage() {
       );
       // Rotate interns to their next ward when the intern rota is published.
       if (win.roleGroup === "intern" && win.facility) {
-        await api
-          .post("/nurses/rotate-interns", { facility: win.facility })
-          .catch(() => {});
+        await api.post("/nurses/rotate-interns", { facility: win.facility }).catch(() => {});
         qc.invalidateQueries({ queryKey: ["nurses"] });
       }
     } else {
@@ -533,7 +538,8 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", fromStatus);
     setBusy(null);
     if (err) return toast.error(err);
-    const rejectLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+    const rejectLabel =
+      win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
@@ -542,17 +548,19 @@ function ApprovalsPage() {
         target: `${rejectLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
-    api.post("/rota-transitions", {
-      facility: win.facility,
-      ward: win.ward ?? null,
-      role_group: win.roleGroup ?? null,
-      period_start: win.startDate,
-      period_end: win.endDate,
-      status: "draft",
-      event_type: "revert",
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-    }).catch(() => {});
+    api
+      .post("/rota-transitions", {
+        facility: win.facility,
+        ward: win.ward ?? null,
+        role_group: win.roleGroup ?? null,
+        period_start: win.startDate,
+        period_end: win.endDate,
+        status: "draft",
+        event_type: "revert",
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+      })
+      .catch(() => {});
     toast.success("Returned to draft");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -569,7 +577,8 @@ function ApprovalsPage() {
     const err = await scopedStatusUpdate(win, "draft", "published");
     setBusy(null);
     if (err) return toast.error(err);
-    const revertLabel = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+    const revertLabel =
+      win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
     await api
       .post("/audit-logs", {
         actor_id: user?.id,
@@ -578,17 +587,19 @@ function ApprovalsPage() {
         target: `${revertLabel} · ${fmtDate(win.startDate)} → ${fmtDate(win.endDate)}`,
       })
       .catch(() => {});
-    api.post("/rota-transitions", {
-      facility: win.facility,
-      ward: win.ward ?? null,
-      role_group: win.roleGroup ?? null,
-      period_start: win.startDate,
-      period_end: win.endDate,
-      status: "draft",
-      event_type: "revert",
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-    }).catch(() => {});
+    api
+      .post("/rota-transitions", {
+        facility: win.facility,
+        ward: win.ward ?? null,
+        role_group: win.roleGroup ?? null,
+        period_start: win.startDate,
+        period_end: win.endDate,
+        status: "draft",
+        event_type: "revert",
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+      })
+      .catch(() => {});
     toast.success("Rota unpublished — schedule is unchanged and now editable");
     qc.invalidateQueries({ queryKey: ["approvals"] });
     qc.invalidateQueries({ queryKey: ["assignments"] });
@@ -598,13 +609,18 @@ function ApprovalsPage() {
     // Use the actual last date in the window cluster, not a fixed startDate+27
     // calculation — newly-added staff may have assignments that start after the
     // period begin, and we must not cut them off.
-    const endDate = win.endDate > scheduleEndDate(win.startDate)
-      ? win.endDate
-      : scheduleEndDate(win.startDate);
+    const endDate =
+      win.endDate > scheduleEndDate(win.startDate) ? win.endDate : scheduleEndDate(win.startDate);
 
     // Fetch nurses fresh from the server so newly added or reactivated staff are
     // always included even if the React Query cache hasn't been invalidated yet.
-    type NurseRow = { id: string; name: string; role: string; ward: string | null; facility: string | null };
+    type NurseRow = {
+      id: string;
+      name: string;
+      role: string;
+      ward: string | null;
+      facility: string | null;
+    };
     const freshNurses = await api.get<NurseRow[]>("/nurses");
     let scopedNurses = freshNurses.filter((n) => n.facility === win.facility);
     if (win.ward !== null) {
@@ -642,7 +658,9 @@ function ApprovalsPage() {
         )
       : [];
     const assignMap = new Map<string, string>();
-    allAssignments.forEach((a) => assignMap.set(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift));
+    allAssignments.forEach((a) =>
+      assignMap.set(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift),
+    );
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
     return { activeNurses, assignMap };
@@ -677,13 +695,21 @@ function ApprovalsPage() {
         ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
       ]);
       const wb = xlsWorkbook();
-      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [22, 18, 14, ...dates.map(() => 5)]);
-      const facilitySlug = win.facility ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}` : "";
+      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [
+        22,
+        18,
+        14,
+        ...dates.map(() => 5),
+      ]);
+      const facilitySlug = win.facility
+        ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}`
+        : "";
       const fileSuffix =
-        win.ward === null
-          ? "-coverage-nurses"
-          : `-${win.ward.replace(/\s+/g, "-").toLowerCase()}`;
-      await xlsDownload(wb, `rota-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${facilitySlug}${fileSuffix}.xlsx`);
+        win.ward === null ? "-coverage-nurses" : `-${win.ward.replace(/\s+/g, "-").toLowerCase()}`;
+      await xlsDownload(
+        wb,
+        `rota-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${facilitySlug}${fileSuffix}.xlsx`,
+      );
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -692,7 +718,11 @@ function ApprovalsPage() {
   }
 
   function escHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   async function handleDownloadPdf(win: RotaWindow) {
@@ -782,9 +812,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
     const isBusy = busy === key;
     const isDownloadingCard = downloading?.startsWith(key);
     const stepIndex =
-      win.status === "published"
-        ? STEPS.length
-        : STEPS.findIndex((s) => s.status === win.status);
+      win.status === "published" ? STEPS.length : STEPS.findIndex((s) => s.status === win.status);
 
     const meta = windowMeta.get(key);
     const extraStaff = meta?.extraStaff ?? [];
@@ -835,7 +863,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
             {extraStaff.length > 0 && (
               <p className="text-xs text-orange-600 dark:text-orange-400 mt-1">
                 Extra shifts:{" "}
-                {extraStaff.map((e) => `${e.name} +${e.extra} extra shift${e.extra > 1 ? "s" : ""}`).join(", ")}
+                {extraStaff
+                  .map((e) => `${e.name} +${e.extra} extra shift${e.extra > 1 ? "s" : ""}`)
+                  .join(", ")}
               </p>
             )}
           </div>
@@ -855,8 +885,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
         </div>
 
         {/* Step tracker */}
-        <div className="px-4 py-3">
-          <ol className="flex items-center gap-0">
+        <div className="px-4 py-3 overflow-x-auto">
+          <ol className="flex items-center gap-0 w-max">
             {STEPS.map((step, idx) => {
               const done = idx < stepIndex;
               const active = idx === stepIndex;
@@ -903,71 +933,71 @@ td.sm{text-align:left;color:#444;min-width:55px}
         {showActions && (
           <div className="border-t bg-muted/30 mt-auto">
             <div className="px-4 py-2.5 flex items-center justify-end gap-2 flex-wrap">
-            {canReject && (
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => reject(win)}
-                className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-destructive/10 hover:border-destructive hover:text-destructive disabled:opacity-50"
-              >
-                <XCircle className="h-3.5 w-3.5" /> Return
-              </button>
-            )}
-            {canApprove && (
-              <button
-                type="button"
-                disabled={isBusy}
-                onClick={() => advance(win, nextStatus)}
-                className={cn(
-                  "h-8 px-3 rounded-md text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50",
-                  nextStatus === "published"
-                    ? "bg-emerald-600 text-white hover:bg-emerald-700"
-                    : "bg-primary text-primary-foreground hover:opacity-90",
-                )}
-              >
-                {nextStatus === "published" ? (
-                  <BookOpen className="h-3.5 w-3.5" />
-                ) : (
-                  <Send className="h-3.5 w-3.5" />
-                )}
-                {approveLabel}
-              </button>
-            )}
-            {win.status === "published" && (
-              <>
-                {canRevertPublished && (
-                  <button
-                    type="button"
-                    disabled={isBusy}
-                    onClick={() => revertPublished(win)}
-                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
-                    title="Admin only — returns schedule to Draft (data unchanged)"
-                  >
-                    <Undo2 className="h-3.5 w-3.5" /> Unpublish
-                  </button>
-                )}
-                <div className="flex items-center gap-1.5 flex-wrap">
-                  <button
-                    type="button"
-                    disabled={!!isDownloadingCard}
-                    onClick={() => handleDownloadExcel(win)}
-                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                  >
-                    <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
-                    {downloading === key + "-xlsx" ? "…" : "Excel"}
-                  </button>
-                  <button
-                    type="button"
-                    disabled={!!isDownloadingCard}
-                    onClick={() => handleDownloadPdf(win)}
-                    className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
-                  >
-                    <FileDown className="h-3.5 w-3.5 text-red-500" />
-                    {downloading === key + "-pdf" ? "…" : "PDF"}
-                  </button>
-                </div>
-              </>
-            )}
+              {canReject && (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => reject(win)}
+                  className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-destructive/10 hover:border-destructive hover:text-destructive disabled:opacity-50"
+                >
+                  <XCircle className="h-3.5 w-3.5" /> Return
+                </button>
+              )}
+              {canApprove && (
+                <button
+                  type="button"
+                  disabled={isBusy}
+                  onClick={() => advance(win, nextStatus)}
+                  className={cn(
+                    "h-8 px-3 rounded-md text-xs font-medium inline-flex items-center gap-1.5 disabled:opacity-50",
+                    nextStatus === "published"
+                      ? "bg-emerald-600 text-white hover:bg-emerald-700"
+                      : "bg-primary text-primary-foreground hover:opacity-90",
+                  )}
+                >
+                  {nextStatus === "published" ? (
+                    <BookOpen className="h-3.5 w-3.5" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
+                  {approveLabel}
+                </button>
+              )}
+              {win.status === "published" && (
+                <>
+                  {canRevertPublished && (
+                    <button
+                      type="button"
+                      disabled={isBusy}
+                      onClick={() => revertPublished(win)}
+                      className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
+                      title="Admin only — returns schedule to Draft (data unchanged)"
+                    >
+                      <Undo2 className="h-3.5 w-3.5" /> Unpublish
+                    </button>
+                  )}
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <button
+                      type="button"
+                      disabled={!!isDownloadingCard}
+                      onClick={() => handleDownloadExcel(win)}
+                      className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                    >
+                      <FileSpreadsheet className="h-3.5 w-3.5 text-emerald-600" />
+                      {downloading === key + "-xlsx" ? "…" : "Excel"}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!!isDownloadingCard}
+                      onClick={() => handleDownloadPdf(win)}
+                      className="h-8 px-3 rounded-md border bg-card text-xs inline-flex items-center gap-1.5 hover:bg-muted disabled:opacity-50"
+                    >
+                      <FileDown className="h-3.5 w-3.5 text-red-500" />
+                      {downloading === key + "-pdf" ? "…" : "PDF"}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -985,46 +1015,46 @@ td.sm{text-align:left;color:#444;min-width:55px}
       {workflowStatus?.firstRotaPublished && (
         <div className="space-y-2">
           {/* Approve1: chief matron action needed */}
-          {(canApproveChiefMatron || isAdmin) &&
-            workflowStatus.nextRotaStage === "submitted" && (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-                <Clock className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <p className="font-medium">Draft rota awaiting Chief Matron approval</p>
-                  <p className="mt-0.5 opacity-80">
-                    The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been submitted. Review and approve it below.
-                  </p>
-                </div>
+          {(canApproveChiefMatron || isAdmin) && workflowStatus.nextRotaStage === "submitted" && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+              <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Draft rota awaiting Chief Matron approval</p>
+                <p className="mt-0.5 opacity-80">
+                  The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been
+                  submitted. Review and approve it below.
+                </p>
               </div>
-            )}
+            </div>
+          )}
 
           {/* Approve2: CNO action needed */}
-          {(canApproveCno || isAdmin) &&
-            workflowStatus.nextRotaStage === "approved_chief" && (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-                <Clock className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <p className="font-medium">Rota awaiting CNO final approval</p>
-                  <p className="mt-0.5 opacity-80">
-                    Chief Matron has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. CNO sign-off is required to publish.
-                  </p>
-                </div>
+          {(canApproveCno || isAdmin) && workflowStatus.nextRotaStage === "approved_chief" && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+              <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Rota awaiting CNO final approval</p>
+                <p className="mt-0.5 opacity-80">
+                  Chief Matron has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}.
+                  CNO sign-off is required to publish.
+                </p>
               </div>
-            )}
+            </div>
+          )}
 
           {/* Publish reminder */}
-          {(canPublishRota || isAdmin) &&
-            workflowStatus.nextRotaStage === "approved_cno" && (
-              <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <div>
-                  <p className="font-medium">Rota approved — ready to publish</p>
-                  <p className="mt-0.5 opacity-80">
-                    CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it so nurses can view their schedule.
-                  </p>
-                </div>
+          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "approved_cno" && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Rota approved — ready to publish</p>
+                <p className="mt-0.5 opacity-80">
+                  CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
+                  so nurses can view their schedule.
+                </p>
               </div>
-            )}
+            </div>
+          )}
         </div>
       )}
 
@@ -1049,11 +1079,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
           {/* Periods for the selected facility */}
           {windowsByPeriod.length === 0 ? (
             <p className="py-12 text-center text-sm text-muted-foreground">
-              No active schedules for {effectiveFacility}. Published rotas older than 14 days are
-              in{" "}
+              No active schedules for {effectiveFacility}. Published rotas older than 14 days are in{" "}
               <span className="font-medium text-foreground">Reports → Schedule Archive</span>.
-              Generate a new rota from the{" "}
-              <span className="font-medium text-foreground">Rota</span> page.
+              Generate a new rota from the <span className="font-medium text-foreground">Rota</span>{" "}
+              page.
             </p>
           ) : (
             <div className="space-y-8">

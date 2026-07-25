@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { Link, Outlet, useRouterState, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -109,7 +110,9 @@ export function AppShell() {
   // case where the clock ticks over while the user is already logged in.
   useEffect(() => {
     if (passwordExpiresInDays !== null && passwordExpiresInDays <= 0) {
-      toast.error("Your password has expired. You have been signed out — contact your administrator.");
+      toast.error(
+        "Your password has expired. You have been signed out — contact your administrator.",
+      );
       signOut();
     }
   }, [passwordExpiresInDays, signOut]);
@@ -146,8 +149,12 @@ export function AppShell() {
     const fetchMenuPerms = () => {
       api
         .get<{ key: string; value: Record<string, AppRole[]> }>("/portal-settings/menu_permissions")
-        .then(({ value }) => { if (value) setMenuPermissions(value); })
-        .catch(() => {/* non-critical */});
+        .then(({ value }) => {
+          if (value) setMenuPermissions(value);
+        })
+        .catch(() => {
+          /* non-critical */
+        });
     };
     fetchMenuPerms();
     window.addEventListener("menu-permissions-changed", fetchMenuPerms);
@@ -186,7 +193,6 @@ export function AppShell() {
       />
     );
   }
-
 
   const visibleNav = nav.filter((n) => {
     if (activeRole === "admin") return true;
@@ -242,7 +248,12 @@ export function AppShell() {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold truncate">{currentTitle(path)}</p>
           </div>
-          <RotaReminderBell activeRole={activeRole} nurseId={nurseId} nurseFacility={nurseFacility} userId={user?.id ?? null} />
+          <RotaReminderBell
+            activeRole={activeRole}
+            nurseId={nurseId}
+            nurseFacility={nurseFacility}
+            userId={user?.id ?? null}
+          />
           <div className="h-9 w-9 rounded-full bg-primary/15 text-primary grid place-items-center text-sm font-semibold shrink-0">
             {initials || "U"}
           </div>
@@ -302,6 +313,9 @@ export function AppShell() {
             </div>
           )}
         </main>
+        <footer className="border-t px-4 sm:px-6 py-4 text-center text-xs text-muted-foreground">
+          © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+        </footer>
       </div>
     </div>
   );
@@ -358,7 +372,10 @@ function upsertNotif(userId: string, notifKey: string, isRead: boolean, refetch:
 function upsertManyNotifs(userId: string, keys: string[], isRead: boolean, refetch: () => void) {
   if (!keys.length) return;
   api
-    .post("/notifications/upsert", keys.map((k) => ({ user_id: userId, notif_key: k, is_read: isRead })))
+    .post(
+      "/notifications/upsert",
+      keys.map((k) => ({ user_id: userId, notif_key: k, is_read: isRead })),
+    )
     .then(() => refetch())
     .catch(() => {});
 }
@@ -524,7 +541,12 @@ function RotaReminderBell({
       return { kind: "approve1" as const, key: `workflow_1st_${nextPeriodStart}`, nextPeriodStart };
     }
     if (isHeadOrAdmin && leaveIsClosed && (nextRotaStage === "none" || nextRotaStage === "draft")) {
-      return { kind: "generate" as const, key: `workflow_gen_${nextPeriodStart}`, nextPeriodStart, nextRotaStage };
+      return {
+        kind: "generate" as const,
+        key: `workflow_gen_${nextPeriodStart}`,
+        nextPeriodStart,
+        nextRotaStage,
+      };
     }
     return null;
   })();
@@ -578,9 +600,7 @@ function RotaReminderBell({
 
   // Unread locum notifications from shared notif state (declined requests only)
   const locumUnread =
-    allNotifs?.filter(
-      (r) => !r.is_read && r.notif_key.startsWith("locum_declined_"),
-    ).length ?? 0;
+    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_declined_")).length ?? 0;
 
   // Unread leave/switch outcome notifications (shown to the requesting staff member)
   const leaveUpdateKeys =
@@ -646,7 +666,9 @@ function RotaReminderBell({
     })();
 
   const workflowOverdue =
-    showWorkflow && workflowItem?.kind === "publish" && !!(workflowItem as { overdue?: boolean }).overdue;
+    showWorkflow &&
+    workflowItem?.kind === "publish" &&
+    !!(workflowItem as { overdue?: boolean }).overdue;
   const hasCritical = mgmtOverdue || workflowOverdue;
 
   function markNotif(key: string | null, isRead: boolean) {
@@ -726,8 +748,8 @@ function RotaReminderBell({
                         </button>
                       </div>
                       <p className="text-xs">
-                        {coverUnread} sick/emergency leave{coverUnread !== 1 ? "s" : ""} approved
-                        — consider arranging shift cover.
+                        {coverUnread} sick/emergency leave{coverUnread !== 1 ? "s" : ""} approved —
+                        consider arranging shift cover.
                       </p>
                       <p className="text-xs text-muted-foreground">
                         Open the Shift Switches tab on Leave &amp; Requests to arrange cover.
@@ -951,7 +973,9 @@ function RotaReminderBell({
 
                       const title =
                         wKind === "generate"
-                          ? hasDraft ? "Submit Draft Rota" : "Generate Next Rota"
+                          ? hasDraft
+                            ? "Submit Draft Rota"
+                            : "Generate Next Rota"
                           : wKind === "approve1"
                             ? "1st Approval Required"
                             : wKind === "approve2"
@@ -999,9 +1023,7 @@ function RotaReminderBell({
                             <div className="flex items-center gap-2">
                               {isOverdue || isApprove || isPub ? (
                                 isApprove ? (
-                                  <ClipboardCheck
-                                    className="h-4 w-4 shrink-0 text-amber-500"
-                                  />
+                                  <ClipboardCheck className="h-4 w-4 shrink-0 text-amber-500" />
                                 ) : (
                                   <AlertCircle
                                     className={cn(
@@ -1037,7 +1059,9 @@ function RotaReminderBell({
                             {workflowState !== null && (
                               <button
                                 type="button"
-                                title={workflowState === "unread" ? "Mark as read" : "Mark as unread"}
+                                title={
+                                  workflowState === "unread" ? "Mark as read" : "Mark as unread"
+                                }
                                 onClick={() => markNotif(workflowKey, workflowState === "unread")}
                                 className="cursor-pointer text-[10px] text-muted-foreground hover:text-foreground shrink-0 underline"
                               >

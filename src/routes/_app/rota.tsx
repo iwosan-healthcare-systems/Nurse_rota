@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -906,8 +907,12 @@ function RotaPage() {
   // Per-group: nurses in a published facility-wide group who have only draft assignments.
   const draftOnlyFwMap = useMemo(() => {
     if (!canGenerate || !effectiveFacility) return new Map<FacilityWideGroup, typeof nurses>();
-    const publishedIds = new Set(assignments.filter((a) => a.status === "published").map((a) => a.nurse_id));
-    const draftIds = new Set(assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id));
+    const publishedIds = new Set(
+      assignments.filter((a) => a.status === "published").map((a) => a.nurse_id),
+    );
+    const draftIds = new Set(
+      assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
+    );
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
       if (key === "matron") return fac.filter((n) => isMatron(n.role));
@@ -918,7 +923,9 @@ function RotaPage() {
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
       if (facilityWideStatusMap[key] === "published") {
-        const draftOnly = getGroup(key).filter((n) => draftIds.has(n.id) && !publishedIds.has(n.id));
+        const draftOnly = getGroup(key).filter(
+          (n) => draftIds.has(n.id) && !publishedIds.has(n.id),
+        );
         if (draftOnly.length) result.set(key, draftOnly);
       }
     }
@@ -1234,16 +1241,18 @@ function RotaPage() {
       "Submitted rota for approval",
       `${ymd(startDate)} → ${ymd(endDate)} (${selectedWard || effectiveFacility || "all wards"})`,
     );
-    api.post("/rota-transitions", {
-      facility: effectiveFacility,
-      ward: selectedWard || null,
-      role_group: null,
-      period_start: ymd(startDate),
-      period_end: ymd(endDate),
-      status: "submitted",
-      actor_id: user?.id,
-      actor_name: user?.email ?? null,
-    }).catch(() => {});
+    api
+      .post("/rota-transitions", {
+        facility: effectiveFacility,
+        ward: selectedWard || null,
+        role_group: null,
+        period_start: ymd(startDate),
+        period_end: ymd(endDate),
+        status: "submitted",
+        actor_id: user?.id,
+        actor_name: user?.email ?? null,
+      })
+      .catch(() => {});
     toast.success("Submitted to Chief Matron");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -1279,9 +1288,9 @@ function RotaPage() {
         const dayBefore = new Date(startDate);
         dayBefore.setDate(dayBefore.getDate() - 1);
         const epochRows = await api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
           .catch(() => []);
         if (epochRows[0]?.shift_date) {
           const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
@@ -1298,9 +1307,9 @@ function RotaPage() {
         const prevFrom = new Date(startDate);
         prevFrom.setDate(prevFrom.getDate() - 5);
         previousAssignments = await api
-          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
-          )
+          .get<
+            { nurse_id: string; shift_date: string; shift: ShiftCode }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`)
           .catch(() => []);
       }
 
@@ -1339,11 +1348,13 @@ function RotaPage() {
 
       // Skip any published slots
       const pubRows = await api
-        .get<{ nurse_id: string; shift_date: string }[]>(
-          `/shift-assignments?from=${today}&to=${periodEnd}&status=published`,
-        )
+        .get<
+          { nurse_id: string; shift_date: string }[]
+        >(`/shift-assignments?from=${today}&to=${periodEnd}&status=published`)
         .catch(() => []);
-      const publishedKeys = new Set(pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`));
+      const publishedKeys = new Set(
+        pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`),
+      );
 
       const toInsert = targetDraft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
@@ -1427,9 +1438,9 @@ function RotaPage() {
         const dayBefore = new Date(startDate);
         dayBefore.setDate(dayBefore.getDate() - 1);
         const epochRows = await api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&to=${ymd(dayBefore)}&limit=1`)
           .catch(() => []);
         if (epochRows[0]?.shift_date) {
           const epochDate = new Date(epochRows[0].shift_date.slice(0, 10) + "T00:00:00");
@@ -1446,9 +1457,9 @@ function RotaPage() {
         const prevFrom = new Date(startDate);
         prevFrom.setDate(prevFrom.getDate() - 5);
         previousAssignments = await api
-          .get<{ nurse_id: string; shift_date: string; shift: ShiftCode }[]>(
-            `/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`,
-          )
+          .get<
+            { nurse_id: string; shift_date: string; shift: ShiftCode }[]
+          >(`/shift-assignments?nurse_ids=${facilityIds.join(",")}&from=${ymd(prevFrom)}&to=${ymd(prevTo)}`)
           .catch(() => []);
       }
 
@@ -1479,9 +1490,9 @@ function RotaPage() {
       }
 
       const pubRows = await api
-        .get<{ nurse_id: string; shift_date: string }[]>(
-          `/shift-assignments?from=${today}&to=${periodEnd}&status=published`,
-        )
+        .get<
+          { nurse_id: string; shift_date: string }[]
+        >(`/shift-assignments?from=${today}&to=${periodEnd}&status=published`)
         .catch(() => []);
       const publishedKeys = new Set(
         pubRows.map((r) => `${r.nurse_id}|${r.shift_date.slice(0, 10)}`),
@@ -1810,16 +1821,18 @@ function RotaPage() {
         "Submitted facility-wide rota for approval",
         `${labels[key]} · ${effectiveFacility} · ${ymd(startDate)} → ${ymd(endDate)}`,
       );
-      api.post("/rota-transitions", {
-        facility: effectiveFacility,
-        ward: null,
-        role_group: key,
-        period_start: ymd(startDate),
-        period_end: ymd(endDate),
-        status: "submitted",
-        actor_id: user?.id,
-        actor_name: user?.email ?? null,
-      }).catch(() => {});
+      api
+        .post("/rota-transitions", {
+          facility: effectiveFacility,
+          ward: null,
+          role_group: key,
+          period_start: ymd(startDate),
+          period_end: ymd(endDate),
+          status: "submitted",
+          actor_id: user?.id,
+          actor_name: user?.email ?? null,
+        })
+        .catch(() => {});
       toast.success(`${labels[key]} schedule submitted to Chief Matron`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
@@ -2225,41 +2238,46 @@ function RotaPage() {
                     )}
                     {windowLockStatus === "published" && "Published — read only"}
                     {windowLockStatus === "approved_cno" && "CNO Approved — awaiting publication"}
-                    {windowLockStatus === "approved_chief" && "Chief Matron Approved — awaiting CNO"}
+                    {windowLockStatus === "approved_chief" &&
+                      "Chief Matron Approved — awaiting CNO"}
                     {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
                   </span>
                   {/* New/reactivated staff in a published ward — generate their draft first */}
-                  {windowLockStatus === "published" && canGenerate && unscheduledWardNurses.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void handleGenerateForUnscheduled()}
-                      disabled={busy}
-                      className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
-                    >
-                      <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-                      {busy
-                        ? "Generating…"
-                        : unscheduledWardNurses.length === 1
-                          ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
-                          : `Generate for ${unscheduledWardNurses.length} new staff`}
-                    </button>
-                  )}
+                  {windowLockStatus === "published" &&
+                    canGenerate &&
+                    unscheduledWardNurses.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleGenerateForUnscheduled()}
+                        disabled={busy}
+                        className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
+                      >
+                        <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                        {busy
+                          ? "Generating…"
+                          : unscheduledWardNurses.length === 1
+                            ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
+                            : `Generate for ${unscheduledWardNurses.length} new staff`}
+                      </button>
+                    )}
                   {/* Draft exists for new staff — submit to publish directly to existing rota */}
-                  {windowLockStatus === "published" && canGenerate && newStaffWithDraft.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => void handlePublishNewStaff()}
-                      disabled={busy}
-                      className="h-9 px-4 rounded-md bg-blue-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      <CheckCircle className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-                      {busy
-                        ? "Publishing…"
-                        : newStaffWithDraft.length === 1
-                          ? `Submit for ${newStaffWithDraft[0].name.split(" ")[0]}`
-                          : `Submit for ${newStaffWithDraft.length} staff`}
-                    </button>
-                  )}
+                  {windowLockStatus === "published" &&
+                    canGenerate &&
+                    newStaffWithDraft.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handlePublishNewStaff()}
+                        disabled={busy}
+                        className="h-9 px-4 rounded-md bg-blue-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <CheckCircle className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                        {busy
+                          ? "Publishing…"
+                          : newStaffWithDraft.length === 1
+                            ? `Submit for ${newStaffWithDraft[0].name.split(" ")[0]}`
+                            : `Submit for ${newStaffWithDraft.length} staff`}
+                      </button>
+                    )}
                 </>
               ) : (
                 <>
@@ -2470,9 +2488,11 @@ function RotaPage() {
                             className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 disabled:opacity-50"
                           >
                             <CalendarDays className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
-                            {busy ? "…" : unscheduledFwMap.get(key)!.length === 1
-                              ? `Generate for ${unscheduledFwMap.get(key)![0].name.split(" ")[0]}`
-                              : `Generate for ${unscheduledFwMap.get(key)!.length} staff`}
+                            {busy
+                              ? "…"
+                              : unscheduledFwMap.get(key)!.length === 1
+                                ? `Generate for ${unscheduledFwMap.get(key)![0].name.split(" ")[0]}`
+                                : `Generate for ${unscheduledFwMap.get(key)!.length} staff`}
                           </button>
                         )}
                         {/* Draft exists for new staff — submit directly to published rota */}
@@ -2487,9 +2507,11 @@ function RotaPage() {
                             className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white border-blue-600 disabled:opacity-50"
                           >
                             <CheckCircle className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
-                            {busy ? "…" : draftOnlyFwMap.get(key)!.length === 1
-                              ? `Submit for ${draftOnlyFwMap.get(key)![0].name.split(" ")[0]}`
-                              : `Submit for ${draftOnlyFwMap.get(key)!.length} staff`}
+                            {busy
+                              ? "…"
+                              : draftOnlyFwMap.get(key)!.length === 1
+                                ? `Submit for ${draftOnlyFwMap.get(key)![0].name.split(" ")[0]}`
+                                : `Submit for ${draftOnlyFwMap.get(key)!.length} staff`}
                           </button>
                         )}
                       </>
@@ -2762,7 +2784,7 @@ function RotaPage() {
                                   setDragging(null);
                                 }}
                                 className={cn(
-                                  "block w-full text-[10px] font-bold py-1.5 rounded border transition",
+                                  "block w-full min-h-8 text-[10px] font-bold py-2 rounded border transition",
                                   cell
                                     ? isLocum
                                       ? "bg-black text-white border-black"

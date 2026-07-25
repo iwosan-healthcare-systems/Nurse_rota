@@ -1,3 +1,4 @@
+/* eslint-disable prettier/prettier */
 import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -340,8 +341,10 @@ function UsersPage() {
             <table className="w-full text-sm">
               <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
                 <tr>
-                  <th className="text-left px-4 py-3 font-semibold">Name</th>
-                  <th className="text-left px-4 py-3 font-semibold">Email</th>
+                  <th className="text-left px-4 py-3 font-semibold sticky left-0 bg-muted/50 z-10">
+                    Name
+                  </th>
+                  <th className="text-left px-4 py-3 font-semibold hidden sm:table-cell">Email</th>
                   <th className="text-left px-4 py-3 font-semibold">Roles</th>
                   <th className="text-left px-4 py-3 font-semibold">Add Role</th>
                   <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -486,7 +489,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
             onClick={onClose}
             aria-label="Close"
             title="Close"
-            className="h-7 w-7 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
+            className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -626,7 +629,7 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
             type="button"
             onClick={onClose}
             aria-label="Close"
-            className="h-7 w-7 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
+            className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
           >
             <X className="h-4 w-4" />
           </button>
@@ -1044,7 +1047,7 @@ function UserRowItem({
   return (
     <tr className="border-t hover:bg-muted/30">
       {/* Name */}
-      <td className="px-4 py-3">
+      <td className="px-4 py-3 sticky left-0 bg-card z-10">
         <p className="font-medium text-sm">{user.full_name ?? "Unnamed"}</p>
         {user.must_change_password && (
           <span
@@ -1067,7 +1070,9 @@ function UserRowItem({
       </td>
 
       {/* Email */}
-      <td className="px-4 py-3 text-xs text-muted-foreground">{user.email ?? "—"}</td>
+      <td className="px-4 py-3 text-xs text-muted-foreground hidden sm:table-cell">
+        {user.email ?? "—"}
+      </td>
 
       {/* Roles */}
       <td className="px-4 py-3">
@@ -1085,7 +1090,7 @@ function UserRowItem({
                   <button
                     type="button"
                     onClick={() => onRemove(user.id, r)}
-                    className="hover:text-destructive ml-0.5"
+                    className="hover:text-destructive -my-1.5 -mr-1 p-1.5 grid place-items-center"
                     title={`Revoke ${ROLE_LABELS[r]}`}
                   >
                     <Trash2 className="h-2.5 w-2.5" />
@@ -1146,12 +1151,12 @@ function UserRowItem({
 
       {/* Actions */}
       <td className="px-4 py-3">
-        <div className="flex items-center gap-1 justify-end">
+        <div className="flex items-center gap-1.5 justify-end">
           <button
             type="button"
             onClick={() => onEdit(user)}
             title="Edit profile"
-            className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-primary/40 hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
+            className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-primary/40 hover:bg-primary/10 text-muted-foreground hover:text-primary transition-colors"
           >
             <Pencil className="h-3.5 w-3.5" />
           </button>
@@ -1161,7 +1166,7 @@ function UserRowItem({
                 type="button"
                 onClick={() => onResetPassword(user)}
                 title="Reset password"
-                className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 transition-colors"
+                className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-amber-400/40 hover:bg-amber-50 text-muted-foreground hover:text-amber-700 transition-colors"
               >
                 <RotateCcw className="h-3.5 w-3.5" />
               </button>
@@ -1169,7 +1174,7 @@ function UserRowItem({
                 type="button"
                 onClick={() => onDeactivate(user)}
                 title="Deactivate login"
-                className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
               >
                 <UserX className="h-3.5 w-3.5" />
               </button>
@@ -1179,7 +1184,7 @@ function UserRowItem({
               type="button"
               onClick={() => onReactivate(user)}
               title="Reactivate login"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-success/40 hover:bg-success/10 text-muted-foreground hover:text-success transition-colors"
+              className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-success/40 hover:bg-success/10 text-muted-foreground hover:text-success transition-colors"
             >
               <UserCheck className="h-3.5 w-3.5" />
             </button>
@@ -1189,7 +1194,7 @@ function UserRowItem({
               type="button"
               onClick={() => onDelete(user)}
               title="Delete user"
-              className="h-7 w-7 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              className="h-8 w-8 grid place-items-center rounded-md border border-transparent hover:border-destructive/40 hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
             >
               <Trash2 className="h-3.5 w-3.5" />
             </button>

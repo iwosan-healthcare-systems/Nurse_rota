@@ -287,7 +287,11 @@ function NurseDashboard() {
       })
       .map((inv) => [
         inv.locum_request!.shift_date.slice(0, 10),
-        { shift: inv.locum_request!.shift, ward: inv.locum_request!.ward, facility: inv.locum_request!.facility },
+        {
+          shift: inv.locum_request!.shift,
+          ward: inv.locum_request!.ward,
+          facility: inv.locum_request!.facility,
+        },
       ]),
   );
 
@@ -508,7 +512,6 @@ function NurseDashboard() {
               No assignment for today
             </p>
           )}
-
         </div>
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">
@@ -1014,7 +1017,9 @@ const LEAVE_TYPE_ORDER = [
 
 function colorForLeaveType(type: string) {
   const idx = LEAVE_TYPE_ORDER.indexOf(type);
-  return CHART_SERIES_VARS[idx >= 0 ? idx % CHART_SERIES_VARS.length : CHART_SERIES_VARS.length - 1];
+  return CHART_SERIES_VARS[
+    idx >= 0 ? idx % CHART_SERIES_VARS.length : CHART_SERIES_VARS.length - 1
+  ];
 }
 
 function fmtWeekLabel(weekStart: string) {
@@ -1097,9 +1102,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
     for (const l of scoped) counts.set(l.type, (counts.get(l.type) ?? 0) + 1);
     return [...counts.entries()]
       .map(([type, count]) => ({ type, count, color: colorForLeaveType(type) }))
-      .sort(
-        (a, b) => LEAVE_TYPE_ORDER.indexOf(a.type) - LEAVE_TYPE_ORDER.indexOf(b.type),
-      );
+      .sort((a, b) => LEAVE_TYPE_ORDER.indexOf(a.type) - LEAVE_TYPE_ORDER.indexOf(b.type));
   }, [leave, facility, nurseNameToFacility]);
 
   const total = data.reduce((sum, d) => sum + d.count, 0);
@@ -1126,11 +1129,13 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
       </div>
 
       {total === 0 ? (
-        <p className="text-sm text-muted-foreground py-16 text-center">
-          No approved leave in this scope yet.
-        </p>
+        <div className="h-64 flex items-center justify-center">
+          <p className="text-sm text-muted-foreground text-center">
+            No approved leave in this scope yet.
+          </p>
+        </div>
       ) : (
-        <div className="flex items-center gap-8">
+        <div className="h-64 flex items-center gap-8">
           <div className="h-64 w-64 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
@@ -1166,7 +1171,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5">
+          <div className="min-w-0 flex-1 space-y-2.5 max-h-64 overflow-y-auto pr-1">
             {data.map((d) => (
               <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2 min-w-0">
@@ -1199,10 +1204,7 @@ function WeeklyHoursCard() {
     queryFn: () => api.get<WeeklyFacilityHours[]>("/rpc/weekly-hours-by-facility?weeks=12"),
   });
 
-  const facilities = useMemo(
-    () => [...new Set(raw.map((r) => r.facility))].sort(),
-    [raw],
-  );
+  const facilities = useMemo(() => [...new Set(raw.map((r) => r.facility))].sort(), [raw]);
   const facilityColor = useMemo(() => {
     const m = new Map<string, string>();
     facilities.forEach((f, i) => m.set(f, CHART_SERIES_VARS[i % CHART_SERIES_VARS.length]));
@@ -1261,11 +1263,15 @@ function WeeklyHoursCard() {
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-muted-foreground py-16 text-center">Loading…</p>
+        <div className="h-64 flex items-center justify-center">
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        </div>
       ) : chartData.length === 0 ? (
-        <p className="text-sm text-muted-foreground py-16 text-center">
-          No shift hours logged in this window yet.
-        </p>
+        <div className="h-64 flex items-center justify-center">
+          <p className="text-sm text-muted-foreground text-center">
+            No shift hours logged in this window yet.
+          </p>
+        </div>
       ) : (
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
