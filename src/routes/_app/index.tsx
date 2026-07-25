@@ -1230,8 +1230,8 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
           </ResponsiveContainer>
         </div>
       ) : (
-        <div className="h-80 flex items-center gap-8">
-          <div className="h-80 w-80 shrink-0">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-4 sm:gap-8 sm:h-80">
+          <div className="h-52 w-52 sm:h-80 sm:w-80 shrink-0 mx-auto sm:mx-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1252,7 +1252,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5 max-h-80 overflow-y-auto pr-1">
+          <div className="min-w-0 flex-1 w-full space-y-2.5 sm:max-h-80 sm:overflow-y-auto pr-1">
             {data.map((d) => (
               <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2 min-w-0">
