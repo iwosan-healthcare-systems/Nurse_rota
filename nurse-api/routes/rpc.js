@@ -284,4 +284,37 @@ router.post(
   }),
 );
 
+// ── Weekly hours by facility (Dashboard chart) ─────────────────────────────
+// Sums shift_logs.hours_logged per ISO week per facility for actually-worked
+// shifts: excludes locum, swap, AND leave-credited entries (is_leave = true)
+// — leave hours count toward nurse_period_hours/target_hours elsewhere, but
+// they are not "worked" hours, so they don't belong in this chart. Facility
+// is derived via nurse_id -> nurses.facility since shift_logs has no facility
+// column.
+router.get(
+  "/weekly-hours-by-facility",
+  wrap(async (req, res) => {
+    const weeks = Math.min(Math.max(parseInt(req.query.weeks) || 12, 1), 52);
+    const { rows } = await pool.query(
+      `SELECT
+         date_trunc('week', sl.shift_date)::date AS week_start,
+         n.facility,
+         ROUND(SUM(sl.hours_logged) * 100) / 100 AS hours
+       FROM shift_logs sl
+       JOIN nurses n ON n.id = sl.nurse_id
+       WHERE sl.hours_logged IS NOT NULL
+         AND sl.ended_at IS NOT NULL
+         AND sl.is_locum = false
+         AND sl.is_swap = false
+         AND sl.is_leave = false
+         AND n.facility IS NOT NULL
+         AND sl.shift_date >= (CURRENT_DATE - ($1::int * 7))
+       GROUP BY week_start, n.facility
+       ORDER BY week_start`,
+      [weeks],
+    );
+    res.json(rows);
+  }),
+);
+
 module.exports = router;

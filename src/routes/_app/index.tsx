@@ -19,9 +19,21 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
-import { type ComponentType, type ReactNode } from "react";
+import { type ComponentType, type ReactNode, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
+import {
+  ResponsiveContainer,
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+} from "recharts";
 
 export const Route = createFileRoute("/_app/")({
   head: () => ({
@@ -974,6 +986,300 @@ function ManagementAlerts() {
   );
 }
 
+// ── Chart color assignment ──────────────────────────────────────────────────
+// Fixed hue order (validated colorblind-safe) — color is assigned by entity
+// identity (leave type / facility name), never by rank, so a slice or line
+// keeps the same color no matter what's filtered or toggled.
+const CHART_SERIES_VARS = [
+  "var(--chart-series-1)",
+  "var(--chart-series-2)",
+  "var(--chart-series-3)",
+  "var(--chart-series-4)",
+  "var(--chart-series-5)",
+  "var(--chart-series-6)",
+  "var(--chart-series-7)",
+  "var(--chart-series-8)",
+];
+
+const LEAVE_TYPE_ORDER = [
+  "Annual",
+  "Compassionate Leave",
+  "Emergency",
+  "Leave of Absence",
+  "Maternity",
+  "Public Holiday",
+  "Sick",
+  "Study Leave",
+];
+
+function colorForLeaveType(type: string) {
+  const idx = LEAVE_TYPE_ORDER.indexOf(type);
+  return CHART_SERIES_VARS[idx >= 0 ? idx % CHART_SERIES_VARS.length : CHART_SERIES_VARS.length - 1];
+}
+
+function fmtWeekLabel(weekStart: string) {
+  return new Date(weekStart.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+  });
+}
+
+const ALL_FACILITIES = "__ALL__";
+
+// ── Leave by type (donut, facility-filterable) ──────────────────────────────
+function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: NurseRecord[] }) {
+  const [facility, setFacility] = useState<string>(ALL_FACILITIES);
+
+  const facilities = useMemo(
+    () => [...new Set(nurses.map((n) => n.facility).filter((f): f is string => !!f))].sort(),
+    [nurses],
+  );
+  const nurseNameToFacility = useMemo(
+    () => new Map(nurses.map((n) => [n.name, n.facility])),
+    [nurses],
+  );
+
+  const data = useMemo(() => {
+    const scoped = leave.filter((l) => {
+      if (l.status !== "Approved" || l.type === "Swap") return false;
+      if (facility === ALL_FACILITIES) return true;
+      return nurseNameToFacility.get(l.nurse_name) === facility;
+    });
+    const counts = new Map<string, number>();
+    for (const l of scoped) counts.set(l.type, (counts.get(l.type) ?? 0) + 1);
+    return [...counts.entries()]
+      .map(([type, count]) => ({ type, count, color: colorForLeaveType(type) }))
+      .sort(
+        (a, b) => LEAVE_TYPE_ORDER.indexOf(a.type) - LEAVE_TYPE_ORDER.indexOf(b.type),
+      );
+  }, [leave, facility, nurseNameToFacility]);
+
+  const total = data.reduce((sum, d) => sum + d.count, 0);
+
+  return (
+    <div className="bg-card border rounded-xl p-5 shadow-soft">
+      <div className="flex items-center justify-between mb-4 gap-2">
+        <div>
+          <h2 className="font-semibold">Leave by Type</h2>
+          <p className="text-xs text-muted-foreground">Approved leave, by type</p>
+        </div>
+        <select
+          value={facility}
+          onChange={(e) => setFacility(e.target.value)}
+          className="h-8 rounded-md border bg-background px-2 text-xs"
+        >
+          <option value={ALL_FACILITIES}>All Facilities</option>
+          {facilities.map((f) => (
+            <option key={f} value={f}>
+              {f}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      {total === 0 ? (
+        <p className="text-sm text-muted-foreground py-10 text-center">
+          No approved leave in this scope yet.
+        </p>
+      ) : (
+        <div className="flex items-center gap-4">
+          <div className="h-44 w-44 shrink-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={data}
+                  dataKey="count"
+                  nameKey="type"
+                  innerRadius="60%"
+                  outerRadius="90%"
+                  paddingAngle={2}
+                  stroke="var(--card)"
+                  strokeWidth={2}
+                >
+                  {data.map((d) => (
+                    <Cell key={d.type} fill={d.color} />
+                  ))}
+                </Pie>
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const d = payload[0].payload as { type: string; count: number };
+                    const pct = Math.round((d.count / total) * 100);
+                    return (
+                      <div className="bg-popover border rounded-lg px-3 py-2 shadow-md text-xs">
+                        <p className="font-medium">{d.type}</p>
+                        <p className="text-muted-foreground">
+                          {d.count} request{d.count > 1 ? "s" : ""} · {pct}%
+                        </p>
+                      </div>
+                    );
+                  }}
+                />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            {data.map((d) => (
+              <div key={d.type} className="flex items-center justify-between gap-2 text-xs">
+                <span className="flex items-center gap-1.5 min-w-0">
+                  <span
+                    className="h-2.5 w-2.5 rounded-full shrink-0"
+                    style={{ backgroundColor: d.color }}
+                  />
+                  <span className="truncate">{d.type}</span>
+                </span>
+                <span className="text-muted-foreground tabular-nums shrink-0">
+                  {d.count} · {Math.round((d.count / total) * 100)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Weekly hours worked per facility (multi-line, toggleable legend) ───────
+type WeeklyFacilityHours = { week_start: string; facility: string; hours: string | number };
+
+function WeeklyHoursCard() {
+  const [hidden, setHidden] = useState<Set<string>>(new Set());
+
+  const { data: raw = [], isLoading } = useQuery({
+    queryKey: ["weekly-hours-by-facility"],
+    queryFn: () => api.get<WeeklyFacilityHours[]>("/rpc/weekly-hours-by-facility?weeks=12"),
+  });
+
+  const facilities = useMemo(
+    () => [...new Set(raw.map((r) => r.facility))].sort(),
+    [raw],
+  );
+  const facilityColor = useMemo(() => {
+    const m = new Map<string, string>();
+    facilities.forEach((f, i) => m.set(f, CHART_SERIES_VARS[i % CHART_SERIES_VARS.length]));
+    return m;
+  }, [facilities]);
+
+  const chartData = useMemo(() => {
+    const byWeek = new Map<string, Record<string, number | string>>();
+    for (const r of raw) {
+      const row = byWeek.get(r.week_start) ?? { week_start: r.week_start };
+      row[r.facility] = Number(r.hours);
+      byWeek.set(r.week_start, row);
+    }
+    return [...byWeek.values()].sort((a, b) =>
+      String(a.week_start).localeCompare(String(b.week_start)),
+    );
+  }, [raw]);
+
+  function toggle(facility: string) {
+    setHidden((prev) => {
+      const next = new Set(prev);
+      if (next.has(facility)) next.delete(facility);
+      else next.add(facility);
+      return next;
+    });
+  }
+
+  return (
+    <div className="lg:col-span-2 bg-card border rounded-xl p-5 shadow-soft">
+      <div className="flex items-center justify-between mb-4 gap-2">
+        <div>
+          <h2 className="font-semibold">Hours Worked, Weekly</h2>
+          <p className="text-xs text-muted-foreground">Last 12 weeks, by facility</p>
+        </div>
+        {facilities.length > 0 && (
+          <div className="flex items-center gap-3 flex-wrap justify-end">
+            {facilities.map((f) => (
+              <button
+                key={f}
+                type="button"
+                onClick={() => toggle(f)}
+                className={cn(
+                  "flex items-center gap-1.5 text-xs transition-opacity",
+                  hidden.has(f) && "opacity-40",
+                )}
+              >
+                <span
+                  className="h-2.5 w-2.5 rounded-full shrink-0"
+                  style={{ backgroundColor: facilityColor.get(f) }}
+                />
+                {f}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground py-16 text-center">Loading…</p>
+      ) : chartData.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-16 text-center">
+          No shift hours logged in this window yet.
+        </p>
+      ) : (
+        <div className="h-64">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+              <XAxis
+                dataKey="week_start"
+                tickFormatter={fmtWeekLabel}
+                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                axisLine={{ stroke: "var(--border)" }}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                axisLine={false}
+                tickLine={false}
+                width={40}
+              />
+              <Tooltip
+                labelFormatter={(v) => fmtWeekLabel(String(v))}
+                content={({ active, payload, label }) => {
+                  if (!active || !payload?.length) return null;
+                  return (
+                    <div className="bg-popover border rounded-lg px-3 py-2 shadow-md text-xs space-y-1">
+                      <p className="font-medium">{fmtWeekLabel(String(label))}</p>
+                      {payload
+                        .filter((p) => !hidden.has(String(p.dataKey)))
+                        .map((p) => (
+                          <p key={String(p.dataKey)} className="flex items-center gap-1.5">
+                            <span
+                              className="h-2 w-2 rounded-full shrink-0"
+                              style={{ backgroundColor: p.color }}
+                            />
+                            <span className="text-muted-foreground">{p.dataKey}:</span>
+                            <span className="tabular-nums">{fmtHours(Number(p.value))}</span>
+                          </p>
+                        ))}
+                    </div>
+                  );
+                }}
+              />
+              {facilities.map((f) => (
+                <Line
+                  key={f}
+                  type="monotone"
+                  dataKey={f}
+                  stroke={facilityColor.get(f)}
+                  strokeWidth={2}
+                  dot={{ r: 3, strokeWidth: 0, fill: facilityColor.get(f) }}
+                  activeDot={{ r: 5 }}
+                  hide={hidden.has(f)}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Management dashboard ──────────────────────────────────────────────────────
 
 function ManagementDashboard() {
@@ -985,7 +1291,7 @@ function ManagementDashboard() {
 
   const { data: allNurses = [] } = useQuery({
     queryKey: ["nurses"],
-    queryFn: () => api.get<Record<string, unknown>[]>("/nurses"),
+    queryFn: () => api.get<NurseRecord[]>("/nurses"),
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
@@ -1041,38 +1347,46 @@ function ManagementDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <div className="lg:col-span-2 bg-card border rounded-xl p-5 shadow-soft">
-          <div className="flex items-center justify-between mb-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
+        <div className="lg:col-span-2 bg-card border rounded-xl p-4 shadow-soft">
+          <div className="flex items-center justify-between mb-2.5">
             <div>
-              <h2 className="font-semibold">Ward Safety Snapshot</h2>
+              <h2 className="text-sm font-semibold">Ward Safety Snapshot</h2>
               <p className="text-xs text-muted-foreground">Minimum-staffing rules per ward</p>
             </div>
             <Link
               to="/wards"
-              className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
+              className="text-xs text-primary inline-flex items-center gap-1 hover:underline shrink-0"
             >
               View all <ChevronRight className="h-3 w-3" />
             </Link>
           </div>
           {visibleWards.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">
+            <p className="text-sm text-muted-foreground py-4 text-center">
               No wards configured yet.{" "}
               <Link to="/wards" className="text-primary hover:underline">
                 Add one →
               </Link>
             </p>
           ) : (
-            <div className="space-y-2">
-              {visibleWards.slice(0, 8).map((w) => (
-                <div key={w.id} className="flex items-center justify-between gap-3 text-sm py-1">
-                  <span className="truncate font-medium w-32 sm:w-40">{w.name}</span>
-                  <span className="text-xs text-muted-foreground tabular-nums whitespace-nowrap">
+            <div className="space-y-1">
+              {visibleWards.slice(0, 4).map((w) => (
+                <div key={w.id} className="flex items-center justify-between gap-3 text-xs py-0.5">
+                  <span className="truncate font-medium w-28 sm:w-36">{w.name}</span>
+                  <span className="text-muted-foreground tabular-nums whitespace-nowrap">
                     AM: {w.min_morning_nurses}N+I · {w.min_morning_na}NA &nbsp;·&nbsp; PM:{" "}
                     {w.min_night_nurses}N+I · {w.min_night_na}NA
                   </span>
                 </div>
               ))}
+              {visibleWards.length > 4 && (
+                <p className="text-xs text-muted-foreground pt-1">
+                  +{visibleWards.length - 4} more ward{visibleWards.length - 4 > 1 ? "s" : ""} ·{" "}
+                  <Link to="/wards" className="text-primary hover:underline">
+                    view all
+                  </Link>
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1108,6 +1422,11 @@ function ManagementDashboard() {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <WeeklyHoursCard />
+        <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
       </div>
 
       {/* Quick links for management */}
