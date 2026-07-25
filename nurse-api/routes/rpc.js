@@ -63,7 +63,7 @@ router.post(
     await pool.query(`
       INSERT INTO shift_logs
         (nurse_id, shift_date, shift_type, started_at, expected_end_at, ended_at,
-         period_start, hours_logged, is_missed, is_leave, is_locum, is_swap)
+         period_start, hours_logged, is_missed, is_leave, is_locum, locum_request_id, is_swap)
       SELECT
         sa.nurse_id,
         sa.shift_date,
@@ -81,9 +81,14 @@ router.post(
         0                           AS hours_logged,
         true                        AS is_missed,
         false                       AS is_leave,
-        false                       AS is_locum,
+        lr.id IS NOT NULL           AS is_locum,
+        lr.id                       AS locum_request_id,
         false                       AS is_swap
       FROM shift_assignments sa
+      LEFT JOIN locum_requests lr
+        ON lr.status = 'filled'
+       AND lr.accepted_by_nurse_id = sa.nurse_id
+       AND lr.shift_date = sa.shift_date
       WHERE sa.status = 'published'
         AND (
           (sa.shift NOT IN ('N', 'NC') AND sa.shift_date < CURRENT_DATE)
@@ -94,6 +99,46 @@ router.post(
           SELECT 1 FROM shift_logs sl
           WHERE sl.nurse_id = sa.nurse_id
             AND sl.shift_date = sa.shift_date
+        )
+    `);
+
+    // Locum acceptance never creates a shift_assignments row (see jobs/auto-end-shifts.js
+    // for the full explanation), so a locum no-show needs its own scan of locum_requests.
+    await pool.query(`
+      INSERT INTO shift_logs
+        (nurse_id, shift_date, shift_type, started_at, expected_end_at, ended_at,
+         period_start, hours_logged, is_missed, is_leave, is_locum, locum_request_id, is_swap)
+      SELECT
+        lr.accepted_by_nurse_id,
+        lr.shift_date,
+        (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
+        lr.shift_date::timestamp    AS started_at,
+        lr.shift_date::timestamp    AS expected_end_at,
+        lr.shift_date::timestamp    AS ended_at,
+        COALESCE(
+          (SELECT MIN(s2.shift_date)
+           FROM shift_assignments s2
+           WHERE s2.status = 'published'
+             AND s2.shift_date BETWEEN lr.shift_date - 27 AND lr.shift_date),
+          lr.shift_date
+        )                           AS period_start,
+        0                           AS hours_logged,
+        true                        AS is_missed,
+        false                       AS is_leave,
+        true                        AS is_locum,
+        lr.id                       AS locum_request_id,
+        false                       AS is_swap
+      FROM locum_requests lr
+      WHERE lr.status = 'filled'
+        AND lr.accepted_by_nurse_id IS NOT NULL
+        AND (
+          (lr.shift NOT IN ('N', 'NC') AND lr.shift_date < CURRENT_DATE)
+          OR (lr.shift IN ('N', 'NC') AND lr.shift_date + INTERVAL '1 day 8 hours' < NOW())
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_logs sl
+          WHERE sl.nurse_id = lr.accepted_by_nurse_id
+            AND sl.shift_date = lr.shift_date
         )
     `);
 

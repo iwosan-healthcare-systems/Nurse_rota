@@ -895,6 +895,7 @@ function ReportsContent() {
           Facility: nurse?.facility ?? "",
           Ward: nurse?.ward?.split("|")[0] ?? "",
           Shift: l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type,
+          Type: l.is_locum ? "Locum" : "Roster",
         };
       });
       const wb = xlsWorkbook();
@@ -2065,6 +2066,7 @@ ${sections}
                         <th className="px-4 py-3 text-left hidden sm:table-cell">Facility</th>
                         <th className="px-4 py-3 text-left hidden md:table-cell">Ward</th>
                         <th className="px-4 py-3 text-left">Shift</th>
+                        <th className="px-4 py-3 text-left">Type</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-border">
@@ -2088,6 +2090,15 @@ ${sections}
                               }`}>
                                 {l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type}
                               </span>
+                            </td>
+                            <td className="px-4 py-3">
+                              {l.is_locum ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-black text-white">
+                                  Locum
+                                </span>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">Roster</span>
+                              )}
                             </td>
                           </tr>
                         );
