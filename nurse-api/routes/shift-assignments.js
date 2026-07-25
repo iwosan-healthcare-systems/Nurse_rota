@@ -131,7 +131,7 @@ router.post(
       const maxDate = dates[dates.length - 1];
       await client.query(
         `UPDATE shift_assignments sa
-            SET shift = 'LEAVE', updated_at = NOW()
+            SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW()
           WHERE sa.nurse_id = ANY($1)
             AND sa.shift_date BETWEEN $2 AND $3
             AND sa.shift != 'LEAVE'
@@ -413,7 +413,7 @@ router.post(
 
     const { rowCount } = await pool.query(
       `UPDATE shift_assignments sa
-          SET shift = 'LEAVE', updated_at = NOW()
+          SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW()
         WHERE sa.nurse_id = ANY($1)
           AND sa.shift_date BETWEEN $2 AND $3
           AND sa.shift != 'LEAVE'
