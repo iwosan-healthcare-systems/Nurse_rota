@@ -17,6 +17,8 @@ import {
   ArrowLeftRight,
   RefreshCw,
   AlertTriangle,
+  PieChart as PieChartIcon,
+  BarChart3,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { type ComponentType, type ReactNode, useMemo, useState } from "react";
@@ -30,6 +32,8 @@ import {
   Tooltip,
   LineChart,
   Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -1079,9 +1083,32 @@ function WardSafetyCard({ wards }: { wards: WardRecord[] }) {
   );
 }
 
-// ── Leave by type (donut, facility-filterable) ──────────────────────────────
+// ── Leave by type (donut/bar toggle, facility-filterable) ──────────────────
+function LeaveTypeTooltip({
+  active,
+  payload,
+  total,
+}: {
+  active?: boolean;
+  payload?: { payload: { type: string; count: number } }[];
+  total: number;
+}) {
+  if (!active || !payload?.length) return null;
+  const d = payload[0].payload;
+  const pct = Math.round((d.count / total) * 100);
+  return (
+    <div className="bg-popover border rounded-lg px-3 py-2 shadow-md text-xs">
+      <p className="font-medium">{d.type}</p>
+      <p className="text-muted-foreground">
+        {d.count} request{d.count > 1 ? "s" : ""} · {pct}%
+      </p>
+    </div>
+  );
+}
+
 function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: NurseRecord[] }) {
   const [facility, setFacility] = useState<string>(ALL_FACILITIES);
+  const [view, setView] = useState<"donut" | "bar">("donut");
 
   const facilities = useMemo(
     () => [...new Set(nurses.map((n) => n.facility).filter((f): f is string => !!f))].sort(),
@@ -1114,29 +1141,97 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
           <h2 className="font-semibold">Leave by Type</h2>
           <p className="text-xs text-muted-foreground">Approved leave, by type</p>
         </div>
-        <select
-          value={facility}
-          onChange={(e) => setFacility(e.target.value)}
-          className="h-8 rounded-md border bg-background px-2 text-xs"
-        >
-          <option value={ALL_FACILITIES}>All Facilities</option>
-          {facilities.map((f) => (
-            <option key={f} value={f}>
-              {f}
-            </option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-md border overflow-hidden shrink-0">
+            <button
+              type="button"
+              onClick={() => setView("donut")}
+              title="Donut view"
+              aria-label="Donut view"
+              className={cn(
+                "h-8 w-8 grid place-items-center transition-colors",
+                view === "donut"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              <PieChartIcon className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("bar")}
+              title="Bar view"
+              aria-label="Bar view"
+              className={cn(
+                "h-8 w-8 grid place-items-center transition-colors border-l",
+                view === "bar"
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted",
+              )}
+            >
+              <BarChart3 className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <select
+            value={facility}
+            onChange={(e) => setFacility(e.target.value)}
+            className="h-8 rounded-md border bg-background px-2 text-xs"
+          >
+            <option value={ALL_FACILITIES}>All Facilities</option>
+            {facilities.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {total === 0 ? (
-        <div className="h-48 flex items-center justify-center">
+        <div className="h-56 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No approved leave in this scope yet.
           </p>
         </div>
+      ) : view === "bar" ? (
+        <div className="h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart
+              data={data}
+              layout="vertical"
+              margin={{ top: 4, right: 16, left: 0, bottom: 4 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" horizontal={false} />
+              <XAxis
+                type="number"
+                allowDecimals={false}
+                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                axisLine={{ stroke: "var(--border)" }}
+                tickLine={false}
+              />
+              <YAxis
+                type="category"
+                dataKey="type"
+                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+                axisLine={false}
+                tickLine={false}
+                width={118}
+              />
+              <Tooltip
+                content={<LeaveTypeTooltip total={total} />}
+                cursor={{ fill: "var(--muted)" }}
+              />
+              <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={16}>
+                {data.map((d) => (
+                  <Cell key={d.type} fill={d.color} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
       ) : (
-        <div className="h-48 flex items-center gap-8">
-          <div className="h-48 w-48 shrink-0">
+        <div className="h-56 flex items-center gap-8">
+          <div className="h-56 w-56 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1153,25 +1248,11 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
                     <Cell key={d.type} fill={d.color} />
                   ))}
                 </Pie>
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const d = payload[0].payload as { type: string; count: number };
-                    const pct = Math.round((d.count / total) * 100);
-                    return (
-                      <div className="bg-popover border rounded-lg px-3 py-2 shadow-md text-xs">
-                        <p className="font-medium">{d.type}</p>
-                        <p className="text-muted-foreground">
-                          {d.count} request{d.count > 1 ? "s" : ""} · {pct}%
-                        </p>
-                      </div>
-                    );
-                  }}
-                />
+                <Tooltip content={<LeaveTypeTooltip total={total} />} />
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5 max-h-48 overflow-y-auto pr-1">
+          <div className="min-w-0 flex-1 space-y-2.5 max-h-56 overflow-y-auto pr-1">
             {data.map((d) => (
               <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2 min-w-0">
@@ -1263,17 +1344,17 @@ function WeeklyHoursCard() {
       </div>
 
       {isLoading ? (
-        <div className="h-48 flex items-center justify-center">
+        <div className="h-56 flex items-center justify-center">
           <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       ) : chartData.length === 0 ? (
-        <div className="h-48 flex items-center justify-center">
+        <div className="h-56 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No shift hours logged in this window yet.
           </p>
         </div>
       ) : (
-        <div className="h-48">
+        <div className="h-56">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -1401,7 +1482,7 @@ function ManagementDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">
