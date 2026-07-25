@@ -1135,7 +1135,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
   const total = data.reduce((sum, d) => sum + d.count, 0);
 
   return (
-    <div className="lg:col-span-2 bg-card border rounded-xl p-5 shadow-soft">
+    <div className="bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-center justify-between mb-4 gap-2">
         <div>
           <h2 className="font-semibold">Leave by Type</h2>
@@ -1314,7 +1314,7 @@ function WeeklyHoursCard() {
   }
 
   return (
-    <div className="lg:col-span-2 bg-card border rounded-xl p-5 shadow-soft">
+    <div className="bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-center justify-between mb-4 gap-2">
         <div>
           <h2 className="font-semibold">Hours Worked, Weekly</h2>
@@ -1483,44 +1483,46 @@ function ManagementDashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-        <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
-
-        <div className="bg-card border rounded-xl p-5 shadow-soft">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-semibold">Pending Leave</h2>
-            <Link
-              to="/leave"
-              className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
-            >
-              Review <ChevronRight className="h-3 w-3" />
-            </Link>
-          </div>
-          {pendingLeave.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-6 text-center">No pending requests</p>
-          ) : (
-            <div className="space-y-2.5">
-              {pendingLeave.slice(0, 6).map((l) => (
-                <div
-                  key={l.id}
-                  className="flex items-center justify-between border rounded-lg px-3 py-2.5"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium truncate">{l.nurse_name}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {l.type} · {fmtDateRange(l.from_date, l.to_date)}
-                    </p>
-                  </div>
-                  <Clock className="h-4 w-4 text-amber-500 shrink-0" />
-                </div>
-              ))}
-            </div>
-          )}
+        <div className="lg:col-span-2 flex flex-col gap-4">
+          <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
+          <WeeklyHoursCard />
         </div>
-      </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-        <WeeklyHoursCard />
-        <WardSafetyCard wards={visibleWards} />
+        <div className="flex flex-col gap-4">
+          <div className="bg-card border rounded-xl p-5 shadow-soft">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="font-semibold">Pending Leave</h2>
+              <Link
+                to="/leave"
+                className="text-xs text-primary inline-flex items-center gap-1 hover:underline"
+              >
+                Review <ChevronRight className="h-3 w-3" />
+              </Link>
+            </div>
+            {pendingLeave.length === 0 ? (
+              <p className="text-sm text-muted-foreground py-6 text-center">No pending requests</p>
+            ) : (
+              <div className="space-y-2.5">
+                {pendingLeave.slice(0, 6).map((l) => (
+                  <div
+                    key={l.id}
+                    className="flex items-center justify-between border rounded-lg px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{l.nurse_name}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {l.type} · {fmtDateRange(l.from_date, l.to_date)}
+                      </p>
+                    </div>
+                    <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <WardSafetyCard wards={visibleWards} />
+        </div>
       </div>
 
       {/* Quick links for management */}
