@@ -157,7 +157,8 @@ function LoginPage() {
           </p>
         </div>
         <p className="text-xs text-sidebar-foreground/50">
-          © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+          Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights
+          reserved.
         </p>
       </div>
 
@@ -249,7 +250,8 @@ function LoginPage() {
             </button>
           </form>
           <p className="lg:hidden text-xs text-muted-foreground text-center mt-8">
-            © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+            Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights
+            reserved.
           </p>
         </div>
       </div>

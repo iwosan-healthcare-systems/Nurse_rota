@@ -314,7 +314,7 @@ export function AppShell() {
           )}
         </main>
         <footer className="border-t px-4 sm:px-6 py-4 text-center text-xs text-muted-foreground">
-          © {new Date().getFullYear()} Powered by Iwosan Healthcare Systems. All rights reserved.
+          Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights reserved.
         </footer>
       </div>
     </div>
