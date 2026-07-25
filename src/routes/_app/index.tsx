@@ -1026,6 +1026,54 @@ function fmtWeekLabel(weekStart: string) {
 
 const ALL_FACILITIES = "__ALL__";
 
+// ── Ward safety snapshot (compact, single-column) ───────────────────────────
+function WardSafetyCard({ wards }: { wards: WardRecord[] }) {
+  return (
+    <div className="bg-card border rounded-xl p-4 shadow-soft">
+      <div className="flex items-center justify-between mb-2.5 gap-2">
+        <div>
+          <h2 className="text-sm font-semibold">Ward Safety Snapshot</h2>
+          <p className="text-xs text-muted-foreground">Minimum-staffing rules per ward</p>
+        </div>
+        <Link
+          to="/wards"
+          className="text-xs text-primary inline-flex items-center gap-1 hover:underline shrink-0"
+        >
+          View all <ChevronRight className="h-3 w-3" />
+        </Link>
+      </div>
+      {wards.length === 0 ? (
+        <p className="text-sm text-muted-foreground py-4 text-center">
+          No wards configured yet.{" "}
+          <Link to="/wards" className="text-primary hover:underline">
+            Add one →
+          </Link>
+        </p>
+      ) : (
+        <div className="space-y-2">
+          {wards.slice(0, 4).map((w) => (
+            <div key={w.id} className="text-xs pb-1.5 border-b last:border-b-0 last:pb-0">
+              <p className="font-medium truncate">{w.name}</p>
+              <p className="text-muted-foreground tabular-nums">
+                AM: {w.min_morning_nurses}N+I · {w.min_morning_na}NA &nbsp;·&nbsp; PM:{" "}
+                {w.min_night_nurses}N+I · {w.min_night_na}NA
+              </p>
+            </div>
+          ))}
+          {wards.length > 4 && (
+            <p className="text-xs text-muted-foreground pt-1">
+              +{wards.length - 4} more ward{wards.length - 4 > 1 ? "s" : ""} ·{" "}
+              <Link to="/wards" className="text-primary hover:underline">
+                view all
+              </Link>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Leave by type (donut, facility-filterable) ──────────────────────────────
 function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: NurseRecord[] }) {
   const [facility, setFacility] = useState<string>(ALL_FACILITIES);
@@ -1057,7 +1105,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
   const total = data.reduce((sum, d) => sum + d.count, 0);
 
   return (
-    <div className="bg-card border rounded-xl p-5 shadow-soft">
+    <div className="lg:col-span-2 bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-center justify-between mb-4 gap-2">
         <div>
           <h2 className="font-semibold">Leave by Type</h2>
@@ -1078,12 +1126,12 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
       </div>
 
       {total === 0 ? (
-        <p className="text-sm text-muted-foreground py-10 text-center">
+        <p className="text-sm text-muted-foreground py-16 text-center">
           No approved leave in this scope yet.
         </p>
       ) : (
-        <div className="flex items-center gap-4">
-          <div className="h-44 w-44 shrink-0">
+        <div className="flex items-center gap-8">
+          <div className="h-64 w-64 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1118,12 +1166,12 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-1.5">
+          <div className="min-w-0 flex-1 space-y-2.5">
             {data.map((d) => (
-              <div key={d.type} className="flex items-center justify-between gap-2 text-xs">
-                <span className="flex items-center gap-1.5 min-w-0">
+              <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
+                <span className="flex items-center gap-2 min-w-0">
                   <span
-                    className="h-2.5 w-2.5 rounded-full shrink-0"
+                    className="h-3 w-3 rounded-full shrink-0"
                     style={{ backgroundColor: d.color }}
                   />
                   <span className="truncate">{d.type}</span>
@@ -1348,48 +1396,7 @@ function ManagementDashboard() {
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
-        <div className="lg:col-span-2 bg-card border rounded-xl p-4 shadow-soft">
-          <div className="flex items-center justify-between mb-2.5">
-            <div>
-              <h2 className="text-sm font-semibold">Ward Safety Snapshot</h2>
-              <p className="text-xs text-muted-foreground">Minimum-staffing rules per ward</p>
-            </div>
-            <Link
-              to="/wards"
-              className="text-xs text-primary inline-flex items-center gap-1 hover:underline shrink-0"
-            >
-              View all <ChevronRight className="h-3 w-3" />
-            </Link>
-          </div>
-          {visibleWards.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-4 text-center">
-              No wards configured yet.{" "}
-              <Link to="/wards" className="text-primary hover:underline">
-                Add one →
-              </Link>
-            </p>
-          ) : (
-            <div className="space-y-1">
-              {visibleWards.slice(0, 4).map((w) => (
-                <div key={w.id} className="flex items-center justify-between gap-3 text-xs py-0.5">
-                  <span className="truncate font-medium w-28 sm:w-36">{w.name}</span>
-                  <span className="text-muted-foreground tabular-nums whitespace-nowrap">
-                    AM: {w.min_morning_nurses}N+I · {w.min_morning_na}NA &nbsp;·&nbsp; PM:{" "}
-                    {w.min_night_nurses}N+I · {w.min_night_na}NA
-                  </span>
-                </div>
-              ))}
-              {visibleWards.length > 4 && (
-                <p className="text-xs text-muted-foreground pt-1">
-                  +{visibleWards.length - 4} more ward{visibleWards.length - 4 > 1 ? "s" : ""} ·{" "}
-                  <Link to="/wards" className="text-primary hover:underline">
-                    view all
-                  </Link>
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+        <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">
           <div className="flex items-center justify-between mb-4">
@@ -1424,9 +1431,9 @@ function ManagementDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <WeeklyHoursCard />
-        <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
+        <WardSafetyCard wards={visibleWards} />
       </div>
 
       {/* Quick links for management */}
