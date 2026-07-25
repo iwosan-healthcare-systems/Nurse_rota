@@ -5,8 +5,16 @@
 //
 // Rather than guess what each nurse's original schedule literally was — impossible
 // for long leave blocks, since the value is already gone — this fills each nurse's
-// LEAVE days with 4-day M/N blocks (mirroring the app's own 4M-4OFF-4N-4OFF cycle)
-// up to their target_hours for the period, so leave doesn't shortchange their pay.
+// LEAVE days up to their target_hours for the period, so leave doesn't shortchange
+// their pay. The fill follows the app's own 4M-4OFF-4N-4OFF cycle grammar: work
+// segments are up to 4 consecutive days, and two work segments within the same
+// contiguous leave block are always separated by an OFF segment (up to 4 days) —
+// never back-to-back. Segments only run shorter than 4 days when the leave block
+// itself runs out of days first (e.g. a 2-day leave block still gets 2 days of the
+// next shift the cycle calls for, rather than being zeroed to OFF for being under
+// 4 days). Each nurse's separate leave blocks within a period are filled
+// independently (in chronological order), sharing one running hours gap, so a
+// later block naturally goes OFF once target_hours has already been met.
 // Nurses who never work nights (porter-day, NA-day, surgical-nurse-day roles, or
 // any ward with min_night_nurses = 0 and min_night_na = 0) only get morning fill.
 //
@@ -41,6 +49,71 @@ function fromUTCDate(ms) {
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+// Split a chronologically-sorted list of leave rows into contiguous calendar blocks
+// (a gap of more than 1 day between two leave rows starts a new block — those days
+// in between were real worked/OFF days, so each side must be filled independently).
+function splitIntoBlocks(days) {
+  const blocks = [];
+  let current = [];
+  for (const d of days) {
+    if (current.length) {
+      const prevMs = toUTCDate(current[current.length - 1].shift_date);
+      const curMs = toUTCDate(d.shift_date);
+      if (curMs - prevMs > DAY_MS) {
+        blocks.push(current);
+        current = [];
+      }
+    }
+    current.push(d);
+  }
+  if (current.length) blocks.push(current);
+  return blocks;
+}
+
+// Fill one contiguous leave block with [work][OFF] segments (each up to 4 days),
+// starting with a work attempt if hours are still owed. A work segment takes as
+// many of the next 4 days as the block actually has left (so a block shorter than
+// 4 days still gets a partial shift, rather than being zeroed to OFF) — it only
+// stops adding work segments once target_hours has been met, at which point every
+// remaining day in the block is OFF.
+//
+// Work segment type strictly ALTERNATES M/N/M/N... (never picked by "whichever
+// closes the gap faster" — that produced unrealistic runs of all-N blocks). The
+// alternation state (nextIsNight) is threaded in and back out so it stays
+// continuous across a nurse's separate leave blocks within the same period, the
+// same way a real nurse's rotation wouldn't reset just because leave interrupted
+// it. Morning-only nurses (hasNight = false) always get M, no alternation.
+//
+// Returns { assign: Map<date, shift>, gap, nextIsNight }.
+function fillBlock(dates, gapIn, hasNight, nextIsNightIn) {
+  const assign = new Map();
+  let gap = gapIn;
+  let nextIsNight = nextIsNightIn;
+  let i = 0;
+  let workTurn = true;
+  while (i < dates.length) {
+    const remaining = dates.length - i;
+    if (workTurn && gap > 0) {
+      const shiftType = hasNight && nextIsNight ? "N" : "M";
+      const take = Math.min(4, remaining);
+      for (let k = 0; k < take; k++) assign.set(dates[i + k], shiftType);
+      gap -= (shiftType === "N" ? 15 : 9) * take;
+      i += take;
+      workTurn = false;
+      if (hasNight) nextIsNight = !nextIsNight;
+    } else if (workTurn) {
+      // Target already met — nothing more owed for the rest of this block.
+      for (; i < dates.length; i++) assign.set(dates[i], "OFF");
+    } else {
+      const offLen = Math.min(4, remaining);
+      for (let k = 0; k < offLen; k++) assign.set(dates[i + k], "OFF");
+      i += offLen;
+      workTurn = true;
+    }
+  }
+  return { assign, gap: Math.max(gap, 0), nextIsNight };
 }
 
 async function main() {
@@ -114,34 +187,26 @@ async function main() {
     const target = parseFloat(nurse.target_hours);
     let gap = Math.max(target - workedHours, 0);
 
-    const dates = days.map((d) => d.shift_date);
+    // Blocks are processed in chronological order, sharing one running gap and one
+    // running M/N alternation state — once an earlier block satisfies target_hours,
+    // later blocks in the same period naturally come out all-OFF; the alternation
+    // keeps going across blocks rather than resetting to M every time.
+    const blocks = splitIntoBlocks(days);
     const assign = new Map();
-    let i = 0;
-    if (hasNight) {
-      while (gap >= 60 && dates.length - i >= 4) {
-        for (let k = 0; k < 4; k++) assign.set(dates[i + k], "N");
-        gap -= 60;
-        i += 4;
-      }
-    }
-    while (gap >= 36 && dates.length - i >= 4) {
-      for (let k = 0; k < 4; k++) assign.set(dates[i + k], "M");
-      gap -= 36;
-      i += 4;
-    }
-    while (gap > 0 && i < dates.length) {
-      if (hasNight && gap >= 12) {
-        assign.set(dates[i], "N");
-        gap -= 15;
-      } else {
-        assign.set(dates[i], "M");
-        gap -= 9;
-      }
-      i++;
-    }
-    while (i < dates.length) {
-      assign.set(dates[i], "OFF");
-      i++;
+    const blockSummaries = [];
+    let nextIsNight = false; // first work segment of the period starts on M
+    for (const block of blocks) {
+      const dates = block.map((d) => d.shift_date);
+      const { assign: blockAssign, gap: gapAfter, nextIsNight: nextAfter } = fillBlock(
+        dates,
+        gap,
+        hasNight,
+        nextIsNight,
+      );
+      gap = gapAfter;
+      nextIsNight = nextAfter;
+      for (const [date, shift] of blockAssign) assign.set(date, shift);
+      blockSummaries.push(`[${dates[0]}..${dates[dates.length - 1]}] ${dates.map((d) => assign.get(d)).join("")}`);
     }
 
     let addedHours = 0;
@@ -158,10 +223,10 @@ async function main() {
       workedHours,
       target,
       hasNight,
-      leaveDays: dates.length,
+      leaveDays: days.length,
       addedHours,
       projected: workedHours + addedHours,
-      breakdown: dates.map((d) => `${d}:${assign.get(d)}`).join(", "),
+      breakdown: blockSummaries.join(" | "),
     });
   }
 
