@@ -1188,13 +1188,13 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
       </div>
 
       {total === 0 ? (
-        <div className="h-56 flex items-center justify-center">
+        <div className="h-80 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No approved leave in this scope yet.
           </p>
         </div>
       ) : view === "bar" ? (
-        <div className="h-56">
+        <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={data}
@@ -1230,8 +1230,8 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
           </ResponsiveContainer>
         </div>
       ) : (
-        <div className="h-56 flex items-center gap-8">
-          <div className="h-56 w-56 shrink-0">
+        <div className="h-80 flex items-center gap-8">
+          <div className="h-80 w-80 shrink-0">
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
@@ -1252,7 +1252,7 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
               </PieChart>
             </ResponsiveContainer>
           </div>
-          <div className="min-w-0 flex-1 space-y-2.5 max-h-56 overflow-y-auto pr-1">
+          <div className="min-w-0 flex-1 space-y-2.5 max-h-80 overflow-y-auto pr-1">
             {data.map((d) => (
               <div key={d.type} className="flex items-center justify-between gap-2 text-sm">
                 <span className="flex items-center gap-2 min-w-0">
@@ -1344,17 +1344,17 @@ function WeeklyHoursCard() {
       </div>
 
       {isLoading ? (
-        <div className="h-56 flex items-center justify-center">
+        <div className="h-80 flex items-center justify-center">
           <p className="text-sm text-muted-foreground">Loading…</p>
         </div>
       ) : chartData.length === 0 ? (
-        <div className="h-56 flex items-center justify-center">
+        <div className="h-80 flex items-center justify-center">
           <p className="text-sm text-muted-foreground text-center">
             No shift hours logged in this window yet.
           </p>
         </div>
       ) : (
-        <div className="h-56">
+        <div className="h-80">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
@@ -1482,7 +1482,7 @@ function ManagementDashboard() {
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
 
         <div className="bg-card border rounded-xl p-5 shadow-soft">
@@ -1518,7 +1518,7 @@ function ManagementDashboard() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <WeeklyHoursCard />
         <WardSafetyCard wards={visibleWards} />
       </div>
