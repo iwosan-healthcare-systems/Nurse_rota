@@ -3,12 +3,12 @@
 // already arrived (or, for same-day-filed leave types, already passed).
 //
 // Two deadlines:
-//   - Everything except Sick/Emergency/Compassionate Leave (Annual, Maternity,
-//     Public Holiday, Study Leave, Leave of Absence, and Swap/shift-switch):
+//   - Everything except Sick/Emergency (Annual, Maternity, Public Holiday, Study
+//     Leave, Leave of Absence, Compassionate Leave, and Swap/shift-switch):
 //     declined the moment `from_date` arrives (00:00 on the requested date).
-//   - Sick, Emergency, Compassionate Leave: these can legitimately be filed
-//     same-day or after the fact, so they get one extra day of grace — declined
-//     at 00:00 the day AFTER `from_date`, never later (no backdated approvals).
+//   - Sick, Emergency: these can legitimately be filed same-day or after the
+//     fact, so they get one extra day of grace — declined at 00:00 the day
+//     AFTER `from_date`, never later (no backdated approvals).
 //
 // Mirrors the human-review notification pattern in src/routes/_app/leave.tsx
 // (leave_rejected_/switch_rejected_ notif_key prefixes) so the existing bell UI
@@ -20,7 +20,7 @@ const pool = require("../db");
 // (729312) in jobs/auto-end-shifts.js — see that file for why the lock exists.
 const AUTO_DECLINE_LOCK_KEY = 729313;
 
-const GRACE_TYPES = ["Sick", "Emergency", "Compassionate Leave"];
+const GRACE_TYPES = ["Sick", "Emergency"];
 
 async function autoDeclineExpiredRequests() {
   const lockClient = await pool.connect();

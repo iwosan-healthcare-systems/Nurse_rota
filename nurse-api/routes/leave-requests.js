@@ -108,8 +108,8 @@ router.get(
 );
 
 // Leave types exempt from the 21-day pre-period closure window.
-// Sick, Emergency, and Compassionate Leave can always be submitted; Swap is a shift switch (not leave).
-const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Compassionate Leave", "Swap"];
+// Sick and Emergency can always be submitted; Swap is a shift switch (not leave).
+const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap"];
 
 // Roles allowed to create a shift-switch (type "Swap") on someone else's behalf.
 // Mirrors canRequestShiftSwitch in auth-context.tsx (admin bypass is implicit via requireRole-style check below).
@@ -200,7 +200,7 @@ router.post(
       // Only enforce when the next period is still in the future
       if (nextStart && closureDate && nextStart > today && today >= closureDate) {
         return res.status(422).json({
-          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick, Emergency, and Compassionate Leave can be submitted now.`,
+          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick and Emergency Leave can be submitted now.`,
           code: "LEAVE_WINDOW_CLOSED",
         });
       }
@@ -332,6 +332,7 @@ router.patch(
       // When a leave request is approved, flip the nurse's shift cells to LEAVE
       // for every date in the leave window that already exists in shift_assignments.
       const leave = rows[0];
+      let creditsToApply = [];
       if (
         leave.status === "Approved" &&
         leave.nurse_id &&
@@ -339,19 +340,95 @@ router.patch(
         leave.to_date &&
         leave.type !== "Swap"
       ) {
-        await client.query(
+        const { rows: flippedRows } = await client.query(
           `UPDATE shift_assignments
               SET pre_leave_shift = shift,
                   shift = 'LEAVE'
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
               AND shift != 'LEAVE'
-              AND status != 'draft'`,
+              AND status != 'draft'
+            RETURNING shift_date, pre_leave_shift`,
           [leave.nurse_id, leave.from_date, leave.to_date],
         );
+        const preShiftByDate = new Map(
+          flippedRows.map((r) => [r.shift_date.toString().slice(0, 10), r.pre_leave_shift]),
+        );
+
+        // The nurse may currently be mid-shift when this leave is approved (e.g.
+        // they fell sick and Sick Leave was approved right away) — auto-end any
+        // active, un-ended shift_logs row in the leave window instead of leaving
+        // it open for an admin to close manually.
+        const { rows: endedRows } = await client.query(
+          `UPDATE shift_logs
+              SET ended_at = NOW(),
+                  hours_logged = ROUND(EXTRACT(EPOCH FROM (NOW() - started_at)) / 3600 * 100) / 100
+            WHERE nurse_id = $1
+              AND shift_date BETWEEN $2 AND $3
+              AND ended_at IS NULL
+            RETURNING id, shift_date, hours_logged, is_locum, is_swap`,
+          [leave.nurse_id, leave.from_date, leave.to_date],
+        );
+
+        for (const log of endedRows) {
+          if (log.is_locum || log.is_swap) continue; // not a roster shift — leave doesn't top these up
+          if (log.hours_logged > 0) creditsToApply.push({ hours: Number(log.hours_logged) });
+
+          // Top up the rest of the shift as a separate leave-credit entry, so the
+          // day totals the full shift's hours instead of just the partial time
+          // she was actually clocked in for. This ALSO stops the auto-end-shifts
+          // cron's own leave-credit pass from later inserting a second, full-value
+          // credit for the same date — its guard only checks for an existing
+          // is_leave = true row, so without this the day would get double-credited
+          // (partial worked hours + a full separate shift's worth on top).
+          const dateKey = log.shift_date.toString().slice(0, 10);
+          const preShift = preShiftByDate.get(dateKey);
+          if (!preShift) continue;
+          const fullShiftHours = preShift === "N" || preShift === "NC" ? 15 : 9;
+          const remaining = Math.round((fullShiftHours - Number(log.hours_logged)) * 100) / 100;
+          if (remaining <= 0) continue;
+
+          const isNight = preShift === "N" || preShift === "NC";
+          const { rows: creditRows } = await client.query(
+            `INSERT INTO shift_logs
+               (nurse_id, shift_date, shift_type, started_at, expected_end_at, ended_at,
+                period_start, hours_logged, is_leave, is_missed, is_locum, is_swap, leave_request_id)
+             VALUES (
+               $1, $2::date,
+               CASE WHEN $3 THEN 'N' ELSE 'M' END,
+               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '17 hours'
+                    ELSE $2::date::timestamp + INTERVAL '8 hours' END,
+               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '1 day 8 hours'
+                    ELSE $2::date::timestamp + INTERVAL '17 hours' END,
+               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '1 day 8 hours'
+                    ELSE $2::date::timestamp + INTERVAL '17 hours' END,
+               COALESCE(
+                 (SELECT MIN(s2.shift_date) FROM shift_assignments s2
+                   WHERE s2.status = 'published' AND s2.shift_date BETWEEN $2::date - 27 AND $2::date),
+                 $2::date
+               ),
+               $4, true, false, false, false, $5
+             )
+             RETURNING hours_logged`,
+            [leave.nurse_id, dateKey, isNight, remaining, leave.id],
+          );
+          creditsToApply.push({ hours: Number(creditRows[0].hours_logged) });
+        }
       }
 
       await client.query("COMMIT");
+
+      // Credit hours for the partial shift + its leave top-up computed above.
+      for (const credit of creditsToApply) {
+        await pool
+          .query("SELECT increment_nurse_hours($1, $2)", [leave.nurse_id, credit.hours])
+          .catch((err) =>
+            console.error(
+              `[leave-approval] auto-end hours increment failed for ${leave.nurse_id}:`,
+              err.message,
+            ),
+          );
+      }
 
       // After committing: if leave was approved or rejected, notify rota generators
       // (head_nurse / admin) when there are draft assignments in the same facility & period.

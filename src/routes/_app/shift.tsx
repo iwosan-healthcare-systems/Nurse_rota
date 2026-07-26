@@ -605,8 +605,12 @@ function ShiftPage() {
 
   // Button is visible from 15 minutes before official start.
   const canStartShift = minutesSinceStart >= -15;
-  // Late = any moment after the official start.
-  const isLate = minutesSinceStart > 0;
+  // Late = any moment after the official start — except for a switch-coverage
+  // shift (todaySwap), where the nurse is stepping in for someone else and was
+  // only just approved to; "lateness" against the original 08:00/17:00 start
+  // doesn't apply to them, and their hours are correctly captured starting from
+  // whenever they actually click Start regardless of this flag.
+  const isLate = !todaySwap && minutesSinceStart > 0;
 
   // ── Derived state ─────────────────────────────────────────────────────────
 

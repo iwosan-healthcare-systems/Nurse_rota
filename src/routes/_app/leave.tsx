@@ -556,8 +556,8 @@ function LeavePage() {
             <p className="mt-0.5 text-amber-700 dark:text-amber-400">
               The schedule period starting{" "}
               <strong>{fmtDateLeave(workflowStatus.nextPeriodStart!)}</strong> begins soon. Only{" "}
-              <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
-              <strong>Compassionate Leave</strong> requests can be submitted until then.
+              <strong>Sick</strong> and <strong>Emergency</strong> requests can be submitted until
+              then.
             </p>
           </div>
         </div>
@@ -1359,7 +1359,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     datesInApprovalRota
       ? []
       : datesInPublishedRota || leaveWindowClosed
-        ? ["Sick", "Emergency", "Compassionate Leave"]
+        ? ["Sick", "Emergency"]
         : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"];
 
   // Keep the selected type valid when the allowed list narrows.
@@ -1453,8 +1453,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             </div>
             {requestFor === "staff" && (
               <p className="text-xs text-muted-foreground mt-1.5">
-                For when a staff member is unable to submit their own request — e.g. Sick,
-                Emergency, or Compassionate Leave after the rota is published.
+                For when a staff member is unable to submit their own request — e.g. Sick or
+                Emergency after the rota is published.
               </p>
             )}
           </div>
@@ -1545,8 +1545,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         {datesReady && datesInPublishedRota && !datesInApprovalRota && (
           <div className="p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
             These dates fall within a <strong>published schedule</strong>. Only{" "}
-            <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
-            <strong>Compassionate Leave</strong> can be requested.
+            <strong>Sick</strong> and <strong>Emergency</strong> can be requested.
           </div>
         )}
 
@@ -1556,8 +1555,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             <span>
               Leave window is closed — the next schedule starts{" "}
               <strong>{fmtDateLeave(workflowStatus!.nextPeriodStart!)}</strong>. Only{" "}
-              <strong>Sick</strong>, <strong>Emergency</strong>, and{" "}
-              <strong>Compassionate Leave</strong> can be requested.
+              <strong>Sick</strong> and <strong>Emergency</strong> can be requested.
             </span>
           </div>
         )}
@@ -1804,13 +1802,33 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       return toast.error("Nurse A is on leave — please select the shift type that needs covering");
     if (!reason.trim()) return toast.error("Please provide a reason for this shift switch");
 
-    // 24-hour rule: the shift must start more than 24 hours from now.
+    // 24-hour rule: the shift must start more than 24 hours from now — waived when
+    // covering an approved Sick/Emergency Leave that was itself requested AFTER
+    // the rota was already published (rota_stage_at_request === "published") —
+    // that's the only case where the leave could legitimately land with no lead
+    // time at all, so a switch to arrange cover has to be allowed just as late.
+    // A Sick/Emergency leave requested *before* publish had normal lead time to
+    // arrange cover through, so the standard 24-hour rule still applies to it.
+    let waive24hRule = false;
+    if (shiftA === "LEAVE") {
+      const coveredLeave = await api
+        .get<{ type: string; rota_stage_at_request: string | null }[]>(
+          `/leave-requests?nurse_id=${nurseAId}&status=Approved&from_date_lte=${date}&to_date_gte=${date}&limit=1`,
+        )
+        .catch(() => [] as { type: string; rota_stage_at_request: string | null }[]);
+      const covered = coveredLeave[0];
+      waive24hRule =
+        !!covered &&
+        ["Sick", "Emergency"].includes(covered.type) &&
+        covered.rota_stage_at_request === "published";
+    }
+
     // Use the actual shift start time: Morning = 08:00, Night = 17:00.
     const effectiveShift = shiftA === "LEAVE" ? coverShift : shiftA;
     const shiftHour = effectiveShift === "N" ? 17 : 8;
     const shiftStart = new Date(`${date}T${String(shiftHour).padStart(2, "0")}:00:00`);
     const hoursUntil = (shiftStart.getTime() - Date.now()) / 3_600_000;
-    if (hoursUntil < 24) {
+    if (!waive24hRule && hoursUntil < 24) {
       return toast.error(
         `Shift switch cannot be requested less than 24 hours before the shift (${Math.max(0, Math.floor(hoursUntil))}h remaining). Please contact the CNO directly.`,
       );
@@ -1866,7 +1884,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     <Modal title="Request shift switch" onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-4">
         Switches are applied to the <strong>published rota</strong> only after CNO approval.
-        Requests must be submitted at least <strong>24 hours</strong> before the shift.
+        Requests must be submitted at least <strong>24 hours</strong> before the shift — except
+        to cover an approved <strong>Sick</strong> or <strong>Emergency</strong> Leave, which can
+        be requested up to the shift itself.
       </p>
       <form onSubmit={submit} className="space-y-4">
         {/* Exchange mode */}
