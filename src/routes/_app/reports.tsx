@@ -800,23 +800,28 @@ function ReportsContent() {
         const log = r.accepted_by_nurse_id
           ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
           : undefined;
+        const missed = !!log?.is_missed;
         return {
           Date: fmtDate(r.shift_date),
           Nurse: r.accepted_by_nurse_name ?? "Unknown",
           Ward: r.ward,
           Facility: r.facility,
           "Shift Type": r.shift === "M" ? "Morning" : "Night",
-          "Started At": log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
-          "Ended At": log?.ended_at
-            ? new Date(log.ended_at).toLocaleString("en-GB")
-            : log
-              ? "In Progress"
-              : "Not Started",
-          "Hours Logged": log?.hours_logged != null ? Number(log.hours_logged).toFixed(2) : "",
+          "Started At":
+            !missed && log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
+          "Ended At": missed
+            ? ""
+            : log?.ended_at
+              ? new Date(log.ended_at).toLocaleString("en-GB")
+              : log
+                ? "In Progress"
+                : "Not Started",
+          "Hours Logged": missed || log?.hours_logged == null ? "" : Number(log.hours_logged).toFixed(2),
           Late: log?.is_late ? "Yes" : "No",
           "Late (mins)": log?.late_minutes ?? "",
           "Late Reason": log?.late_reason ?? "",
           "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
+          Missed: missed ? "Yes" : "No",
         };
       });
       const wb = xlsWorkbook();
@@ -1620,6 +1625,7 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">Ended</th>
                       <th className="text-right px-4 py-3 font-semibold">Hours</th>
                       <th className="text-left px-4 py-3 font-semibold">Late</th>
+                      <th className="text-left px-4 py-3 font-semibold">Missed</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1627,6 +1633,7 @@ ${sections}
                       const log = r.accepted_by_nurse_id
                         ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
                         : undefined;
+                      const missed = !!log?.is_missed;
                       return (
                         <tr key={r.id} className="border-t hover:bg-muted/30">
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
@@ -1645,15 +1652,21 @@ ${sections}
                             </span>
                           </td>
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {log?.started_at
-                              ? new Date(log.started_at).toLocaleTimeString("en-GB", {
-                                  hour: "2-digit",
-                                  minute: "2-digit",
-                                })
-                              : "—"}
+                            {missed ? (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            ) : log?.started_at ? (
+                              new Date(log.started_at).toLocaleTimeString("en-GB", {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })
+                            ) : (
+                              "—"
+                            )}
                           </td>
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {log?.ended_at ? (
+                            {missed ? (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            ) : log?.ended_at ? (
                               new Date(log.ended_at).toLocaleTimeString("en-GB", {
                                 hour: "2-digit",
                                 minute: "2-digit",
@@ -1665,9 +1678,11 @@ ${sections}
                             )}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums font-medium">
-                            {log?.hours_logged != null
-                              ? fmtHoursLog(Number(log.hours_logged))
-                              : "—"}
+                            {missed
+                              ? "—"
+                              : log?.hours_logged != null
+                                ? fmtHoursLog(Number(log.hours_logged))
+                                : "—"}
                           </td>
                           <td className="px-4 py-3">
                             {log?.is_late ? (
@@ -1682,6 +1697,15 @@ ${sections}
                                     — {log.late_reason}
                                   </span>
                                 )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {missed ? (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-700">
+                                Missed
                               </span>
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
