@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { verifyLocationAndCaptureIp, type GpsSettings } from "@/lib/geo-fence";
+import { FacilityChips } from "@/components/FacilityChips";
 
 function fmtDate(d: string) {
   return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
@@ -1109,8 +1110,12 @@ type EndModal = {
   isSwap: boolean;
 };
 
+type StatusFilter = "all" | "active" | "inactive";
+
 function AllNursesShiftView() {
   const [search, setSearch] = useState("");
+  const [facilityFilter, setFacilityFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [endModal, setEndModal] = useState<EndModal | null>(null);
   const [endTimeInput, setEndTimeInput] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1208,6 +1213,10 @@ function AllNursesShiftView() {
   }
 
   const filtered = nurses.filter((n) => {
+    if (facilityFilter && n.facility !== facilityFilter) return false;
+    const isActive = activeMap.has(n.id);
+    if (statusFilter === "active" && !isActive) return false;
+    if (statusFilter === "inactive" && isActive) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (
@@ -1251,8 +1260,34 @@ function AllNursesShiftView() {
         </div>
       </div>
 
-      {/* Search */}
-      <div className="flex items-center gap-3">
+      {/* Facility filter */}
+      <FacilityChips value={facilityFilter} onChange={setFacilityFilter} showAll />
+
+      {/* Status filter + search */}
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="flex items-center gap-2">
+          {(
+            [
+              { key: "all", label: "All" },
+              { key: "active", label: "Active" },
+              { key: "inactive", label: "Inactive" },
+            ] as const
+          ).map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setStatusFilter(s.key)}
+              className={cn(
+                "h-9 px-4 rounded-xl border text-sm font-medium transition-all",
+                statusFilter === s.key
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-card text-muted-foreground border hover:bg-muted",
+              )}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
         <input
           type="search"
           placeholder="Search by name, ward or facility…"
