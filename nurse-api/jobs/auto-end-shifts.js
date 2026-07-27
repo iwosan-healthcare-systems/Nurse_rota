@@ -76,16 +76,16 @@ async function runAutoEndOverdueShifts() {
         sa.shift_date,
         (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
         CASE WHEN sa.shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '17 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '8 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
         END AS started_at,
         CASE WHEN sa.shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS expected_end_at,
         CASE WHEN sa.shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
         COALESCE(
           (SELECT MIN(s2.shift_date)
@@ -107,8 +107,8 @@ async function runAutoEndOverdueShifts() {
        AND lr.shift_date = sa.shift_date
       WHERE sa.status = 'published'
         AND (
-          (sa.shift NOT IN ('N', 'NC') AND sa.shift_date::timestamp + INTERVAL '17 hours' < NOW())
-          OR (sa.shift IN ('N', 'NC') AND sa.shift_date::timestamp + INTERVAL '1 day 8 hours' < NOW())
+          (sa.shift NOT IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
+          OR (sa.shift IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
         )
         AND sa.shift NOT IN ('LEAVE', 'OFF')
         AND NOT EXISTS (
@@ -141,16 +141,16 @@ async function runAutoEndOverdueShifts() {
         lr.shift_date,
         (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
         CASE WHEN lr.shift IN ('N', 'NC')
-          THEN lr.shift_date::timestamp + INTERVAL '17 hours'
-          ELSE lr.shift_date::timestamp + INTERVAL '8 hours'
+          THEN (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (lr.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
         END AS started_at,
         CASE WHEN lr.shift IN ('N', 'NC')
-          THEN lr.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE lr.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (lr.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS expected_end_at,
         CASE WHEN lr.shift IN ('N', 'NC')
-          THEN lr.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE lr.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (lr.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
         COALESCE(
           (SELECT MIN(s2.shift_date)
@@ -169,8 +169,8 @@ async function runAutoEndOverdueShifts() {
       WHERE lr.status = 'filled'
         AND lr.accepted_by_nurse_id IS NOT NULL
         AND (
-          (lr.shift NOT IN ('N', 'NC') AND lr.shift_date::timestamp + INTERVAL '17 hours' < NOW())
-          OR (lr.shift IN ('N', 'NC') AND lr.shift_date::timestamp + INTERVAL '1 day 8 hours' < NOW())
+          (lr.shift NOT IN ('N', 'NC') AND (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
+          OR (lr.shift IN ('N', 'NC') AND (lr.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
         )
         AND NOT EXISTS (
           SELECT 1 FROM shift_logs sl
@@ -199,16 +199,16 @@ async function runAutoEndOverdueShifts() {
         sa.shift_date,
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 'N' ELSE 'M' END::shift_code,
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '17 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '8 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
         END,
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END,
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
-          THEN sa.shift_date::timestamp + INTERVAL '1 day 8 hours'
-          ELSE sa.shift_date::timestamp + INTERVAL '17 hours'
+          THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+          ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END,
         COALESCE(
           (SELECT MIN(s2.shift_date)

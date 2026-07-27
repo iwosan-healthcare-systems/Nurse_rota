@@ -396,12 +396,12 @@ router.patch(
              VALUES (
                $1, $2::date,
                CASE WHEN $3 THEN 'N' ELSE 'M' END,
-               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '17 hours'
-                    ELSE $2::date::timestamp + INTERVAL '8 hours' END,
-               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '1 day 8 hours'
-                    ELSE $2::date::timestamp + INTERVAL '17 hours' END,
-               CASE WHEN $3 THEN $2::date::timestamp + INTERVAL '1 day 8 hours'
-                    ELSE $2::date::timestamp + INTERVAL '17 hours' END,
+               CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
+                    ELSE ($2::date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos' END,
+               CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+                    ELSE ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' END,
+               CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
+                    ELSE ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' END,
                COALESCE(
                  (SELECT MIN(s2.shift_date) FROM shift_assignments s2
                    WHERE s2.status = 'published' AND s2.shift_date BETWEEN $2::date - 27 AND $2::date),
