@@ -38,6 +38,7 @@ import {
   YAxis,
   CartesianGrid,
 } from "recharts";
+import { CHART_SERIES_VARS, LEAVE_TYPE_ORDER, colorForLeaveType } from "@/lib/chart-colors";
 
 export const Route = createFileRoute("/_app/")({
   head: () => ({
@@ -994,37 +995,9 @@ function ManagementAlerts() {
 }
 
 // ── Chart color assignment ──────────────────────────────────────────────────
-// Fixed hue order (validated colorblind-safe) — color is assigned by entity
-// identity (leave type / facility name), never by rank, so a slice or line
-// keeps the same color no matter what's filtered or toggled.
-const CHART_SERIES_VARS = [
-  "var(--chart-series-1)",
-  "var(--chart-series-2)",
-  "var(--chart-series-3)",
-  "var(--chart-series-4)",
-  "var(--chart-series-5)",
-  "var(--chart-series-6)",
-  "var(--chart-series-7)",
-  "var(--chart-series-8)",
-];
-
-const LEAVE_TYPE_ORDER = [
-  "Annual",
-  "Compassionate Leave",
-  "Emergency",
-  "Leave of Absence",
-  "Maternity",
-  "Public Holiday",
-  "Sick",
-  "Study Leave",
-];
-
-function colorForLeaveType(type: string) {
-  const idx = LEAVE_TYPE_ORDER.indexOf(type);
-  return CHART_SERIES_VARS[
-    idx >= 0 ? idx % CHART_SERIES_VARS.length : CHART_SERIES_VARS.length - 1
-  ];
-}
+// Color is assigned by entity identity (leave type / facility name), never by
+// rank, so a slice or line keeps the same color no matter what's filtered or
+// toggled. Shared with the Reports Overview page — see @/lib/chart-colors.
 
 function fmtWeekLabel(weekStart: string) {
   return new Date(weekStart.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {

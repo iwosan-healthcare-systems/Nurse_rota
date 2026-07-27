@@ -206,15 +206,15 @@ function LeavePage() {
     shift: "M" | "N" | "MWC" | "NC",
   ) {
     const isMorningType = shift === "M" || shift === "MWC";
-    const startedAt = new Date(`${shiftDate}T00:00:00`);
-    startedAt.setHours(isMorningType ? 8 : 17, 0, 0, 0);
-    const endedAt = new Date(startedAt);
-    if (isMorningType) {
-      endedAt.setHours(17, 0, 0, 0);
-    } else {
-      endedAt.setDate(endedAt.getDate() + 1);
-      endedAt.setHours(8, 0, 0, 0);
-    }
+    // Africa/Lagos is a fixed UTC+1 offset (no DST) — build the instant
+    // explicitly with that offset rather than via setHours()/toISOString(),
+    // which are wrong whenever the approving admin's browser/OS clock isn't
+    // itself set to WAT (this previously caused leave credits to show 1 hour
+    // late, e.g. 09:00/18:00 instead of 08:00/17:00).
+    const startedAt = new Date(`${shiftDate}T${isMorningType ? "08" : "17"}:00:00+01:00`);
+    const endedAt = isMorningType
+      ? new Date(`${shiftDate}T17:00:00+01:00`)
+      : new Date(new Date(`${shiftDate}T08:00:00+01:00`).getTime() + 24 * 60 * 60 * 1000);
     return {
       nurse_id: nurseId,
       shift_date: shiftDate,

@@ -29,6 +29,8 @@ import { useAuth } from "@/lib/auth-context";
 import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
+import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
+import { colorForLeaveType, colorForKey } from "@/lib/chart-colors";
 
 export const Route = createFileRoute("/_app/reports")({
   component: ReportsPage,
@@ -136,9 +138,19 @@ type ArchiveWindow = {
 
 // ── Date helpers ─────────────────────────────────────────────────────────────
 
-function todayYmd() {
-  const d = new Date();
+function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function todayYmd() {
+  return ymd(new Date());
+}
+
+// Same 28-day lookback used for "current period" shift-log queries.
+function periodLookbackYmd() {
+  const d = new Date();
+  d.setDate(d.getDate() - 27);
+  return ymd(d);
 }
 
 function fmtDate(d: string) {
@@ -333,10 +345,10 @@ function ReportsContent() {
     },
   });
 
-  // Missed shift logs — all time, facility-scoped
+  // Missed shift logs — all time, facility-scoped (also needed for the Overview chart)
   const { data: missedShiftLogs = [] } = useQuery<ShiftLog[]>({
     queryKey: ["missed-shift-logs", reportFacility],
-    enabled: tab === "missed",
+    enabled: tab === "missed" || tab === "overview",
     queryFn: () => api.get<ShiftLog[]>("/shift-logs?is_missed=true"),
   });
 
@@ -577,6 +589,97 @@ function ReportsContent() {
     () => [...locumHoursMap.values()].reduce((s, h) => s + h, 0),
     [locumHoursMap],
   );
+
+  // ── Overview charts ──────────────────────────────────────────────────────
+  // Hours by category (current period, non-overlapping): worked hours already
+  // include leave-credited hours (see nurseHoursMap above), so leave is
+  // subtracted back out to keep the four slices additive.
+  const hoursByCategoryData: CategoryDatum[] = useMemo(() => {
+    const leaveTotal = [...leaveHoursMap.values()].reduce((s, h) => s + h, 0);
+    const regularTotal = Math.max(totalLoggedHours - leaveTotal, 0);
+    const swapTotal = [...swapHoursMap.values()].reduce((s, h) => s + h, 0);
+    const lookback = periodLookbackYmd();
+    const locumPeriodTotal = locumShiftLogs
+      .filter((l) => scopedNurseIds.has(l.nurse_id) && l.shift_date.slice(0, 10) >= lookback)
+      .reduce((s, l) => s + (l.hours_logged != null ? Number(l.hours_logged) : 0), 0);
+    const order = ["Regular", "Locum", "Additional (Swap)", "Leave Credited"];
+    return [
+      { key: "Regular", label: "Regular", value: regularTotal },
+      { key: "Locum", label: "Locum", value: locumPeriodTotal },
+      { key: "Additional (Swap)", label: "Additional (Swap)", value: swapTotal },
+      { key: "Leave Credited", label: "Leave Credited", value: leaveTotal },
+    ]
+      .filter((d) => d.value > 0)
+      .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
+  }, [totalLoggedHours, leaveHoursMap, swapHoursMap, locumShiftLogs, scopedNurseIds]);
+
+  // Missed shifts by type (current period), Roster vs Locum
+  const missedByTypeData: CategoryDatum[] = useMemo(() => {
+    const lookback = periodLookbackYmd();
+    let roster = 0;
+    let locum = 0;
+    for (const l of scopedMissedLogs) {
+      if (l.shift_date.slice(0, 10) < lookback) continue;
+      if (l.is_locum) locum++;
+      else roster++;
+    }
+    const order = ["Roster", "Locum"];
+    return [
+      { key: "Roster", label: "Roster", value: roster },
+      { key: "Locum", label: "Locum", value: locum },
+    ]
+      .filter((d) => d.value > 0)
+      .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
+  }, [scopedMissedLogs]);
+
+  // Approved leave by type, all time within current facility scope
+  const leaveByTypeData: CategoryDatum[] = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const l of reportLeaveOnly) {
+      if (l.status !== "Approved") continue;
+      counts.set(l.type, (counts.get(l.type) ?? 0) + 1);
+    }
+    return [...counts.entries()].map(([type, count]) => ({
+      key: type,
+      label: type,
+      value: count,
+      color: colorForLeaveType(type),
+    }));
+  }, [reportLeaveOnly]);
+
+  // Staff distribution — by facility when viewing all facilities, else by ward
+  const staffByGroupData: CategoryDatum[] = useMemo(() => {
+    if (!reportFacility) {
+      const counts = new Map<string, number>();
+      for (const n of scopedNurses) {
+        const f = n.facility ?? "Unassigned";
+        counts.set(f, (counts.get(f) ?? 0) + 1);
+      }
+      const order = [...FACILITIES, "Unassigned"];
+      return [...counts.entries()]
+        .map(([facility, count]) => ({
+          key: facility,
+          label: facility,
+          value: count,
+          color: colorForKey(facility, order),
+        }))
+        .sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
+    }
+    const counts = new Map<string, number>();
+    for (const n of scopedNurses) {
+      const wardNames = n.ward
+        ? n.ward
+            .split("|")
+            .map((w) => w.trim())
+            .filter(Boolean)
+        : ["Unassigned"];
+      for (const w of wardNames) counts.set(w, (counts.get(w) ?? 0) + 1);
+    }
+    const order = [...counts.keys()].sort();
+    return [...counts.entries()]
+      .map(([ward, count]) => ({ key: ward, label: ward, value: count, color: colorForKey(ward, order) }))
+      .sort((a, b) => b.value - a.value);
+  }, [scopedNurses, reportFacility]);
 
   // Staff directory: nurses by selected facility, grouped by ward.
   // When a top-level facility chip is active, it takes priority over the tab's own sub-chip.
@@ -1295,56 +1398,37 @@ ${sections}
               value={totalLocumHours.toFixed(1)}
             />
           </div>
-          <div className="bg-card border rounded-xl p-5 shadow-soft">
-            <h2 className="font-semibold mb-4">Staff Hours — Current Period</h2>
-            {activeNurses.length === 0 ? (
-              <EmptyState
-                icon={<Clock className="h-6 w-6" />}
-                title="No hours logged yet"
-                description="Hours appear here as nurses start and complete their shifts."
-              />
-            ) : (
-              <div className="space-y-2">
-                {nurses
-                  .filter((n) => nurseHoursMap.has(n.id))
-                  .map((n) => {
-                    const hrs = nurseHoursMap.get(n.id) ?? 0;
-                    const swapH = swapHoursMap.get(n.id) ?? 0;
-                    const leaveH = leaveHoursMap.get(n.id) ?? 0;
-                    const pct = Math.round((hrs / Math.max(n.target_hours, 1)) * 100);
-                    return (
-                      <div key={n.id} className="space-y-0.5">
-                        <div className="flex items-center gap-3 text-sm">
-                          <div className="w-36 truncate font-medium">{n.name}</div>
-                          <div className="flex-1 h-5 rounded-full bg-muted overflow-hidden">
-                            <Progress
-                              value={Math.min(pct, 100)}
-                              className="h-full rounded-full bg-primary/70"
-                            />
-                          </div>
-                          <div className="w-20 text-right tabular-nums text-muted-foreground text-xs">
-                            {hrs.toFixed(1)} / {n.target_hours} h
-                          </div>
-                        </div>
-                        {(swapH > 0 || leaveH > 0) && (
-                          <div className="pl-39 flex gap-2">
-                            {swapH > 0 && (
-                              <span className="text-[10px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-1.5 py-0.5 rounded-full">
-                                +{swapH.toFixed(1)}h additional
-                              </span>
-                            )}
-                            {leaveH > 0 && (
-                              <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">
-                                {leaveH.toFixed(1)}h leave
-                              </span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <CategoryChartCard
+              title="Hours by Category"
+              subtitle="Current period — regular, locum, additional and leave-credited hours"
+              data={hoursByCategoryData}
+              emptyMessage="No hours logged yet."
+              valueLabel="hours"
+              formatValue={(v) => v.toFixed(1)}
+            />
+            <CategoryChartCard
+              title="Leave by Type"
+              subtitle="Approved leave requests"
+              data={leaveByTypeData}
+              emptyMessage="No approved leave in this scope yet."
+              valueLabel="request(s)"
+            />
+            <CategoryChartCard
+              title={reportFacility ? "Staff by Ward" : "Staff by Facility"}
+              subtitle={reportFacility ? `${reportFacility} — nurses per ward` : "Nurses per facility"}
+              data={staffByGroupData}
+              emptyMessage="No staff in this scope yet."
+              valueLabel="staff"
+              defaultView="bar"
+            />
+            <CategoryChartCard
+              title="Missed Shifts by Type"
+              subtitle="Current period — roster vs locum"
+              data={missedByTypeData}
+              emptyMessage="No missed shifts in the current period."
+              valueLabel="shift(s)"
+            />
           </div>
         </>
       )}
