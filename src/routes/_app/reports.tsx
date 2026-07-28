@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -32,7 +32,31 @@ import { FacilityChips } from "@/components/FacilityChips";
 import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
 import { colorForLeaveType, colorForKey } from "@/lib/chart-colors";
 
+type ReportsTab =
+  | "overview"
+  | "hours"
+  | "locum"
+  | "periods"
+  | "leave"
+  | "missed"
+  | "staff-dir"
+  | "schedules";
+
+const REPORTS_TABS: readonly ReportsTab[] = [
+  "overview",
+  "hours",
+  "locum",
+  "periods",
+  "leave",
+  "missed",
+  "staff-dir",
+  "schedules",
+];
+
 export const Route = createFileRoute("/_app/reports")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: REPORTS_TABS.includes(search.tab as ReportsTab) ? (search.tab as ReportsTab) : undefined,
+  }),
   component: ReportsPage,
 });
 
@@ -295,9 +319,13 @@ function ReportsContent() {
   const [selectedReportFacility, setSelectedReportFacility] = useState("");
   const reportFacility: string | null = lockedReportFacility ?? (selectedReportFacility || null);
 
-  const [tab, setTab] = useState<
-    "overview" | "hours" | "locum" | "periods" | "leave" | "missed" | "staff-dir" | "schedules"
-  >("overview");
+  const { tab: tabParam } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const [tab, setTabState] = useState<ReportsTab>(tabParam ?? "overview");
+  function setTab(next: ReportsTab) {
+    setTabState(next);
+    navigate({ search: (prev) => ({ ...prev, tab: next }), replace: true });
+  }
   const [closingPeriod, setClosingPeriod] = useState(false);
   // Pagination state per heavy table tab
   const [hoursPage, setHoursPage] = useState(1);
@@ -311,6 +339,11 @@ function ReportsContent() {
   // Date range filters per tab
   const [hoursDateFrom, setHoursDateFrom] = useState("");
   const [hoursDateTo, setHoursDateTo] = useState("");
+  const [hoursStatusFilter, setHoursStatusFilter] = useState<"all" | "running" | "ended">("all");
+  const [hoursShiftTypeFilter, setHoursShiftTypeFilter] = useState<"all" | "M" | "N">("all");
+  const [hoursCategoryFilter, setHoursCategoryFilter] = useState<
+    "all" | "regular" | "swap" | "leave"
+  >("all");
   const [locumDateFrom, setLocumDateFrom] = useState("");
   const [locumDateTo, setLocumDateTo] = useState("");
   const [leaveDateFrom, setLeaveDateFrom] = useState("");
@@ -432,8 +465,25 @@ function ReportsContent() {
     let data = scopedShiftLogs;
     if (hoursDateFrom) data = data.filter((l) => l.shift_date >= hoursDateFrom);
     if (hoursDateTo) data = data.filter((l) => l.shift_date <= hoursDateTo);
+    if (hoursStatusFilter === "running") data = data.filter((l) => !l.ended_at);
+    if (hoursStatusFilter === "ended") data = data.filter((l) => !!l.ended_at);
+    if (hoursShiftTypeFilter !== "all") {
+      data = data.filter((l) => l.shift_type === hoursShiftTypeFilter);
+    }
+    if (hoursCategoryFilter === "swap") data = data.filter((l) => l.is_swap);
+    else if (hoursCategoryFilter === "leave") data = data.filter((l) => l.is_leave);
+    else if (hoursCategoryFilter === "regular") {
+      data = data.filter((l) => !l.is_swap && !l.is_leave);
+    }
     return data;
-  }, [scopedShiftLogs, hoursDateFrom, hoursDateTo]);
+  }, [
+    scopedShiftLogs,
+    hoursDateFrom,
+    hoursDateTo,
+    hoursStatusFilter,
+    hoursShiftTypeFilter,
+    hoursCategoryFilter,
+  ]);
 
   const filteredLocumRequests = useMemo(() => {
     let data = scopedLocumRequests;
@@ -1458,6 +1508,58 @@ ${sections}
                 className="text-xs text-muted-foreground hover:text-foreground underline"
               >
                 Clear
+              </button>
+            )}
+            <select
+              value={hoursStatusFilter}
+              onChange={(e) => {
+                setHoursStatusFilter(e.target.value as typeof hoursStatusFilter);
+                setHoursPage(1);
+              }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="all">Running &amp; ended</option>
+              <option value="running">Running</option>
+              <option value="ended">Ended</option>
+            </select>
+            <select
+              value={hoursShiftTypeFilter}
+              onChange={(e) => {
+                setHoursShiftTypeFilter(e.target.value as typeof hoursShiftTypeFilter);
+                setHoursPage(1);
+              }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="all">All shifts</option>
+              <option value="M">Morning</option>
+              <option value="N">Night</option>
+            </select>
+            <select
+              value={hoursCategoryFilter}
+              onChange={(e) => {
+                setHoursCategoryFilter(e.target.value as typeof hoursCategoryFilter);
+                setHoursPage(1);
+              }}
+              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            >
+              <option value="all">All types</option>
+              <option value="regular">Regular</option>
+              <option value="swap">Additional Shift</option>
+              <option value="leave">Leave</option>
+            </select>
+            {(hoursStatusFilter !== "all" ||
+              hoursShiftTypeFilter !== "all" ||
+              hoursCategoryFilter !== "all") && (
+              <button
+                type="button"
+                onClick={() => {
+                  setHoursStatusFilter("all");
+                  setHoursShiftTypeFilter("all");
+                  setHoursCategoryFilter("all");
+                }}
+                className="text-xs text-muted-foreground hover:text-foreground underline"
+              >
+                Clear filters
               </button>
             )}
             <div className="ml-auto flex gap-2">
