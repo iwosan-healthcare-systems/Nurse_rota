@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
 import { verifyLocationAndCaptureIp, type GpsSettings } from "@/lib/geo-fence";
 import { FacilityChips } from "@/components/FacilityChips";
+import { logAudit } from "@/lib/audit";
 
 function fmtDate(d: string) {
   return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
@@ -514,6 +515,11 @@ function ShiftPage() {
           : null,
       });
 
+      void logAudit(
+        "Started shift",
+        `${fullName ?? "Nurse"} — ${shiftType === "M" ? "Morning" : "Night"} shift on ${fmtDate(assignment.shift_date)}${recordedLate ? ` (${lateMins}m late)` : ""}`,
+      );
+
       setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
       toast.success(
         recordedLate
@@ -570,7 +576,13 @@ function ShiftPage() {
         .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
         .catch(() => {});
 
-    if (!isAuto) toast.success(`Shift ended — ${fmtHours(hours)} logged`);
+    if (!isAuto) {
+      toast.success(`Shift ended — ${fmtHours(hours)} logged`);
+      void logAudit(
+        "Ended shift",
+        `${fullName ?? "Nurse"} — ${log.shift_type === "M" ? "Morning" : "Night"} shift on ${fmtDate(log.shift_date)} (${fmtHours(hours)})`,
+      );
+    }
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
     qc.invalidateQueries({ queryKey: ["my-period-logs"] });
     qc.invalidateQueries({ queryKey: ["nurses"] });
@@ -1201,6 +1213,10 @@ function AllNursesShiftView() {
           .post("/rpc/increment-nurse-hours", { p_nurse_id: endModal.nurseId, p_hours: hours })
           .catch(() => {});
       }
+      void logAudit(
+        "Ended shift (admin)",
+        `${endModal.nurseName} — shift ended by admin (${fmtHours(hours)})`,
+      );
       toast.success("Shift ended and hours recorded");
       qc.invalidateQueries({ queryKey: ["all-shift-logs-current"] });
       qc.invalidateQueries({ queryKey: ["nurses"] });
