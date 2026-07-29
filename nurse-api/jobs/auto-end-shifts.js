@@ -56,7 +56,7 @@ async function runAutoEndOverdueShifts() {
         .query(
           `INSERT INTO audit_logs (actor_name, action, target)
            VALUES ('system', 'Shifts auto-ended', $1)`,
-          [`${result.rowCount} shift(s) closed at ${new Date().toISOString()}`],
+          [`${result.rowCount} shift(s) closed`],
         )
         .catch((err) => console.error("[auto-end] audit log failed:", err.message));
     }

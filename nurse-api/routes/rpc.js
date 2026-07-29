@@ -380,4 +380,35 @@ router.get(
   }),
 );
 
+// ── Daily hours by facility (Dashboard chart) ──────────────────────────────
+// Same worked-hours definition as weekly-hours-by-facility above, but grouped
+// per calendar day instead of per ISO week, over a rolling window anchored to
+// CURRENT_DATE — so the window naturally shifts forward as days pass without
+// any extra bookkeeping.
+router.get(
+  "/daily-hours-by-facility",
+  wrap(async (req, res) => {
+    const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 90);
+    const { rows } = await pool.query(
+      `SELECT
+         sl.shift_date::date AS day,
+         n.facility,
+         ROUND(SUM(sl.hours_logged) * 100) / 100 AS hours
+       FROM shift_logs sl
+       JOIN nurses n ON n.id = sl.nurse_id
+       WHERE sl.hours_logged IS NOT NULL
+         AND sl.ended_at IS NOT NULL
+         AND sl.is_locum = false
+         AND sl.is_swap = false
+         AND sl.is_leave = false
+         AND n.facility IS NOT NULL
+         AND sl.shift_date >= (CURRENT_DATE - ($1::int - 1))
+       GROUP BY day, n.facility
+       ORDER BY day`,
+      [days],
+    );
+    res.json(rows);
+  }),
+);
+
 module.exports = router;

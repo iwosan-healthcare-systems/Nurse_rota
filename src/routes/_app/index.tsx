@@ -999,8 +999,8 @@ function ManagementAlerts() {
 // rank, so a slice or line keeps the same color no matter what's filtered or
 // toggled. Shared with the Reports Overview page — see @/lib/chart-colors.
 
-function fmtWeekLabel(weekStart: string) {
-  return new Date(weekStart.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+function fmtDayLabel(day: string) {
+  return new Date(day.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
     month: "short",
   });
@@ -1247,15 +1247,20 @@ function LeaveByTypeCard({ leave, nurses }: { leave: LeaveRequest[]; nurses: Nur
   );
 }
 
-// ── Weekly hours worked per facility (multi-line, toggleable legend) ───────
-type WeeklyFacilityHours = { week_start: string; facility: string; hours: string | number };
+// ── Daily hours worked per facility (multi-line, toggleable legend) ────────
+// Rolling 7-day window anchored to CURRENT_DATE (server-side) — refetches
+// periodically so the window slides forward as days pass without a reload.
+type DailyFacilityHours = { day: string; facility: string; hours: string | number };
+const DAILY_HOURS_WINDOW = 7;
 
-function WeeklyHoursCard() {
+function DailyHoursCard() {
   const [hidden, setHidden] = useState<Set<string>>(new Set());
 
   const { data: raw = [], isLoading } = useQuery({
-    queryKey: ["weekly-hours-by-facility"],
-    queryFn: () => api.get<WeeklyFacilityHours[]>("/rpc/weekly-hours-by-facility?weeks=12"),
+    queryKey: ["daily-hours-by-facility"],
+    queryFn: () =>
+      api.get<DailyFacilityHours[]>(`/rpc/daily-hours-by-facility?days=${DAILY_HOURS_WINDOW}`),
+    refetchInterval: 5 * 60 * 1000,
   });
 
   const facilities = useMemo(() => [...new Set(raw.map((r) => r.facility))].sort(), [raw]);
@@ -1266,15 +1271,13 @@ function WeeklyHoursCard() {
   }, [facilities]);
 
   const chartData = useMemo(() => {
-    const byWeek = new Map<string, Record<string, number | string>>();
+    const byDay = new Map<string, Record<string, number | string>>();
     for (const r of raw) {
-      const row = byWeek.get(r.week_start) ?? { week_start: r.week_start };
+      const row = byDay.get(r.day) ?? { day: r.day };
       row[r.facility] = Number(r.hours);
-      byWeek.set(r.week_start, row);
+      byDay.set(r.day, row);
     }
-    return [...byWeek.values()].sort((a, b) =>
-      String(a.week_start).localeCompare(String(b.week_start)),
-    );
+    return [...byDay.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)));
   }, [raw]);
 
   function toggle(facility: string) {
@@ -1290,8 +1293,8 @@ function WeeklyHoursCard() {
     <div className="bg-card border rounded-xl p-5 shadow-soft">
       <div className="flex items-center justify-between mb-4 gap-2">
         <div>
-          <h2 className="font-semibold">Hours Worked, Weekly</h2>
-          <p className="text-xs text-muted-foreground">Last 12 weeks, by facility</p>
+          <h2 className="font-semibold">Hours Worked, Daily</h2>
+          <p className="text-xs text-muted-foreground">Last {DAILY_HOURS_WINDOW} days, by facility</p>
         </div>
         {facilities.length > 0 && (
           <div className="flex items-center gap-3 flex-wrap justify-end">
@@ -1332,8 +1335,8 @@ function WeeklyHoursCard() {
             <LineChart data={chartData} margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
               <XAxis
-                dataKey="week_start"
-                tickFormatter={fmtWeekLabel}
+                dataKey="day"
+                tickFormatter={fmtDayLabel}
                 tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
                 axisLine={{ stroke: "var(--border)" }}
                 tickLine={false}
@@ -1345,12 +1348,12 @@ function WeeklyHoursCard() {
                 width={40}
               />
               <Tooltip
-                labelFormatter={(v) => fmtWeekLabel(String(v))}
+                labelFormatter={(v) => fmtDayLabel(String(v))}
                 content={({ active, payload, label }) => {
                   if (!active || !payload?.length) return null;
                   return (
                     <div className="bg-popover border rounded-lg px-3 py-2 shadow-md text-xs space-y-1">
-                      <p className="font-medium">{fmtWeekLabel(String(label))}</p>
+                      <p className="font-medium">{fmtDayLabel(String(label))}</p>
                       {payload
                         .filter((p) => !hidden.has(String(p.dataKey)))
                         .map((p) => (
@@ -1458,7 +1461,7 @@ function ManagementDashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-start">
         <div className="lg:col-span-2 flex flex-col gap-4">
           <LeaveByTypeCard leave={visibleLeave} nurses={nurses} />
-          <WeeklyHoursCard />
+          <DailyHoursCard />
         </div>
 
         <div className="flex flex-col gap-4">
