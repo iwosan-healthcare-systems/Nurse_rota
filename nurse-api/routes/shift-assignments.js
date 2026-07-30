@@ -330,6 +330,40 @@ router.patch(
       }
     }
 
+    // ── Pre-submission: block if approved leave hasn't been reflected on the draft rota yet ────────
+    // Leave approved while these cells were still draft never gets auto-flipped to
+    // LEAVE (see routes/leave-requests.js's "AND status != 'draft'" guard) — only a
+    // "Regenerate" click (POST /shift-assignments/reapply-leave) fixes it. Without
+    // this check, that step was purely advisory (a dismissible-only-by-fixing
+    // notification) and nothing stopped the rota from being submitted with the
+    // stale shift still showing, which is how approved leave silently failed to
+    // reach the rota in the first place.
+    if (status === "submitted" && filterStatus === "draft" && nurse_ids && shift_date_from && shift_date_to) {
+      const nurseIdArr = nurse_ids.split(",");
+      const { rows: unflippedLeaves } = await pool.query(
+        `SELECT DISTINCT lr.id, lr.nurse_name, lr.type, lr.from_date::text, lr.to_date::text
+           FROM shift_assignments sa
+           JOIN leave_requests lr
+             ON lr.nurse_id = sa.nurse_id
+            AND lr.status = 'Approved'
+            AND lr.type != 'Swap'
+            AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+          WHERE sa.nurse_id = ANY($1)
+            AND sa.status = 'draft'
+            AND sa.shift != 'LEAVE'
+            AND sa.shift_date BETWEEN $2 AND $3`,
+        [nurseIdArr, shift_date_from, shift_date_to],
+      );
+
+      if (unflippedLeaves.length > 0) {
+        return res.status(409).json({
+          error: `Cannot submit: ${unflippedLeaves.length} approved leave request${unflippedLeaves.length > 1 ? "s haven't" : " hasn't"} been reflected on the rota yet. Click "Regenerate" for the affected ward, then submit again.`,
+          code: "UNAPPLIED_LEAVE_EXISTS",
+          unflippedCount: unflippedLeaves.length,
+        });
+      }
+    }
+
     const sets = [];
     if (shift) {
       sets.push(`shift = $${params.length + 1}`);
