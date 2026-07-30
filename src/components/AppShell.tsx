@@ -598,9 +598,13 @@ function RotaReminderBell({
       )
       .map((r) => r.notif_key) ?? [];
 
-  // Unread locum notifications from shared notif state (declined requests only)
+  // Unread locum notifications from shared notif state (declined or auto-expired requests)
   const locumUnread =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_declined_")).length ?? 0;
+    allNotifs?.filter(
+      (r) =>
+        !r.is_read &&
+        (r.notif_key.startsWith("locum_declined_") || r.notif_key.startsWith("locum_expired_")),
+    ).length ?? 0;
 
   // Unread leave/switch outcome notifications (shown to the requesting staff member)
   const leaveUpdateKeys =

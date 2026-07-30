@@ -55,10 +55,12 @@ app.use((err, req, res, next) => {
 
 const { startAutoEndJob } = require('./jobs/auto-end-shifts');
 const { startAutoDeclineJob } = require('./jobs/auto-decline-requests');
+const { startAutoExpireLocumJob } = require('./jobs/auto-expire-locum-requests');
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Nurse API running on port ${PORT}`);
   startAutoEndJob();
   startAutoDeclineJob();
+  startAutoExpireLocumJob();
 });

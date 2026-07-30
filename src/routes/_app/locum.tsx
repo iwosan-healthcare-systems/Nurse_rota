@@ -38,7 +38,7 @@ const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & CathLab", "IP Ward"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type LocumStatus = "pending" | "approved" | "declined" | "invites_sent" | "filled";
+type LocumStatus = "pending" | "approved" | "declined" | "invites_sent" | "filled" | "expired";
 type InviteStatus = "pending" | "accepted" | "declined" | "unavailable";
 
 type LocumRequest = {
@@ -105,6 +105,7 @@ const STATUS_LABEL: Record<LocumStatus, string> = {
   declined: "Declined by CNO",
   invites_sent: "Invites Sent",
   filled: "Shift Filled",
+  expired: "Time Elapsed",
 };
 
 const STATUS_COLOR: Record<LocumStatus, string> = {
@@ -113,6 +114,7 @@ const STATUS_COLOR: Record<LocumStatus, string> = {
   declined: "bg-red-100 text-red-700",
   invites_sent: "bg-purple-100 text-purple-700",
   filled: "bg-emerald-100 text-emerald-700",
+  expired: "bg-gray-100 text-gray-500",
 };
 
 const INVITE_COLOR: Record<InviteStatus, string> = {
@@ -1112,7 +1114,8 @@ function RequestCard({
   const [expanded, setExpanded] = useState(false);
 
   // Fetch the invite list when expanded and invites have been sent
-  const showInvites = expanded && (req.status === "invites_sent" || req.status === "filled");
+  const showInvites =
+    expanded && (req.status === "invites_sent" || req.status === "filled" || req.status === "expired");
   const { data: reqInvites = [] } = useQuery<LocumInvite[]>({
     queryKey: ["locum-invites-req", req.id],
     enabled: showInvites,
@@ -1241,6 +1244,17 @@ function RequestCard({
                 </p>
                 <p className="text-xs text-red-600 mt-0.5">{req.decline_reason}</p>
               </div>
+            </div>
+          )}
+
+          {req.status === "expired" && (
+            <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-md px-3 py-2.5">
+              <Clock className="h-4 w-4 text-gray-500 shrink-0 mt-0.5" />
+              <p className="text-xs text-gray-600">
+                Time elapsed — the shift's cutoff ({req.shift === "N" ? "4:00 PM" : "7:00 AM"} on{" "}
+                {fmtDate(req.shift_date)}) passed before the request was filled. No further action
+                can be taken on it.
+              </p>
             </div>
           )}
 
