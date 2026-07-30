@@ -31,11 +31,13 @@ import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
 import { colorForLeaveType, colorForKey } from "@/lib/chart-colors";
+import { DateRangeFilter, type DateRangeFilterValue } from "@/components/DateRangeFilter";
 
 type ReportsTab =
   | "overview"
   | "hours"
   | "locum"
+  | "locum-requests"
   | "periods"
   | "leave"
   | "missed"
@@ -46,6 +48,7 @@ const REPORTS_TABS: readonly ReportsTab[] = [
   "overview",
   "hours",
   "locum",
+  "locum-requests",
   "periods",
   "leave",
   "missed",
@@ -107,6 +110,29 @@ type LocumFilledRequest = {
   accepted_by_nurse_id: string | null;
   accepted_by_nurse_name: string | null;
   accepted_at: string | null;
+};
+type LocumRequestStatus =
+  | "pending"
+  | "approved"
+  | "declined"
+  | "invites_sent"
+  | "filled"
+  | "expired";
+type LocumRequestFull = {
+  id: string;
+  shift_date: string;
+  shift: string;
+  facility: string;
+  ward: string;
+  nurses_needed: number;
+  role_needed: string | null;
+  status: LocumRequestStatus;
+  requested_by_name: string;
+  reviewed_by_name: string | null;
+  decline_reason: string | null;
+  accepted_by_nurse_name: string | null;
+  accepted_at: string | null;
+  created_at: string;
 };
 type PeriodHours = {
   nurse_id: string;
@@ -332,24 +358,28 @@ function ReportsContent() {
   const [hoursPageSize, setHoursPageSize] = useState(20);
   const [locumPage, setLocumPage] = useState(1);
   const [locumPageSize, setLocumPageSize] = useState(20);
+  const [locumReqPage, setLocumReqPage] = useState(1);
+  const [locumReqPageSize, setLocumReqPageSize] = useState(20);
   const [leavePage, setLeavePage] = useState(1);
   const [leavePageSize, setLeavePageSize] = useState(20);
   const [missedPage, setMissedPage] = useState(1);
   const [missedPageSize, setMissedPageSize] = useState(20);
-  // Date range filters per tab
-  const [hoursDateFrom, setHoursDateFrom] = useState("");
-  const [hoursDateTo, setHoursDateTo] = useState("");
+  // Date range filters per tab (Today / Yesterday / Last Week / custom range)
+  const [hoursRange, setHoursRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [hoursStatusFilter, setHoursStatusFilter] = useState<"all" | "running" | "ended">("all");
   const [hoursShiftTypeFilter, setHoursShiftTypeFilter] = useState<"all" | "M" | "N">("all");
   const [hoursCategoryFilter, setHoursCategoryFilter] = useState<
     "all" | "regular" | "swap" | "leave"
   >("all");
-  const [locumDateFrom, setLocumDateFrom] = useState("");
-  const [locumDateTo, setLocumDateTo] = useState("");
-  const [leaveDateFrom, setLeaveDateFrom] = useState("");
-  const [leaveDateTo, setLeaveDateTo] = useState("");
-  const [missedDateFrom, setMissedDateFrom] = useState("");
-  const [missedDateTo, setMissedDateTo] = useState("");
+  const [locumRange, setLocumRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
+  const [locumReqRange, setLocumReqRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
+  const [locumReqStatusFilter, setLocumReqStatusFilter] = useState<"all" | LocumRequestStatus>(
+    "all",
+  );
+  const [locumReqShiftFilter, setLocumReqShiftFilter] = useState<"all" | "M" | "N">("all");
+  const [leaveRange, setLeaveRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
+  const [missedRange, setMissedRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
+  const [periodsRange, setPeriodsRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
@@ -397,6 +427,13 @@ function ReportsContent() {
     queryFn: () => api.get<LocumFilledRequest[]>("/locum/requests?status=filled"),
   });
 
+  // All locum requests regardless of status — for the Locum Requests report tab
+  const { data: locumRequestsAll = [] } = useQuery<LocumRequestFull[]>({
+    queryKey: ["locum-requests-all-report"],
+    enabled: tab === "locum-requests",
+    queryFn: () => api.get<LocumRequestFull[]>("/locum/requests"),
+  });
+
   // All saved period summaries
   const { data: periodSummaries = [] } = useQuery<PeriodHours[]>({
     queryKey: ["period-hours-all"],
@@ -434,6 +471,13 @@ function ReportsContent() {
         : locumFilledRequests,
     [locumFilledRequests, reportFacility],
   );
+  const scopedLocumRequestsAll = useMemo(
+    () =>
+      reportFacility
+        ? locumRequestsAll.filter((r) => r.facility === reportFacility)
+        : locumRequestsAll,
+    [locumRequestsAll, reportFacility],
+  );
   // Leave requests scoped to the same facility set — CNO/admin see all, others see their own.
   const scopedLeave = useMemo(
     () =>
@@ -460,11 +504,11 @@ function ReportsContent() {
     [missedShiftLogs, scopedNurseIds],
   );
 
-  // Date-filtered views for the four heavy-table tabs
+  // Date-filtered views for the heavy-table tabs
   const filteredShiftLogs = useMemo(() => {
     let data = scopedShiftLogs;
-    if (hoursDateFrom) data = data.filter((l) => l.shift_date >= hoursDateFrom);
-    if (hoursDateTo) data = data.filter((l) => l.shift_date <= hoursDateTo);
+    if (hoursRange.from) data = data.filter((l) => l.shift_date >= hoursRange.from);
+    if (hoursRange.to) data = data.filter((l) => l.shift_date <= hoursRange.to);
     if (hoursStatusFilter === "running") data = data.filter((l) => !l.ended_at);
     if (hoursStatusFilter === "ended") data = data.filter((l) => !!l.ended_at);
     if (hoursShiftTypeFilter !== "all") {
@@ -478,8 +522,7 @@ function ReportsContent() {
     return data;
   }, [
     scopedShiftLogs,
-    hoursDateFrom,
-    hoursDateTo,
+    hoursRange,
     hoursStatusFilter,
     hoursShiftTypeFilter,
     hoursCategoryFilter,
@@ -487,17 +530,27 @@ function ReportsContent() {
 
   const filteredLocumRequests = useMemo(() => {
     let data = scopedLocumRequests;
-    if (locumDateFrom) data = data.filter((r) => r.shift_date.slice(0, 10) >= locumDateFrom);
-    if (locumDateTo) data = data.filter((r) => r.shift_date.slice(0, 10) <= locumDateTo);
+    if (locumRange.from) data = data.filter((r) => r.shift_date.slice(0, 10) >= locumRange.from);
+    if (locumRange.to) data = data.filter((r) => r.shift_date.slice(0, 10) <= locumRange.to);
     return data;
-  }, [scopedLocumRequests, locumDateFrom, locumDateTo]);
+  }, [scopedLocumRequests, locumRange]);
+
+  const filteredLocumRequestsAll = useMemo(() => {
+    let data = scopedLocumRequestsAll;
+    if (locumReqRange.from)
+      data = data.filter((r) => r.shift_date.slice(0, 10) >= locumReqRange.from);
+    if (locumReqRange.to) data = data.filter((r) => r.shift_date.slice(0, 10) <= locumReqRange.to);
+    if (locumReqStatusFilter !== "all") data = data.filter((r) => r.status === locumReqStatusFilter);
+    if (locumReqShiftFilter !== "all") data = data.filter((r) => r.shift === locumReqShiftFilter);
+    return data;
+  }, [scopedLocumRequestsAll, locumReqRange, locumReqStatusFilter, locumReqShiftFilter]);
 
   const filteredScopeLeave = useMemo(() => {
     let data = scopedLeave;
-    if (leaveDateFrom) data = data.filter((l) => l.to_date >= leaveDateFrom);
-    if (leaveDateTo) data = data.filter((l) => l.from_date <= leaveDateTo);
+    if (leaveRange.from) data = data.filter((l) => l.to_date >= leaveRange.from);
+    if (leaveRange.to) data = data.filter((l) => l.from_date <= leaveRange.to);
     return data;
-  }, [scopedLeave, leaveDateFrom, leaveDateTo]);
+  }, [scopedLeave, leaveRange]);
 
   const filteredLeaveOnly = useMemo(
     () => filteredScopeLeave.filter((l) => l.type !== "Swap"),
@@ -506,27 +559,36 @@ function ReportsContent() {
 
   const filteredMissedLogs = useMemo(() => {
     let data = scopedMissedLogs;
-    if (missedDateFrom) data = data.filter((l) => l.shift_date >= missedDateFrom);
-    if (missedDateTo) data = data.filter((l) => l.shift_date <= missedDateTo);
+    if (missedRange.from) data = data.filter((l) => l.shift_date >= missedRange.from);
+    if (missedRange.to) data = data.filter((l) => l.shift_date <= missedRange.to);
     return data;
-  }, [scopedMissedLogs, missedDateFrom, missedDateTo]);
+  }, [scopedMissedLogs, missedRange]);
+
+  // Period summaries overlapping the selected range (a period counts if any part
+  // of it falls within [from, to], same overlap semantics as the leave filter above).
+  const filteredPeriodSummaries = useMemo(() => {
+    let data = scopedPeriodSummaries;
+    if (periodsRange.from) data = data.filter((p) => p.period_end >= periodsRange.from);
+    if (periodsRange.to) data = data.filter((p) => p.period_start <= periodsRange.to);
+    return data;
+  }, [scopedPeriodSummaries, periodsRange]);
 
   // Reset all paginated tables to page 1 when the facility filter or date filters change
   useEffect(() => {
     setHoursPage(1);
     setLocumPage(1);
+    setLocumReqPage(1);
     setLeavePage(1);
     setMissedPage(1);
   }, [
     reportFacility,
-    hoursDateFrom,
-    hoursDateTo,
-    locumDateFrom,
-    locumDateTo,
-    leaveDateFrom,
-    leaveDateTo,
-    missedDateFrom,
-    missedDateTo,
+    hoursRange,
+    locumRange,
+    locumReqRange,
+    locumReqStatusFilter,
+    locumReqShiftFilter,
+    leaveRange,
+    missedRange,
   ]);
 
   // Paginate the four heavy tables (hooks must be unconditional)
@@ -539,6 +601,11 @@ function ReportsContent() {
     filteredLocumRequests,
     locumPageSize,
     locumPage,
+  );
+  const { pageItems: pagedLocumRequestsAll, totalPages: locumReqTotalPages } = usePagination(
+    filteredLocumRequestsAll,
+    locumReqPageSize,
+    locumReqPage,
   );
   const { pageItems: pagedLeaveOnly, totalPages: leaveTotalPages } = usePagination(
     filteredLeaveOnly,
@@ -921,10 +988,10 @@ function ReportsContent() {
   }
 
   async function exportPeriodArchive() {
-    if (scopedPeriodSummaries.length === 0) return toast.error("No archived periods yet");
+    if (filteredPeriodSummaries.length === 0) return toast.error("No archived periods to export");
     try {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-      const rows = scopedPeriodSummaries.map((p) => {
+      const rows = filteredPeriodSummaries.map((p) => {
         const nurse = nurseMap.get(p.nurse_id);
         return {
           Name: nurse?.name ?? "Unknown",
@@ -980,6 +1047,41 @@ function ReportsContent() {
       const wb = xlsWorkbook();
       xlsAddJsonSheet(wb, rows, "Locum Hours", [12, 26, 14, 10, 10, 20, 20, 12, 20]);
       await xlsDownload(wb, `locum-hours-${todayYmd()}.xlsx`);
+      toast.success("Exported");
+    } catch {
+      toast.error("Export failed");
+    }
+  }
+
+  async function exportLocumRequestsReport() {
+    if (filteredLocumRequestsAll.length === 0) return toast.error("No locum requests to export");
+    try {
+      const statusLabel: Record<LocumRequestStatus, string> = {
+        pending: "Awaiting CNO Review",
+        approved: "Approved — Send Invites",
+        declined: "Declined by CNO",
+        invites_sent: "Invites Sent",
+        filled: "Shift Filled",
+        expired: "Time Elapsed",
+      };
+      const rows = filteredLocumRequestsAll.map((r) => ({
+        Date: fmtDate(r.shift_date),
+        "Shift Type": r.shift === "M" ? "Morning" : "Night",
+        Facility: r.facility,
+        Ward: r.ward,
+        "Nurses Needed": r.nurses_needed,
+        "Role Needed": r.role_needed ?? "",
+        Status: statusLabel[r.status] ?? r.status,
+        "Requested By": r.requested_by_name,
+        "Reviewed By": r.reviewed_by_name ?? "",
+        "Decline Reason": r.decline_reason ?? "",
+        "Accepted By": r.accepted_by_nurse_name ?? "",
+        "Accepted At": r.accepted_at ? new Date(r.accepted_at).toLocaleString("en-GB") : "",
+        "Requested At": new Date(r.created_at).toLocaleString("en-GB"),
+      }));
+      const wb = xlsWorkbook();
+      xlsAddJsonSheet(wb, rows, "Locum Requests", [12, 10, 10, 16, 12, 16, 20, 20, 20, 26, 20, 20, 20]);
+      await xlsDownload(wb, `locum-requests-${todayYmd()}.xlsx`);
       toast.success("Exported");
     } catch {
       toast.error("Export failed");
@@ -1406,6 +1508,13 @@ ${sections}
         <button type="button" className={tabCls("locum")} onClick={() => setTab("locum")}>
           Locum Hours
         </button>
+        <button
+          type="button"
+          className={tabCls("locum-requests")}
+          onClick={() => setTab("locum-requests")}
+        >
+          Locum Requests
+        </button>
         <button type="button" className={tabCls("periods")} onClick={() => setTab("periods")}>
           Period Archive
         </button>
@@ -1487,29 +1596,10 @@ ${sections}
       {tab === "hours" && (
         <div className="space-y-4">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-muted-foreground">Date range:</span>
-            <input
-              type="date"
-              value={hoursDateFrom}
-              onChange={(e) => { setHoursDateFrom(e.target.value); setHoursPage(1); }}
-              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            <DateRangeFilter
+              value={hoursRange}
+              onChange={(v) => { setHoursRange(v); setHoursPage(1); }}
             />
-            <span className="text-sm text-muted-foreground">—</span>
-            <input
-              type="date"
-              value={hoursDateTo}
-              onChange={(e) => { setHoursDateTo(e.target.value); setHoursPage(1); }}
-              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-            />
-            {(hoursDateFrom || hoursDateTo) && (
-              <button
-                type="button"
-                onClick={() => { setHoursDateFrom(""); setHoursDateTo(""); }}
-                className="text-xs text-muted-foreground hover:text-foreground underline"
-              >
-                Clear
-              </button>
-            )}
             <select
               value={hoursStatusFilter}
               onChange={(e) => {
@@ -1717,29 +1807,10 @@ ${sections}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-sm text-muted-foreground">Date range:</span>
-            <input
-              type="date"
-              value={locumDateFrom}
-              onChange={(e) => { setLocumDateFrom(e.target.value); setLocumPage(1); }}
-              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+            <DateRangeFilter
+              value={locumRange}
+              onChange={(v) => { setLocumRange(v); setLocumPage(1); }}
             />
-            <span className="text-sm text-muted-foreground">—</span>
-            <input
-              type="date"
-              value={locumDateTo}
-              onChange={(e) => { setLocumDateTo(e.target.value); setLocumPage(1); }}
-              className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-            />
-            {(locumDateFrom || locumDateTo) && (
-              <button
-                type="button"
-                onClick={() => { setLocumDateFrom(""); setLocumDateTo(""); }}
-                className="text-xs text-muted-foreground hover:text-foreground underline"
-              >
-                Clear
-              </button>
-            )}
             <div className="ml-auto">
               <button
                 type="button"
@@ -1920,6 +1991,172 @@ ${sections}
         </div>
       )}
 
+      {/* ── Locum Requests ───────────────────────────────────────────────── */}
+      {tab === "locum-requests" && (() => {
+        const LOCUM_REQ_STATUS_LABEL: Record<LocumRequestStatus, string> = {
+          pending: "Awaiting CNO Review",
+          approved: "Approved — Send Invites",
+          declined: "Declined by CNO",
+          invites_sent: "Invites Sent",
+          filled: "Shift Filled",
+          expired: "Time Elapsed",
+        };
+        const LOCUM_REQ_STATUS_COLOR: Record<LocumRequestStatus, string> = {
+          pending: "bg-amber-100 text-amber-700",
+          approved: "bg-blue-100 text-blue-700",
+          declined: "bg-red-100 text-red-700",
+          invites_sent: "bg-purple-100 text-purple-700",
+          filled: "bg-emerald-100 text-emerald-700",
+          expired: "bg-gray-100 text-gray-500",
+        };
+        const pendingCount = filteredLocumRequestsAll.filter((r) => r.status === "pending").length;
+        const filledCount = filteredLocumRequestsAll.filter((r) => r.status === "filled").length;
+        const expiredCount = filteredLocumRequestsAll.filter((r) => r.status === "expired").length;
+
+        return (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+              <Stat icon={Stethoscope} label="Total Requests" value={filteredLocumRequestsAll.length} />
+              <Stat icon={Clock} label="Awaiting CNO Review" value={pendingCount} />
+              <Stat icon={CheckCircle2} label="Filled" value={filledCount} />
+              <Stat icon={XCircle} label="Time Elapsed" value={expiredCount} />
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <DateRangeFilter
+                value={locumReqRange}
+                onChange={(v) => { setLocumReqRange(v); setLocumReqPage(1); }}
+              />
+              <select
+                value={locumReqStatusFilter}
+                onChange={(e) => {
+                  setLocumReqStatusFilter(e.target.value as typeof locumReqStatusFilter);
+                  setLocumReqPage(1);
+                }}
+                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+              >
+                <option value="all">All statuses</option>
+                <option value="pending">Awaiting CNO Review</option>
+                <option value="approved">Approved — Send Invites</option>
+                <option value="declined">Declined by CNO</option>
+                <option value="invites_sent">Invites Sent</option>
+                <option value="filled">Shift Filled</option>
+                <option value="expired">Time Elapsed</option>
+              </select>
+              <select
+                value={locumReqShiftFilter}
+                onChange={(e) => {
+                  setLocumReqShiftFilter(e.target.value as typeof locumReqShiftFilter);
+                  setLocumReqPage(1);
+                }}
+                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+              >
+                <option value="all">All shifts</option>
+                <option value="M">Morning</option>
+                <option value="N">Night</option>
+              </select>
+              {(locumReqStatusFilter !== "all" || locumReqShiftFilter !== "all") && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setLocumReqStatusFilter("all");
+                    setLocumReqShiftFilter("all");
+                  }}
+                  className="text-xs text-muted-foreground hover:text-foreground underline"
+                >
+                  Clear filters
+                </button>
+              )}
+              <div className="ml-auto">
+                <button
+                  type="button"
+                  onClick={exportLocumRequestsReport}
+                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                >
+                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
+                </button>
+              </div>
+            </div>
+
+            {filteredLocumRequestsAll.length === 0 ? (
+              scopedLocumRequestsAll.length === 0 ? (
+                <EmptyState
+                  icon={<Stethoscope className="h-6 w-6" />}
+                  title="No locum requests"
+                  description="Locum requests appear here once a matron raises one for an understaffed ward."
+                />
+              ) : (
+                <div className="py-16 text-center text-sm text-muted-foreground">
+                  No locum requests found for the selected filters.
+                </div>
+              )
+            ) : (
+              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-semibold">Date</th>
+                      <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                      <th className="text-left px-4 py-3 font-semibold">Facility</th>
+                      <th className="text-left px-4 py-3 font-semibold">Ward</th>
+                      <th className="text-right px-4 py-3 font-semibold">Needed</th>
+                      <th className="text-left px-4 py-3 font-semibold">Status</th>
+                      <th className="text-left px-4 py-3 font-semibold">Requested By</th>
+                      <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                      <th className="text-left px-4 py-3 font-semibold">Accepted By</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedLocumRequestsAll.map((r) => (
+                      <tr key={r.id} className="border-t hover:bg-muted/30">
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                          {fmtDate(r.shift_date)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
+                          >
+                            {r.shift === "M" ? "Morning" : "Night"}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
+                        <td className="px-4 py-3 text-right tabular-nums">{r.nurses_needed}</td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${LOCUM_REQ_STATUS_COLOR[r.status]}`}
+                          >
+                            {LOCUM_REQ_STATUS_LABEL[r.status]}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.requested_by_name}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.reviewed_by_name ?? "—"}</td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {r.accepted_by_nurse_name ?? "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                </div>
+                <Pagination
+                  page={locumReqPage}
+                  totalPages={locumReqTotalPages}
+                  pageSize={locumReqPageSize}
+                  totalItems={filteredLocumRequestsAll.length}
+                  onPage={setLocumReqPage}
+                  onPageSize={(s) => {
+                    setLocumReqPageSize(s);
+                    setLocumReqPage(1);
+                  }}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── Leave & Requests ─────────────────────────────────────────────── */}
       {tab === "leave" &&
         (() => {
@@ -1938,29 +2175,10 @@ ${sections}
           return (
             <>
               <div className="flex items-center gap-2 flex-wrap mb-4">
-                <span className="text-sm text-muted-foreground">Date range:</span>
-                <input
-                  type="date"
-                  value={leaveDateFrom}
-                  onChange={(e) => { setLeaveDateFrom(e.target.value); setLeavePage(1); }}
-                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                <DateRangeFilter
+                  value={leaveRange}
+                  onChange={(v) => { setLeaveRange(v); setLeavePage(1); }}
                 />
-                <span className="text-sm text-muted-foreground">—</span>
-                <input
-                  type="date"
-                  value={leaveDateTo}
-                  onChange={(e) => { setLeaveDateTo(e.target.value); setLeavePage(1); }}
-                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-                />
-                {(leaveDateFrom || leaveDateTo) && (
-                  <button
-                    type="button"
-                    onClick={() => { setLeaveDateFrom(""); setLeaveDateTo(""); }}
-                    className="text-xs text-muted-foreground hover:text-foreground underline"
-                  >
-                    Clear
-                  </button>
-                )}
                 <div className="ml-auto">
                   <button
                     type="button"
@@ -2154,22 +2372,31 @@ ${sections}
       {/* ── Period Archive ────────────────────────────────────────────────── */}
       {tab === "periods" && (
         <div className="space-y-4">
-          <div className="flex justify-end">
-            <button
-              type="button"
-              onClick={exportPeriodArchive}
-              className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-            >
-              <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export Archive
-            </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <DateRangeFilter value={periodsRange} onChange={setPeriodsRange} />
+            <div className="ml-auto">
+              <button
+                type="button"
+                onClick={exportPeriodArchive}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+              >
+                <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export Archive
+              </button>
+            </div>
           </div>
 
-          {scopedPeriodSummaries.length === 0 ? (
-            <EmptyState
-              icon={<Archive className="h-6 w-6" />}
-              title="No archived periods"
-              description="Periods close automatically at 8 am the day after the last published shift. Archived periods appear here."
-            />
+          {filteredPeriodSummaries.length === 0 ? (
+            scopedPeriodSummaries.length === 0 ? (
+              <EmptyState
+                icon={<Archive className="h-6 w-6" />}
+                title="No archived periods"
+                description="Periods close automatically at 8 am the day after the last published shift. Archived periods appear here."
+              />
+            ) : (
+              <div className="py-16 text-center text-sm text-muted-foreground">
+                No archived periods found for the selected date range.
+              </div>
+            )
           ) : (
             <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
               <div className="overflow-x-auto">
@@ -2183,7 +2410,7 @@ ${sections}
                   </tr>
                 </thead>
                 <tbody>
-                  {scopedPeriodSummaries.map((p) => {
+                  {filteredPeriodSummaries.map((p) => {
                     const nurse = nurses.find((n) => n.id === p.nurse_id);
                     return (
                       <tr key={p.nurse_id + p.period_start} className="border-t hover:bg-muted/30">
@@ -2214,29 +2441,10 @@ ${sections}
         return (
           <div className="space-y-4">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-sm text-muted-foreground">Date range:</span>
-              <input
-                type="date"
-                value={missedDateFrom}
-                onChange={(e) => { setMissedDateFrom(e.target.value); setMissedPage(1); }}
-                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+              <DateRangeFilter
+                value={missedRange}
+                onChange={(v) => { setMissedRange(v); setMissedPage(1); }}
               />
-              <span className="text-sm text-muted-foreground">—</span>
-              <input
-                type="date"
-                value={missedDateTo}
-                onChange={(e) => { setMissedDateTo(e.target.value); setMissedPage(1); }}
-                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-              />
-              {(missedDateFrom || missedDateTo) && (
-                <button
-                  type="button"
-                  onClick={() => { setMissedDateFrom(""); setMissedDateTo(""); }}
-                  className="text-xs text-muted-foreground hover:text-foreground underline"
-                >
-                  Clear
-                </button>
-              )}
               {filteredMissedLogs.length > 0 && (
                 <button
                   type="button"
@@ -2251,11 +2459,11 @@ ${sections}
               Shifts where no clock-in was recorded.{" "}
               <span className="font-medium text-foreground">{filteredMissedLogs.length}</span> missed{" "}
               {reportFacility ? `in ${reportFacility}` : "across all facilities"}
-              {(missedDateFrom || missedDateTo) && (
+              {(missedRange.from || missedRange.to) && (
                 <span>
                   {" "}(filtered
-                  {missedDateFrom ? ` from ${fmtDate(missedDateFrom)}` : ""}
-                  {missedDateTo ? ` to ${fmtDate(missedDateTo)}` : ""})
+                  {missedRange.from ? ` from ${fmtDate(missedRange.from)}` : ""}
+                  {missedRange.to ? ` to ${fmtDate(missedRange.to)}` : ""})
                 </span>
               )}.
             </p>
