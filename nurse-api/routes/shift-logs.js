@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Must be before GET / to avoid conflict
@@ -179,7 +179,7 @@ router.post(
 // Bulk insert shift logs (used for leave approval)
 router.post(
   "/bulk",
-  requireRole("admin", "cno", "chief_matron", "hr_admin"),
+  requireCapability("manage_shift_logs", ["admin", "cno", "chief_matron", "hr_admin"]),
   wrap(async (req, res) => {
     const rows = Array.isArray(req.body) ? req.body : [req.body];
     if (!rows.length) return res.status(400).json({ error: "Array of shift logs required" });

@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
-import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { Check, X, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
@@ -16,7 +16,12 @@ export const Route = createFileRoute("/_app/permissions")({
   component: PermissionsPage,
 });
 
-const ROLES: AppRole[] = [
+// Used only as the default "everyone" role list for capabilities that have no
+// DB entry yet — the table's actual displayed columns come from the dynamic
+// role list (useAuth().allRoles) inside PermissionsPage. A newly created
+// custom role starts with none of these either, until an admin explicitly
+// grants it via the matrix — nothing here auto-includes custom roles.
+const SYSTEM_ROLES: SystemRole[] = [
   "admin",
   "cno",
   "chief_matron",
@@ -32,8 +37,8 @@ const ROLES: AppRole[] = [
 type Capability = { key: string; label: string; roles: AppRole[] };
 
 const DEFAULT_CAPABILITIES: Capability[] = [
-  { key: "view_dashboard", label: "View Dashboard", roles: ROLES },
-  { key: "view_rota", label: "View Rota", roles: ROLES },
+  { key: "view_dashboard", label: "View Dashboard", roles: SYSTEM_ROLES },
+  { key: "view_rota", label: "View Rota", roles: SYSTEM_ROLES },
   {
     key: "edit_rota",
     label: "Edit Rota (manual cell changes)",
@@ -45,7 +50,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Manage Staff (create / edit)",
     roles: ["admin", "hr_admin"],
   },
-  { key: "delete_staff", label: "Delete Staff", roles: ["admin"] },
+  { key: "delete_staff", label: "Delete Staff", roles: ["admin", "hr_admin"] },
   { key: "edit_target_hours", label: "Set Staff Target Hours", roles: ["admin", "cno"] },
   {
     key: "manage_wards",
@@ -98,7 +103,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   { key: "approve_cno", label: "CNO Approval Step", roles: ["admin", "cno"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
   { key: "revert_published", label: "Revert Published Rota to Draft", roles: ["admin"] },
-  { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: ROLES },
+  { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: SYSTEM_ROLES },
   {
     key: "print_staff_list",
     label: "Print Staff Directory (by facility / ward)",
@@ -131,7 +136,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Send Locum Invites to OFF Nurses",
     roles: ["admin", "chief_matron"],
   },
-  { key: "respond_locum_invite", label: "Accept / Decline a Locum Invite (Nurse)", roles: ROLES },
+  { key: "respond_locum_invite", label: "Accept / Decline a Locum Invite (Nurse)", roles: SYSTEM_ROLES },
   {
     key: "view_locum_hours",
     label: "View Locum Hours Tracking",
@@ -142,6 +147,22 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "View Locum Request Status",
     roles: ["admin", "cno", "chief_matron", "head_nurse"],
   },
+  { key: "view_audit_logs", label: "View Audit Logs (API)", roles: ["admin", "cno", "service_support"] },
+  { key: "manage_users", label: "Manage User Accounts (create / ban / reset password)", roles: ["admin", "cno", "service_support"] },
+  { key: "delete_user_account", label: "Delete User Account", roles: ["admin"] },
+  { key: "edit_user_profile", label: "Edit User Profile (name / email)", roles: ["admin", "cno"] },
+  { key: "bulk_create_users", label: "Bulk-Create Logins from Staff List", roles: ["admin"] },
+  { key: "review_locum_request", label: "Review Locum Request (CNO approve/decline)", roles: ["admin", "cno", "chief_matron"] },
+  { key: "view_profiles", label: "View User Profiles List", roles: ["admin", "cno", "chief_matron", "hr_admin"] },
+  { key: "manage_rota_periods", label: "Manage Rota Periods (auto-end / auto-close)", roles: ["admin", "cno"] },
+  { key: "manage_period_hours", label: "Manage Period Hours Archive", roles: ["admin", "cno", "hr_admin"] },
+  { key: "manage_shift_logs", label: "Bulk-Manage Shift Logs", roles: ["admin", "cno", "chief_matron", "hr_admin"] },
+  { key: "edit_nurse_record", label: "Edit Individual Staff Record", roles: ["admin", "hr_admin", "head_nurse"] },
+  { key: "rotate_interns", label: "Rotate Interns Between Wards", roles: ["admin", "cno", "chief_matron"] },
+  { key: "view_user_roles", label: "View User Role Assignments", roles: ["admin", "cno", "hr_admin", "service_support"] },
+  { key: "manage_user_roles", label: "Grant / Revoke User Roles", roles: ["admin", "cno", "service_support"] },
+  { key: "edit_shift_assignments", label: "Create / Delete Individual Shift Cells", roles: ["admin", "head_nurse"] },
+  { key: "manage_shift_assignments", label: "Bulk-Manage Shift Assignments", roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"] },
 ];
 
 const CAPABILITIES_CHANGED_EVENT = "capabilities-changed";
@@ -155,7 +176,8 @@ function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capabili
 
 function PermissionsPage() {
   const navigate = useNavigate();
-  const { isAdmin, loading } = useAuth();
+  const { isAdmin, loading, allRoles, roleLabel } = useAuth();
+  const ROLES = allRoles.map((r) => r.key);
 
   const [capabilities, setCapabilities] = useState<Capability[]>(DEFAULT_CAPABILITIES);
   const [editing, setEditing] = useState(false);
@@ -306,7 +328,7 @@ function PermissionsPage() {
                 </th>
                 {ROLES.map((r) => (
                   <th key={r} className="px-3 py-3 font-medium text-center whitespace-nowrap">
-                    {ROLE_LABELS[r]}
+                    {roleLabel(r)}
                   </th>
                 ))}
               </tr>
@@ -323,7 +345,7 @@ function PermissionsPage() {
                         <label className="inline-grid place-items-center h-8 w-8 cursor-pointer">
                           <input
                             type="checkbox"
-                            aria-label={`${cap.label} — ${ROLE_LABELS[r]}`}
+                            aria-label={`${cap.label} — ${roleLabel(r)}`}
                             checked={cap.roles.includes(r)}
                             onChange={() => toggleRole(cap.key, r)}
                             className="h-4 w-4 accent-primary cursor-pointer"

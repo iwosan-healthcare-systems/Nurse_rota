@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
@@ -47,7 +47,7 @@ router.get(
 
 router.post(
   "/",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const { name, email, role, facility, ward, employee_id } = req.body;
     if (!name) return res.status(400).json({ error: "Name is required" });
@@ -64,7 +64,7 @@ router.post(
 // Bulk insert nurses
 router.post(
   "/bulk",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const nurses = Array.isArray(req.body) ? req.body : [req.body];
     if (!nurses.length) return res.status(400).json({ error: "Array of nurses required" });
@@ -103,7 +103,7 @@ router.post(
 // Reset hours_this_month to 0 for a list of nurse IDs (or all if no ids given)
 router.patch(
   "/reset-hours",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const { nurse_ids } = req.body;
     if (nurse_ids && Array.isArray(nurse_ids) && nurse_ids.length) {
@@ -121,7 +121,7 @@ router.patch(
 // Bulk update target_hours for all nurses
 router.patch(
   "/bulk-target-hours",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const { target_hours } = req.body;
     if (target_hours == null) return res.status(400).json({ error: "target_hours required" });
@@ -132,7 +132,7 @@ router.patch(
 
 router.patch(
   "/:id",
-  requireRole("admin", "hr_admin", "head_nurse"),
+  requireCapability("edit_nurse_record", ["admin", "hr_admin", "head_nurse"]),
   wrap(async (req, res) => {
     const userRoles = req.user?.roles || [];
     const isHR = userRoles.some((r) => ["admin", "hr_admin"].includes(r));
@@ -195,7 +195,7 @@ router.patch(
 
 router.delete(
   "/:id",
-  requireRole("admin", "hr_admin"),
+  requireCapability("delete_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     await pool.query("DELETE FROM nurses WHERE id = $1", [req.params.id]);
     res.json({ success: true });
@@ -206,7 +206,7 @@ router.delete(
 // Called after the intern rota is published to prepare ward assignments for the next period.
 router.post(
   "/rotate-interns",
-  requireRole("admin", "cno", "chief_matron"),
+  requireCapability("rotate_interns", ["admin", "cno", "chief_matron"]),
   wrap(async (req, res) => {
     const { facility } = req.body;
     if (!facility) return res.status(400).json({ error: "facility is required" });

@@ -2,7 +2,8 @@ const router = require("express").Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
-const { requireAuth, requireRole } = require("../middleware/auth");
+const { requireAuth } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 
 const DEFAULT_INITIAL_PASSWORD = "RotaLogin@123";
 
@@ -241,7 +242,7 @@ router.post(
 router.get(
   "/admin/users",
   requireAuth,
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_users", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const { rows } = await pool.query(
       "SELECT id, email, full_name, is_active, must_change_password, password_changed_at, created_at, updated_at FROM profiles ORDER BY full_name",
@@ -253,7 +254,7 @@ router.get(
 router.post(
   "/admin/create-user",
   requireAuth,
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_users", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const { email, full_name, role, nurse_id } = req.body;
     const password = req.body.password || DEFAULT_INITIAL_PASSWORD;
@@ -310,7 +311,7 @@ router.post(
 router.delete(
   "/admin/users/:id",
   requireAuth,
-  requireRole("admin"),
+  requireCapability("delete_user_account", ["admin"]),
   wrap(async (req, res) => {
     await pool.query("DELETE FROM profiles WHERE id = $1", [req.params.id]);
     res.json({ success: true });
@@ -320,7 +321,7 @@ router.delete(
 router.patch(
   "/admin/users/:id/ban",
   requireAuth,
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_users", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const profileId = req.params.id;
     const client = await pool.connect();
@@ -366,7 +367,7 @@ router.patch(
 router.patch(
   "/admin/users/:id/unban",
   requireAuth,
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_users", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const profileId = req.params.id;
     const { rows: profileRows } = await pool.query(
@@ -391,7 +392,7 @@ router.patch(
 router.patch(
   "/admin/users/:id/reset-password",
   requireAuth,
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_users", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required" });
@@ -422,7 +423,7 @@ router.patch(
 router.patch(
   "/admin/users/:id/profile",
   requireAuth,
-  requireRole("admin", "cno"),
+  requireCapability("edit_user_profile", ["admin", "cno"]),
   wrap(async (req, res) => {
     const { full_name, email } = req.body;
     if (!full_name?.trim()) return res.status(400).json({ error: "full_name is required" });
@@ -465,7 +466,7 @@ router.patch(
 router.post(
   "/admin/bulk-create-users",
   requireAuth,
-  requireRole("admin"),
+  requireCapability("bulk_create_users", ["admin"]),
   wrap(async (req, res) => {
     const { default_password = DEFAULT_INITIAL_PASSWORD } = req.body;
     if (!default_password || default_password.length < 8)

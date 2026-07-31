@@ -39,6 +39,7 @@ app.use('/api/leave-requests',    requireAuth, require('./routes/leave-requests'
 app.use('/api/locum',             requireAuth, require('./routes/locum'));
 app.use('/api/audit-logs',        requireAuth, require('./routes/audit-logs'));
 app.use('/api/portal-settings',   requireAuth, require('./routes/portal-settings'));
+app.use('/api/roles',             requireAuth, require('./routes/roles'));
 app.use('/api/notifications',     requireAuth, require('./routes/notifications'));
 app.use('/api/nurse-period-hours',requireAuth, require('./routes/nurse-period-hours'));
 app.use('/api/rota-transitions',  requireAuth, require('./routes/rota-transitions'));

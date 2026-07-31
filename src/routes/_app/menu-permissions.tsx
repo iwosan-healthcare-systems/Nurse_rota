@@ -2,7 +2,7 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
-import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { useAuth, type AppRole } from "@/lib/auth-context";
 import {
   NAV_DEFINITIONS,
   ADMIN_LOCKED_KEYS,
@@ -45,22 +45,10 @@ export const Route = createFileRoute("/_app/menu-permissions")({
   component: MenuPermissionsPage,
 });
 
-const ROLES: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "hr_admin",
-  "service_support",
-  "nurse",
-  "surgical_nurse",
-  "porter",
-  "nursing_assistant",
-];
-
 function MenuPermissionsPage() {
   const navigate = useNavigate();
-  const { isAdmin, loading } = useAuth();
+  const { isAdmin, loading, allRoles, roleLabel } = useAuth();
+  const ROLES = allRoles.map((r) => r.key);
 
   const [overrides, setOverrides] = useState<Record<string, AppRole[]>>(loadMenuPermissions);
   const [editing, setEditing] = useState(false);
@@ -364,7 +352,7 @@ function MenuPermissionsPage() {
                 </th>
                 {ROLES.map((r) => (
                   <th key={r} className="px-3 py-3 font-medium text-center whitespace-nowrap">
-                    {ROLE_LABELS[r]}
+                    {roleLabel(r)}
                   </th>
                 ))}
               </tr>
@@ -402,7 +390,7 @@ function MenuPermissionsPage() {
                             >
                               <input
                                 type="checkbox"
-                                aria-label={`${def.label} — ${ROLE_LABELS[role]}`}
+                                aria-label={`${def.label} — ${roleLabel(role)}`}
                                 checked={checked}
                                 disabled={cellLocked}
                                 onChange={() => toggleRole(def.key, role)}

@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
+const { invalidateCapabilityCache } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
@@ -26,6 +27,7 @@ router.put(
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value RETURNING *`,
       [req.params.key, JSON.stringify(value)],
     );
+    if (req.params.key === "capabilities") invalidateCapabilityCache();
     res.json(rows[0]);
   }),
 );

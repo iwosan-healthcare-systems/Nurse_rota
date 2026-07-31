@@ -27,7 +27,7 @@ import {
   KeyRound,
   Pencil,
 } from "lucide-react";
-import { useAuth, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { Modal } from "./staff";
 import { EmptyState } from "@/components/EmptyState";
 import { Pagination, usePagination } from "@/components/Pagination";
@@ -44,19 +44,6 @@ export const Route = createFileRoute("/_app/users")({
   component: UsersPage,
 });
 
-const ALL_ROLES: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "hr_admin",
-  "service_support",
-  "nurse",
-  "porter",
-  "nursing_assistant",
-  "surgical_nurse",
-];
-
 function isPasswordExpired(user: { password_changed_at: string | null; roles: string[] }, pwExpiryDays: number): boolean {
   if (!user.password_changed_at) return false;
   if (user.roles.includes("admin")) return false;
@@ -65,7 +52,7 @@ function isPasswordExpired(user: { password_changed_at: string | null; roles: st
   return expiresAt <= new Date();
 }
 
-const ROLE_BADGE_COLORS: Record<AppRole, string> = {
+const ROLE_BADGE_COLORS: Record<SystemRole, string> = {
   admin: "bg-red-100 text-red-700 border-red-200",
   cno: "bg-violet-100 text-violet-700 border-violet-200",
   chief_matron: "bg-blue-100 text-blue-700 border-blue-200",
@@ -95,7 +82,8 @@ type UserRow = ProfileRow & {
 };
 
 function UsersPage() {
-  const { isAdmin, hasRole } = useAuth();
+  const { isAdmin, hasRole, allRoles, roleLabel } = useAuth();
+  const ALL_ROLES = allRoles.map((r) => r.key);
   const isServiceSupport = hasRole("service_support");
   const canAccessPage = isAdmin || isServiceSupport;
   const qc = useQueryClient();
@@ -146,8 +134,8 @@ function UsersPage() {
     const label = target?.full_name ?? target?.email ?? userId;
     try {
       await api.post("/user-roles", { user_id: userId, role });
-      toast.success(`Granted: ${ROLE_LABELS[role]}`);
-      void logAudit("Granted role", `${ROLE_LABELS[role]} → ${label}`);
+      toast.success(`Granted: ${roleLabel(role)}`);
+      void logAudit("Granted role", `${roleLabel(role)} → ${label}`);
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to grant role");
@@ -159,8 +147,8 @@ function UsersPage() {
     const label = target?.full_name ?? target?.email ?? userId;
     try {
       await api.del(`/user-roles?user_id=${userId}&role=${role}`);
-      toast.success(`Revoked: ${ROLE_LABELS[role]}`);
-      void logAudit("Revoked role", `${ROLE_LABELS[role]} → ${label}`);
+      toast.success(`Revoked: ${roleLabel(role)}`);
+      void logAudit("Revoked role", `${roleLabel(role)} → ${label}`);
       qc.invalidateQueries({ queryKey: ["user-profiles"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to revoke role");
@@ -307,7 +295,7 @@ function UsersPage() {
           <option value="">All roles</option>
           {ALL_ROLES.map((r) => (
             <option key={r} value={r}>
-              {ROLE_LABELS[r]}
+              {roleLabel(r)}
             </option>
           ))}
         </select>
@@ -440,6 +428,8 @@ function UsersPage() {
 }
 
 function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const { allRoles, roleLabel } = useAuth();
+  const ALL_ROLES = allRoles.map((r) => r.key);
   const [form, setForm] = useState({
     fullName: "",
     email: "",
@@ -465,7 +455,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
       toast.success(`User created — ${form.email} can log in immediately`);
       void logAudit(
         "Created user login",
-        `${form.fullName || form.email} (${form.email}) — ${ROLE_LABELS[form.role as AppRole] ?? form.role}`,
+        `${form.fullName || form.email} (${form.email}) — ${roleLabel(form.role)}`,
       );
       onCreated();
     } catch (e: unknown) {
@@ -549,7 +539,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
             >
               {ALL_ROLES.map((r) => (
                 <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
+                  {roleLabel(r)}
                 </option>
               ))}
             </select>
@@ -1039,6 +1029,8 @@ function UserRowItem({
   onResetPassword: (user: UserRow) => void;
   onEdit: (user: UserRow) => void;
 }) {
+  const { allRoles, roleLabel } = useAuth();
+  const ALL_ROLES = allRoles.map((r) => r.key);
   const [adding, setAdding] = useState<AppRole | "">("");
   // Service Support cannot assign or revoke the admin role
   const assignableRoles = isAdmin ? ALL_ROLES : ALL_ROLES.filter((r) => r !== "admin");
@@ -1083,15 +1075,15 @@ function UserRowItem({
             user.roles.map((r) => (
               <span
                 key={r}
-                className={`inline-flex items-center gap-1 rounded-full border text-[11px] px-2 py-0.5 ${ROLE_BADGE_COLORS[r]}`}
+                className={`inline-flex items-center gap-1 rounded-full border text-[11px] px-2 py-0.5 ${ROLE_BADGE_COLORS[r as SystemRole] ?? "bg-slate-100 text-slate-700 border-slate-200"}`}
               >
-                {ROLE_LABELS[r]}
+                {roleLabel(r)}
                 {(isAdmin || r !== "admin") && (
                   <button
                     type="button"
                     onClick={() => onRemove(user.id, r)}
                     className="hover:text-destructive -my-1.5 -mr-1 p-1.5 grid place-items-center"
-                    title={`Revoke ${ROLE_LABELS[r]}`}
+                    title={`Revoke ${roleLabel(r)}`}
                   >
                     <Trash2 className="h-2.5 w-2.5" />
                   </button>
@@ -1115,7 +1107,7 @@ function UserRowItem({
               <option value="">Add role…</option>
               {available.map((r) => (
                 <option key={r} value={r}>
-                  {ROLE_LABELS[r]}
+                  {roleLabel(r)}
                 </option>
               ))}
             </select>

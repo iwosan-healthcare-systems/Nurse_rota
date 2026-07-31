@@ -6,32 +6,12 @@ import logo from "@/assets/logo.jpeg";
 import { toast } from "sonner";
 import {
   rememberSelectedRole,
-  ROLE_DESCRIPTIONS,
-  ROLE_LABELS,
   selectedRoleStorageKey,
   useAuth,
   useAuthInternal,
   type ApiUser,
   type AppRole,
 } from "@/lib/auth-context";
-
-const APP_ROLES: AppRole[] = [
-  "admin",
-  "cno",
-  "chief_matron",
-  "head_nurse",
-  "hr_admin",
-  "service_support",
-  "nurse",
-  "surgical_nurse",
-  "porter",
-  "nursing_assistant",
-];
-
-function toAppRoles(rawRoles: unknown): AppRole[] {
-  if (!Array.isArray(rawRoles)) return [];
-  return rawRoles.filter((role): role is AppRole => APP_ROLES.includes(role as AppRole));
-}
 
 export const Route = createFileRoute("/login")({
   beforeLoad: async () => {
@@ -59,7 +39,7 @@ export const Route = createFileRoute("/login")({
 
 function LoginPage() {
   const navigate = useNavigate();
-  const { user, roles, needsRoleSelection, selectRole } = useAuth();
+  const { user, roles, needsRoleSelection, selectRole, roleLabel, roleDescription } = useAuth();
   const { setLoggedInUser } = useAuthInternal();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -92,7 +72,11 @@ function LoginPage() {
       setToken(data.token);
 
       const nextUser = data.user;
-      const nextRoles = toAppRoles(nextUser.roles);
+      // Roles come straight from the server, already validated against the
+      // roles table (FK constraint) — no client-side whitelist needed, so a
+      // user whose only role is an admin-created custom role isn't silently
+      // filtered out here.
+      const nextRoles = nextUser.roles;
 
       if (nextRoles.length > 1) {
         sessionStorage.removeItem(selectedRoleStorageKey(nextUser.id));
@@ -129,7 +113,7 @@ function LoginPage() {
     const userId = pendingUser?.id ?? user?.id;
     if (userId) rememberSelectedRole(userId, selectedRole);
     selectRole(selectedRole);
-    toast.success(`Signed in as ${ROLE_LABELS[selectedRole]}`);
+    toast.success(`Signed in as ${roleLabel(selectedRole)}`);
     navigate({ to: "/" });
   }
 
@@ -197,13 +181,13 @@ function LoginPage() {
                 >
                   {roleOptions.map((role) => (
                     <option key={role} value={role}>
-                      {ROLE_LABELS[role]}
+                      {roleLabel(role)}
                     </option>
                   ))}
                 </select>
                 {selectedRole && (
                   <p className="mt-2 text-xs text-muted-foreground">
-                    {ROLE_DESCRIPTIONS[selectedRole]}
+                    {roleDescription(selectedRole)}
                   </p>
                 )}
               </div>

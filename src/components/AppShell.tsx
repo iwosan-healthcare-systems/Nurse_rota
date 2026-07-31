@@ -31,14 +31,15 @@ import {
   ClipboardCheck,
   CalendarX,
   ArrowRightLeft,
+  Shield,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
-import { useAuth, ROLE_DESCRIPTIONS, ROLE_LABELS, type AppRole } from "@/lib/auth-context";
+import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { api, getToken } from "@/lib/api";
 import { getEffectiveRoles } from "@/lib/menu-permissions";
 
-const ALL: AppRole[] = [
+const ALL: SystemRole[] = [
   "admin",
   "cno",
   "chief_matron",
@@ -48,8 +49,8 @@ const ALL: AppRole[] = [
   "porter",
   "nursing_assistant",
 ];
-const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
-const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
+const MANAGERS: SystemRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
+const APPROVERS: SystemRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, roles: ALL },
@@ -75,6 +76,7 @@ const nav = [
     icon: LayoutGrid,
     roles: ["admin"] as AppRole[],
   },
+  { to: "/roles", label: "System Roles", icon: Shield, roles: ["admin"] as AppRole[] },
 ] as const;
 
 // eslint-disable-next-line react-refresh/only-export-components
@@ -1228,6 +1230,7 @@ function RoleSelectionScreen({
   selectRole: (role: AppRole) => void;
   signOut: () => void;
 }) {
+  const { roleLabel, roleDescription } = useAuth();
   const [selected, setSelected] = useState<AppRole>(roles[0]);
 
   useEffect(() => {
@@ -1270,11 +1273,11 @@ function RoleSelectionScreen({
         >
           {roles.map((role) => (
             <option key={role} value={role}>
-              {ROLE_LABELS[role]}
+              {roleLabel(role)}
             </option>
           ))}
         </select>
-        <p className="mt-2 min-h-10 text-xs text-muted-foreground">{ROLE_DESCRIPTIONS[selected]}</p>
+        <p className="mt-2 min-h-10 text-xs text-muted-foreground">{roleDescription(selected)}</p>
 
         <button
           type="submit"
@@ -1371,12 +1374,13 @@ function UserBlock({
   role: string | undefined;
   signOut: () => void;
 }) {
+  const { roleLabel } = useAuth();
   return (
     <div className="px-4 py-4 border-t border-sidebar-border flex items-center gap-3">
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium text-sidebar-foreground truncate">{fullName ?? "User"}</p>
         <p className="text-xs text-sidebar-foreground/60 truncate">
-          {role ? ROLE_LABELS[role as keyof typeof ROLE_LABELS] : "Member"}
+          {role ? roleLabel(role) : "Member"}
         </p>
       </div>
       <button

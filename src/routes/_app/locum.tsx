@@ -171,7 +171,7 @@ function LocumPage() {
   const lockedLocumFacility: string | null = canFilterLocumFacility ? null : (nurseFacility ?? null);
   const [selectedLocumFacility, setSelectedLocumFacility] = useState("");
   const locumFacility: string | null = lockedLocumFacility ?? (selectedLocumFacility || null);
-  const isNurse = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
+  const isNurse = activeRole !== null && NURSE_TIER_ROLES.some((r) => r === activeRole);
   // Only ward-level roles (nurse, porter, nursing_assistant, surgical_nurse) see the invites tab.
   // Head nurses / matrons are excluded — they manage requests, not receive them.
   const canSeeInvites = isNurse;

@@ -1,11 +1,11 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
   "/",
-  requireRole("admin", "cno", "hr_admin", "service_support"),
+  requireCapability("view_user_roles", ["admin", "cno", "hr_admin", "service_support"]),
   wrap(async (req, res) => {
     const conditions = [];
     const params = [];
@@ -25,7 +25,7 @@ router.get(
 
 router.post(
   "/",
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_user_roles", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const { user_id, role } = req.body;
     if (!user_id || !role) return res.status(400).json({ error: "user_id and role required" });
@@ -46,7 +46,7 @@ router.post(
 
 router.delete(
   "/:id",
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_user_roles", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const callerRoles = req.user?.roles || [];
     const callerIsAdmin = callerRoles.includes("admin");
@@ -63,7 +63,7 @@ router.delete(
 
 router.delete(
   "/",
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("manage_user_roles", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const { user_id, role } = req.query;
     if (!user_id || !role) return res.status(400).json({ error: "user_id and role required" });

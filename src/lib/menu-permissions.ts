@@ -1,10 +1,15 @@
-import type { AppRole } from "./auth-context";
+import type { AppRole, SystemRole } from "./auth-context";
 
 export const MENU_PERMISSIONS_KEY = "nurse_rota_menu_permissions";
 
 // Mirrors the nav array in AppShell — one source of truth for labels / defaults.
 // Icons live in AppShell; this module only cares about access control.
-const ALL: AppRole[] = [
+// These are DEFAULT role sets used only when no admin override exists for a
+// nav item (see getEffectiveRoles below) — kept as fixed SystemRole lists so a
+// newly created custom role starts with NO menu access anywhere until an
+// admin explicitly grants it via the /menu-permissions matrix, rather than
+// silently inheriting visibility of every "ALL"/"MANAGERS" page.
+const ALL: SystemRole[] = [
   "admin",
   "cno",
   "chief_matron",
@@ -16,8 +21,8 @@ const ALL: AppRole[] = [
   "porter",
   "nursing_assistant",
 ];
-const MANAGERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"];
-const APPROVERS: AppRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
+const MANAGERS: SystemRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"];
+const APPROVERS: SystemRole[] = ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"];
 
 export type NavDef = { key: string; label: string; defaultRoles: AppRole[] };
 
@@ -39,6 +44,7 @@ export const NAV_DEFINITIONS: NavDef[] = [
   { key: "/users", label: "User Profiles", defaultRoles: ["admin", "service_support"] },
   { key: "/permissions", label: "Permissions", defaultRoles: ["admin"] },
   { key: "/menu-permissions", label: "Menu Access", defaultRoles: ["admin"] },
+  { key: "/roles", label: "System Roles", defaultRoles: ["admin"] },
 ];
 
 // These routes are always visible to admins and cannot be hidden.
@@ -46,6 +52,7 @@ export const ADMIN_LOCKED_KEYS = new Set([
   "/users",
   "/permissions",
   "/menu-permissions",
+  "/roles",
   "/audit",
 ]);
 

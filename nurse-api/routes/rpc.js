@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.post(
@@ -39,7 +39,7 @@ router.post(
 
 router.post(
   "/auto-end-overdue-shifts",
-  requireRole("admin", "cno"),
+  requireCapability("manage_rota_periods", ["admin", "cno"]),
   wrap(async (req, res) => {
     // Round to 2 decimal places — consistent with the cron job.
     const result = await pool.query(`
@@ -238,7 +238,7 @@ router.get(
 
 router.post(
   "/auto-close-period",
-  requireRole("admin", "cno"),
+  requireCapability("manage_rota_periods", ["admin", "cno"]),
   wrap(async (req, res) => {
     // Use 28-day bucket logic so a running Period 2 doesn't hide completed
     // Period 1.  Dates are bucketed from the earliest ever published date,

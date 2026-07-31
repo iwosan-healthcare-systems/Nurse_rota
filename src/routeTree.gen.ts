@@ -17,6 +17,7 @@ import { Route as AppUsersRouteImport } from './routes/_app/users'
 import { Route as AppStaffRouteImport } from './routes/_app/staff'
 import { Route as AppShiftRouteImport } from './routes/_app/shift'
 import { Route as AppRotaRouteImport } from './routes/_app/rota'
+import { Route as AppRolesRouteImport } from './routes/_app/roles'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
 import { Route as AppPermissionsRouteImport } from './routes/_app/permissions'
 import { Route as AppMenuPermissionsRouteImport } from './routes/_app/menu-permissions'
@@ -62,6 +63,11 @@ const AppShiftRoute = AppShiftRouteImport.update({
 const AppRotaRoute = AppRotaRouteImport.update({
   id: '/rota',
   path: '/rota',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRolesRoute = AppRolesRouteImport.update({
+  id: '/roles',
+  path: '/roles',
   getParentRoute: () => AppRoute,
 } as any)
 const AppReportsRoute = AppReportsRouteImport.update({
@@ -110,6 +116,7 @@ export interface FileRoutesByFullPath {
   '/menu-permissions': typeof AppMenuPermissionsRoute
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
+  '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
   '/shift': typeof AppShiftRoute
   '/staff': typeof AppStaffRoute
@@ -125,6 +132,7 @@ export interface FileRoutesByTo {
   '/menu-permissions': typeof AppMenuPermissionsRoute
   '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
+  '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
   '/shift': typeof AppShiftRoute
   '/staff': typeof AppStaffRoute
@@ -143,6 +151,7 @@ export interface FileRoutesById {
   '/_app/menu-permissions': typeof AppMenuPermissionsRoute
   '/_app/permissions': typeof AppPermissionsRoute
   '/_app/reports': typeof AppReportsRoute
+  '/_app/roles': typeof AppRolesRoute
   '/_app/rota': typeof AppRotaRoute
   '/_app/shift': typeof AppShiftRoute
   '/_app/staff': typeof AppStaffRoute
@@ -162,6 +171,7 @@ export interface FileRouteTypes {
     | '/menu-permissions'
     | '/permissions'
     | '/reports'
+    | '/roles'
     | '/rota'
     | '/shift'
     | '/staff'
@@ -177,6 +187,7 @@ export interface FileRouteTypes {
     | '/menu-permissions'
     | '/permissions'
     | '/reports'
+    | '/roles'
     | '/rota'
     | '/shift'
     | '/staff'
@@ -194,6 +205,7 @@ export interface FileRouteTypes {
     | '/_app/menu-permissions'
     | '/_app/permissions'
     | '/_app/reports'
+    | '/_app/roles'
     | '/_app/rota'
     | '/_app/shift'
     | '/_app/staff'
@@ -265,6 +277,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRotaRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/roles': {
+      id: '/_app/roles'
+      path: '/roles'
+      fullPath: '/roles'
+      preLoaderRoute: typeof AppRolesRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/reports': {
       id: '/_app/reports'
       path: '/reports'
@@ -325,6 +344,7 @@ interface AppRouteChildren {
   AppMenuPermissionsRoute: typeof AppMenuPermissionsRoute
   AppPermissionsRoute: typeof AppPermissionsRoute
   AppReportsRoute: typeof AppReportsRoute
+  AppRolesRoute: typeof AppRolesRoute
   AppRotaRoute: typeof AppRotaRoute
   AppShiftRoute: typeof AppShiftRoute
   AppStaffRoute: typeof AppStaffRoute
@@ -341,6 +361,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppMenuPermissionsRoute: AppMenuPermissionsRoute,
   AppPermissionsRoute: AppPermissionsRoute,
   AppReportsRoute: AppReportsRoute,
+  AppRolesRoute: AppRolesRoute,
   AppRotaRoute: AppRotaRoute,
   AppShiftRoute: AppShiftRoute,
   AppStaffRoute: AppStaffRoute,

@@ -1,11 +1,11 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
   "/",
-  requireRole("admin", "cno", "service_support"),
+  requireCapability("view_audit_logs", ["admin", "cno", "service_support"]),
   wrap(async (req, res) => {
     const conditions = [];
     const params = [];

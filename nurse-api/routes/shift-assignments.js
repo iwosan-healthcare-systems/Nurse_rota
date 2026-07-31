@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
@@ -78,7 +78,7 @@ router.get(
 
 router.post(
   "/",
-  requireRole("admin", "head_nurse"),
+  requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
   wrap(async (req, res) => {
     const { nurse_id, shift, shift_date, ward, status, created_by } = req.body;
     if (!nurse_id || !shift || !shift_date)
@@ -96,7 +96,7 @@ router.post(
 // Batch upsert (onConflict: nurse_id, shift_date)
 router.post(
   "/upsert",
-  requireRole("admin", "head_nurse"),
+  requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
   wrap(async (req, res) => {
     const rows = req.body;
     if (!Array.isArray(rows) || !rows.length)
@@ -158,7 +158,7 @@ router.post(
 
 router.patch(
   "/:id",
-  requireRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
+  requireCapability("manage_shift_assignments", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
     const allowed = ["shift", "ward", "status", "shift_date"];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
@@ -391,7 +391,7 @@ router.patch(
 // Bulk delete by filter (must come before /:id to avoid routing conflict)
 router.delete(
   "/",
-  requireRole("admin", "head_nurse"),
+  requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
   wrap(async (req, res) => {
     const conditions = [];
     const params = [];
@@ -428,7 +428,7 @@ router.delete(
 
 router.delete(
   "/:id",
-  requireRole("admin", "cno", "chief_matron", "head_nurse", "hr_admin"),
+  requireCapability("manage_shift_assignments", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
     await pool.query("DELETE FROM shift_assignments WHERE id = $1", [req.params.id]);
     res.json({ success: true });
@@ -439,7 +439,7 @@ router.delete(
 // Flips any draft shift cell to LEAVE where the nurse has an approved leave overlapping that date.
 router.post(
   "/reapply-leave",
-  requireRole("admin", "head_nurse"),
+  requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
   wrap(async (req, res) => {
     const { nurse_ids, from_date, to_date } = req.body;
     if (!Array.isArray(nurse_ids) || !nurse_ids.length || !from_date || !to_date)

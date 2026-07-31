@@ -150,7 +150,7 @@ function RotaPage() {
     activeRole,
   } = useAuth();
   const { myOnly } = Route.useSearch();
-  const isNurseTier = activeRole !== null && NURSE_TIER_ROLES.includes(activeRole);
+  const isNurseTier = activeRole !== null && NURSE_TIER_ROLES.some((r) => r === activeRole);
   const canEdit = canEditRota;
   const canGenerate = canAutoGenerate;
   const canSubmit = canSubmitApproval;

@@ -3,7 +3,11 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { api, getToken, clearToken } from "@/lib/api";
 import { toast } from "sonner";
 
-export type AppRole =
+// The 10 permanent, undeletable roles seeded into the `roles` table
+// (nurse-api/migrations/022_dynamic_roles.sql) — many workflow checks
+// elsewhere in the app (e.g. the rota approval pipeline) compare activeRole
+// against these literal strings, so they must never be renamed or removed.
+export type SystemRole =
   | "admin"
   | "cno"
   | "chief_matron"
@@ -14,6 +18,20 @@ export type AppRole =
   | "porter"
   | "nursing_assistant"
   | "surgical_nurse";
+
+// AppRole additionally accepts any admin-created custom role key. The
+// `(string & {})` branding keeps IDE autocomplete suggesting the 10 known
+// SystemRole literals while still accepting arbitrary custom role strings —
+// unlike a plain `string`, which would lose autocomplete entirely.
+export type AppRole = SystemRole | (string & {});
+
+export type RoleDef = {
+  key: string;
+  label: string;
+  description: string;
+  is_system: boolean;
+  usage_count?: number;
+};
 
 export interface ApiUser {
   id: string;
@@ -44,6 +62,10 @@ interface AuthCtx {
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
   isAdmin: boolean;
+  // ── Dynamic role registry (system + admin-created custom roles) ───────────
+  allRoles: RoleDef[];
+  roleLabel: (key: string) => string;
+  roleDescription: (key: string) => string;
   // ── Capability flags (all read from the permissions matrix) ───────────────
   canManageRoles: boolean;
   canDelete: boolean;
@@ -86,6 +108,7 @@ export function rememberSelectedRole(uid: string, role: AppRole) {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<ApiUser | null>(null);
   const [capabilities, setCapabilities] = useState<{ key: string; roles: AppRole[] }[]>([]);
+  const [allRoles, setAllRoles] = useState<RoleDef[]>([]);
   const [roles, setRoles] = useState<AppRole[]>([]);
   const [activeRole, setActiveRole] = useState<AppRole | null>(null);
   const [mustChangePassword, setMustChangePassword] = useState(false);
@@ -136,6 +159,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     window.addEventListener("capabilities-changed", handler);
     return () => window.removeEventListener("capabilities-changed", handler);
   }, []);
+
+  // Pull the dynamic role registry (system + custom roles) once a token
+  // exists, and re-fetch whenever the /roles admin page creates/edits/deletes
+  // a role. Re-runs on `user` (not just on mount) so a *fresh* login — where
+  // no token existed yet at initial mount — still picks this up in time for
+  // the login page's role-selection screen to show real custom-role labels
+  // instead of falling back to the raw key.
+  useEffect(() => {
+    if (!getToken()) return;
+    const fetchRoles = () => {
+      api
+        .get<RoleDef[]>("/roles")
+        .then((rows) => setAllRoles(rows))
+        .catch(() => {/* non-critical — roleLabel falls back to ROLE_LABELS/raw key */});
+    };
+    fetchRoles();
+    window.addEventListener("roles-changed", fetchRoles);
+    return () => window.removeEventListener("roles-changed", fetchRoles);
+  }, [user]);
 
   // Auto-logout after 1 hour of inactivity. Warns at 55 minutes.
   useEffect(() => {
@@ -249,6 +291,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const roles = capabilities.find((c) => c.key === key)?.roles ?? defaults;
     return ar !== null && roles.includes(ar);
   };
+  const roleLabel = (key: string) =>
+    allRoles.find((r) => r.key === key)?.label ?? ROLE_LABELS[key as SystemRole] ?? key;
+  const roleDescription = (key: string) =>
+    allRoles.find((r) => r.key === key)?.description ?? ROLE_DESCRIPTIONS[key as SystemRole] ?? "";
 
   const value: AuthCtx = {
     user,
@@ -267,6 +313,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasRole,
     hasAnyRole,
     isAdmin: ar === "admin",
+    allRoles,
+    roleLabel,
+    roleDescription,
     canManageRoles: cap("manage_roles", ["admin", "service_support"]),
     canDelete: cap("delete_staff", ["admin"]),
     canManageStaff: cap("manage_staff", ["admin", "hr_admin"]),
@@ -340,14 +389,14 @@ export function useAuthInternal() {
   return c;
 }
 
-export const NURSE_TIER_ROLES: AppRole[] = [
+export const NURSE_TIER_ROLES: SystemRole[] = [
   "nurse",
   "porter",
   "nursing_assistant",
   "surgical_nurse",
 ];
 
-export const ROLE_LABELS: Record<AppRole, string> = {
+export const ROLE_LABELS: Record<SystemRole, string> = {
   admin: "System Administrator",
   cno: "Chief Nursing Officer",
   chief_matron: "Chief Matron",
@@ -360,7 +409,7 @@ export const ROLE_LABELS: Record<AppRole, string> = {
   surgical_nurse: "Surgical Nurse",
 };
 
-export const ROLE_DESCRIPTIONS: Record<AppRole, string> = {
+export const ROLE_DESCRIPTIONS: Record<SystemRole, string> = {
   admin: "Full system access — manage staff, wards, users and all settings",
   cno: "Approve rotas, manage shift switches and oversee all facilities",
   chief_matron: "Review and approve rotas, manage leave and ward staffing",

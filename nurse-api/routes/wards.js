@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.get(
@@ -26,7 +26,7 @@ router.get(
 
 router.post(
   "/",
-  requireRole("admin", "cno"),
+  requireCapability("manage_wards", ["admin", "cno"]),
   wrap(async (req, res) => {
     const { name, facility, min_morning_nurses, min_morning_na, min_night_nurses, min_night_na } =
       req.body;
@@ -50,7 +50,7 @@ router.post(
 
 router.patch(
   "/:id",
-  requireRole("admin", "cno"),
+  requireCapability("manage_wards", ["admin", "cno"]),
   wrap(async (req, res) => {
     const allowed = [
       "name",
@@ -78,7 +78,7 @@ router.patch(
 
 router.delete(
   "/:id",
-  requireRole("admin", "cno"),
+  requireCapability("manage_wards", ["admin", "cno"]),
   wrap(async (req, res) => {
     await pool.query("DELETE FROM wards WHERE id = $1", [req.params.id]);
     res.json({ success: true });
