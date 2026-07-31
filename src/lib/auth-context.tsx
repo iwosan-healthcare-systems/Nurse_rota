@@ -62,6 +62,12 @@ interface AuthCtx {
   hasRole: (r: AppRole) => boolean;
   hasAnyRole: (rs: AppRole[]) => boolean;
   isAdmin: boolean;
+  // True when this login is linked to a nurses/roster record AND its active
+  // role isn't one of the always-management roles — the general "show the
+  // personal/individual view instead of the facility-wide management view"
+  // signal, used by Dashboard/Shift/Rota/Locum. Works for custom roles too,
+  // since it's driven by the nurse link rather than a hardcoded role list.
+  isStaffAccount: boolean;
   // ── Dynamic role registry (system + admin-created custom roles) ───────────
   allRoles: RoleDef[];
   roleLabel: (key: string) => string;
@@ -291,6 +297,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const roles = capabilities.find((c) => c.key === key)?.roles ?? defaults;
     return ar !== null && roles.includes(ar);
   };
+  // Roles that are never "staff on the roster with their own shifts to track,"
+  // even when the login happens to also be linked to a nurses record (e.g. an
+  // HR admin created via Staff > Create Login for a real nurse row) — see
+  // src/routes/_app/staff.tsx's CreateLoginModal, which explicitly allows
+  // assigning admin/cno/hr_admin/chief_matron to a nurse-linked account.
+  // chief_matron and head_nurse are deliberately NOT in this list: they work
+  // regular shifts and are expected to see their personal schedule alongside
+  // their management alerts (see NurseDashboard).
+  const ALWAYS_MANAGEMENT_ROLES: readonly string[] = ["admin", "cno", "hr_admin", "service_support"];
+  const isStaffAccount = !!(user?.nurse_id && ar && !ALWAYS_MANAGEMENT_ROLES.includes(ar));
+
   const roleLabel = (key: string) =>
     allRoles.find((r) => r.key === key)?.label ?? ROLE_LABELS[key as SystemRole] ?? key;
   const roleDescription = (key: string) =>
@@ -313,6 +330,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     hasRole,
     hasAnyRole,
     isAdmin: ar === "admin",
+    isStaffAccount,
     allRoles,
     roleLabel,
     roleDescription,

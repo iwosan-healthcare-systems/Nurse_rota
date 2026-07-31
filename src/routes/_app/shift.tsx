@@ -147,7 +147,7 @@ function shiftTimeLabel(shift: string) {
 }
 
 function ShiftPage() {
-  const { nurseId, fullName, activeRole } = useAuth();
+  const { nurseId, fullName, activeRole, isStaffAccount } = useAuth();
 
   // All hooks must be called unconditionally (Rules of Hooks).
   // The management-role early return is placed after every hook call below.
@@ -377,8 +377,8 @@ function ShiftPage() {
 
   // ── Auto-record missed shift (0 hours) once the shift window has closed ─────
   useEffect(() => {
-    // Skip management roles and matrons (synthetic assignments)
-    if (activeRole && ["admin", "cno", "hr_admin"].includes(activeRole)) return;
+    // Skip management accounts and matrons (synthetic assignments)
+    if (!isStaffAccount) return;
     if (isMatronNurse) return;
     // Wait until the shift log query has settled — never record while still loading.
     if (shiftLogLoading || shiftLog || missedRecordedRef.current || !nurseId) return;
@@ -440,9 +440,10 @@ function ShiftPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [now, shiftLogLoading]);
 
-  // Only CNO, HR/Admin and System Admin see the all-nurses management view.
-  // Chief Matron and Head Nurse work regular shifts so they get the personal tracker.
-  if (activeRole && ["admin", "cno", "hr_admin"].includes(activeRole)) {
+  // Management accounts (and any account with no roster link — e.g. an
+  // office-only custom role) see the all-nurses management view. Anyone
+  // linked to a roster record gets the personal tracker, regardless of role.
+  if (!isStaffAccount) {
     return <AllNursesShiftView />;
   }
 

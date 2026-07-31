@@ -1525,20 +1525,14 @@ function ManagementDashboard() {
 // ── Root dashboard ────────────────────────────────────────────────────────────
 
 function Dashboard() {
-  const { activeRole, nurseId } = useAuth();
+  const { isStaffAccount } = useAuth();
 
-  // Shift-working roles get the personal nurse dashboard. ManagementAlerts is
-  // rendered inside NurseDashboard so head_nurse and chief_matron still see
+  // Any login linked to a roster record (and not one of the always-management
+  // roles) gets the personal nurse dashboard — role-agnostic, so a custom
+  // role works correctly here without needing to be special-cased. ManagementAlerts
+  // is rendered inside NurseDashboard so head_nurse and chief_matron still see
   // leave-blocking and regen alerts alongside their personal schedule.
-  const shiftWorkerRoles = [
-    "nurse",
-    "chief_matron",
-    "head_nurse",
-    "porter",
-    "nursing_assistant",
-    "surgical_nurse",
-  ];
-  if (activeRole && shiftWorkerRoles.includes(activeRole) && nurseId) {
+  if (isStaffAccount) {
     return <NurseDashboard />;
   }
 
