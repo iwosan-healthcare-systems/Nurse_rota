@@ -2304,17 +2304,26 @@ ${sections}
                             {fmtDate(l.to_date)}
                           </td>
                           <td className="px-4 py-3">
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                                l.status === "Approved"
-                                  ? "bg-emerald-100 text-emerald-700"
-                                  : l.status === "Rejected"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-amber-100 text-amber-700"
-                              }`}
-                            >
-                              {l.status}
-                            </span>
+                            {/* A "Rejected" row with no reviewer was auto-declined by the
+                                deadline cron, not actively rejected by a person — show that
+                                distinctly rather than implying someone reviewed and declined it. */}
+                            {l.status === "Rejected" && !l.reviewed_by_name ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
+                                Time Elapsed
+                              </span>
+                            ) : (
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                  l.status === "Approved"
+                                    ? "bg-emerald-100 text-emerald-700"
+                                    : l.status === "Rejected"
+                                      ? "bg-rose-100 text-rose-700"
+                                      : "bg-amber-100 text-amber-700"
+                                }`}
+                              >
+                                {l.status}
+                              </span>
+                            )}
                           </td>
                           <td className="px-4 py-3">
                             {l.rota_stage_at_request === "published" ? (

@@ -66,6 +66,17 @@ const statusStyle: Record<string, string> = {
   Rejected: "bg-destructive/15 text-destructive",
 };
 
+// A "Rejected" row with no reviewer was auto-declined by the deadline cron
+// (jobs/auto-decline-requests.js never sets reviewed_by) rather than actively
+// rejected by a person — show that distinctly so it doesn't read as someone
+// having reviewed and turned it down.
+function statusDisplay(l: LeaveRow): { label: string; className: string } {
+  if (l.status === "Rejected" && !l.reviewed_by_name) {
+    return { label: "Time Elapsed", className: "bg-muted text-muted-foreground" };
+  }
+  return { label: l.status, className: statusStyle[l.status] };
+}
+
 type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
 type ActiveTab = "leave" | "switches";
 
@@ -812,9 +823,9 @@ function LeaveTable({
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           <span
-                            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusDisplay(l).className}`}
                           >
-                            {l.status}
+                            {statusDisplay(l).label}
                           </span>
                           {l.status === "Pending" &&
                             !isShiftSwitch(l) &&
@@ -1089,9 +1100,9 @@ function SwitchTable({
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusStyle[l.status]}`}
+                        className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusDisplay(l).className}`}
                       >
-                        {l.status}
+                        {statusDisplay(l).label}
                       </span>
                     </td>
                     {canApprove && (

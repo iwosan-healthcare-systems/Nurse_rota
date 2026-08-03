@@ -13,6 +13,7 @@ import {
   Undo2,
   CalendarRange,
   AlertTriangle,
+  ClipboardList,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,6 +31,7 @@ import {
 } from "@/lib/auto-schedule";
 import { FacilityChips } from "@/components/FacilityChips";
 import { xlsWorkbook, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
+import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/approvals")({
   head: () => ({
@@ -258,6 +260,7 @@ function ApprovalsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<string | null>(null);
   const [showAllPeriods, setShowAllPeriods] = useState(false);
+  const [tab, setTab] = useState<"rota" | "edit-access">("rota");
 
   const { data: workflowStatus } = useQuery<{
     firstRotaPublished: boolean;
@@ -320,6 +323,9 @@ function ApprovalsPage() {
   const nurseToRole = useMemo(() => new Map(allNurses.map((n) => [n.id, n.role])), [allNurses]);
 
   // ── HR edit-access request review ────────────────────────────────────────
+  // Full history (not just Pending) so HR can always see who requested edit
+  // access, when, and how it was decided — tracked in its own tab rather
+  // than a card that disappears once a request is resolved.
   type EditRequest = {
     id: string;
     facility: string;
@@ -330,13 +336,24 @@ function ApprovalsPage() {
     requested_by_name: string | null;
     reason: string;
     status: "Pending" | "Approved" | "Declined";
+    created_at: string;
+    reviewed_at: string | null;
+    review_note: string | null;
   };
-  const { data: editRequests = [] } = useQuery<EditRequest[]>({
-    queryKey: ["rota-edit-requests-pending"],
+  const { data: allEditRequests = [] } = useQuery<EditRequest[]>({
+    queryKey: ["rota-edit-requests-all"],
     enabled: canGrantRotaEditAccess,
-    queryFn: () => api.get<EditRequest[]>("/rota-edit-requests?status=Pending"),
+    queryFn: () => api.get<EditRequest[]>("/rota-edit-requests"),
   });
+  const pendingEditRequestCount = allEditRequests.filter((r) => r.status === "Pending").length;
   const [decidingEditRequest, setDecidingEditRequest] = useState<string | null>(null);
+  const [editReqPage, setEditReqPage] = useState(1);
+  const [editReqPageSize, setEditReqPageSize] = useState(20);
+  const { pageItems: editReqPageItems, totalPages: editReqTotalPages } = usePagination(
+    allEditRequests,
+    editReqPageSize,
+    editReqPage,
+  );
 
   async function decideEditRequest(req: EditRequest, status: "Approved" | "Declined") {
     setDecidingEditRequest(req.id);
@@ -352,7 +369,7 @@ function ApprovalsPage() {
       } else {
         toast.success("Declined");
       }
-      qc.invalidateQueries({ queryKey: ["rota-edit-requests-pending"] });
+      qc.invalidateQueries({ queryKey: ["rota-edit-requests-all"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to decide request");
@@ -360,6 +377,13 @@ function ApprovalsPage() {
       setDecidingEditRequest(null);
     }
   }
+
+  const EDIT_REQ_STATUS_COLORS: Record<EditRequest["status"], string> = {
+    Pending: "bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-950/30 dark:text-amber-400",
+    Approved:
+      "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400",
+    Declined: "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400",
+  };
 
   const windows = useMemo(
     () => groupIntoWindows(rows, nurseToFacility, nurseToRole),
@@ -1038,12 +1062,40 @@ td.sm{text-align:left;color:#444;min-width:55px}
     );
   }
 
+  // ── Tab styles ─────────────────────────────────────────────────────────────
+
+  const tabCls = (t: typeof tab) =>
+    `px-4 py-2 text-sm font-medium rounded-md transition inline-flex items-center ${tab === t ? "bg-primary text-primary-foreground" : "hover:bg-muted text-muted-foreground"}`;
+
   // ── Page render ────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-5">
       <PageHeader title="Approval Workflow" subtitle="Draft → Submitted → HR Approved → Published" />
 
+      {/* Tabs */}
+      <div className="flex gap-1 bg-muted/50 rounded-lg p-1 w-fit flex-wrap">
+        <button type="button" className={tabCls("rota")} onClick={() => setTab("rota")}>
+          Rota Approvals
+        </button>
+        {canGrantRotaEditAccess && (
+          <button
+            type="button"
+            className={tabCls("edit-access")}
+            onClick={() => setTab("edit-access")}
+          >
+            Edit Access Requests
+            {pendingEditRequestCount > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-amber-500 text-white text-[10px] font-bold">
+                {pendingEditRequestCount}
+              </span>
+            )}
+          </button>
+        )}
+      </div>
+
+      {tab === "rota" && (
+        <>
       {/* Workflow stage banners */}
       {workflowStatus?.firstRotaPublished && (
         <div className="space-y-2">
@@ -1074,55 +1126,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
               </div>
             </div>
           )}
-        </div>
-      )}
-
-      {/* HR: pending rota edit-access requests */}
-      {canGrantRotaEditAccess && editRequests.length > 0 && (
-        <div className="rounded-xl border bg-card overflow-hidden">
-          <div className="px-4 py-3 border-b bg-muted/30">
-            <p className="text-sm font-semibold">
-              Rota edit-access requests ({editRequests.length})
-            </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              A head nurse needs your approval to edit a draft rota that's already auto-generated.
-              Declining auto-submits their draft as-is.
-            </p>
-          </div>
-          <div className="divide-y">
-            {editRequests.map((req) => (
-              <div key={req.id} className="px-4 py-3 flex items-start justify-between gap-3 flex-wrap">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">
-                    {req.requested_by_name ?? "Head nurse"} · {req.facility} ·{" "}
-                    {req.ward ?? FW_LABELS[(req.role_group as FacilityWideGroup) ?? "head"]}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {fmtDate(req.period_start)} → {fmtDate(req.period_end)}
-                  </p>
-                  <p className="text-xs mt-1">{req.reason}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    type="button"
-                    disabled={decidingEditRequest === req.id}
-                    onClick={() => decideEditRequest(req, "Declined")}
-                    className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-                  >
-                    Decline
-                  </button>
-                  <button
-                    type="button"
-                    disabled={decidingEditRequest === req.id}
-                    onClick={() => decideEditRequest(req, "Approved")}
-                    className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
-                  >
-                    Grant Access
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
         </div>
       )}
 
@@ -1197,6 +1200,99 @@ td.sm{text-align:left;color:#444;min-width:55px}
             </div>
           )}
         </>
+      )}
+        </>
+      )}
+
+      {tab === "edit-access" && canGrantRotaEditAccess && (
+        <div className="bg-card border rounded-xl overflow-hidden">
+          {allEditRequests.length === 0 ? (
+            <EmptyState
+              icon={<ClipboardList className="h-6 w-6" />}
+              title="No edit-access requests yet"
+              description="When a head nurse requests permission to edit an auto-generated draft, it will appear here — pending, approved and declined requests are all kept so you can always see who requested what and how it was decided."
+            />
+          ) : (
+            <>
+              <div className="px-4 py-3 border-b bg-muted/30">
+                <p className="text-sm font-semibold">
+                  Rota edit-access requests ({allEditRequests.length})
+                </p>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Full history of head-nurse requests to edit an auto-generated draft. Declining a
+                  Pending request auto-submits their draft as-is.
+                </p>
+              </div>
+              <div className="divide-y">
+                {editReqPageItems.map((req) => (
+                  <div
+                    key={req.id}
+                    className="px-4 py-3 flex items-start justify-between gap-3 flex-wrap"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-medium">
+                          {req.requested_by_name ?? "Head nurse"} · {req.facility} ·{" "}
+                          {req.ward ?? FW_LABELS[(req.role_group as FacilityWideGroup) ?? "head"]}
+                        </p>
+                        <span
+                          className={cn(
+                            "text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0",
+                            EDIT_REQ_STATUS_COLORS[req.status],
+                          )}
+                        >
+                          {req.status}
+                        </span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Period {fmtDate(req.period_start)} → {fmtDate(req.period_end)} · Requested{" "}
+                        {fmtDate(req.created_at)}
+                        {req.reviewed_at && <> · Decided {fmtDate(req.reviewed_at)}</>}
+                      </p>
+                      <p className="text-xs mt-1">{req.reason}</p>
+                      {req.review_note && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          HR note: {req.review_note}
+                        </p>
+                      )}
+                    </div>
+                    {req.status === "Pending" && (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          disabled={decidingEditRequest === req.id}
+                          onClick={() => decideEditRequest(req, "Declined")}
+                          className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                        >
+                          Decline
+                        </button>
+                        <button
+                          type="button"
+                          disabled={decidingEditRequest === req.id}
+                          onClick={() => decideEditRequest(req, "Approved")}
+                          className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                        >
+                          Grant Access
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <Pagination
+                page={editReqPage}
+                totalPages={editReqTotalPages}
+                pageSize={editReqPageSize}
+                totalItems={allEditRequests.length}
+                onPage={setEditReqPage}
+                onPageSize={(s) => {
+                  setEditReqPageSize(s);
+                  setEditReqPage(1);
+                }}
+              />
+            </>
+          )}
+        </div>
       )}
     </div>
   );
