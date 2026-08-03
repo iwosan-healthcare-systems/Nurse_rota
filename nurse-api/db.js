@@ -14,7 +14,13 @@ const pool = new Pool({
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   max: 25,                    // support 250 concurrent users across 2 PM2 instances
-  idleTimeoutMillis: 30000,   // release idle connections after 30s
+  min: 4,                     // keep a few connections warm so a login's burst of
+                               // ~24 parallel queries doesn't all pay a fresh-connection
+                               // penalty at once after a quiet period
+  idleTimeoutMillis: 300000,  // release idle connections after 5 min, not 30s — 30s was
+                               // shorter than typical gaps between a nurse's app checks,
+                               // so most logins were hitting a cold pool (this is the
+                               // main suspect behind "sometimes login is slow to load")
   connectionTimeoutMillis: 5000, // fail fast if pool is exhausted
 });
 
