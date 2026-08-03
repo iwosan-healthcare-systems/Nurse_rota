@@ -44,7 +44,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Edit Rota (manual cell changes)",
     roles: ["admin", "chief_matron", "head_nurse"],
   },
-  { key: "auto_generate", label: "Run Auto-Schedule", roles: ["admin", "head_nurse"] },
+  {
+    key: "auto_generate",
+    label: "Manually Trigger Rota Generation (normally automatic at T-19)",
+    roles: ["admin"],
+  },
   {
     key: "manage_staff",
     label: "Manage Staff (create / edit)",
@@ -97,12 +101,27 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   {
     key: "approve_chief_matron",
-    label: "Chief Matron Approval Step",
+    label: "Chief Matron Approval Step (retired — no longer enforced)",
     roles: ["admin", "chief_matron"],
   },
-  { key: "approve_cno", label: "CNO Approval Step", roles: ["admin", "cno"] },
+  {
+    key: "approve_cno",
+    label: "CNO Approval Step (retired — no longer enforced)",
+    roles: ["admin", "cno"],
+  },
+  { key: "approve_rota", label: "Approve Rota (HR review step)", roles: ["admin", "hr_admin"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
   { key: "revert_published", label: "Revert Published Rota to Draft", roles: ["admin"] },
+  {
+    key: "request_rota_edit_access",
+    label: "Request Rota Edit Access (Head Nurse)",
+    roles: ["admin", "head_nurse"],
+  },
+  {
+    key: "grant_rota_edit_access",
+    label: "Grant / Decline Rota Edit Access Requests (HR)",
+    roles: ["admin", "hr_admin"],
+  },
   { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: SYSTEM_ROLES },
   {
     key: "print_staff_list",

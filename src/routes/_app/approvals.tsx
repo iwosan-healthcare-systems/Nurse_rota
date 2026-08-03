@@ -37,7 +37,7 @@ export const Route = createFileRoute("/_app/approvals")({
       { title: "Approvals — Nurses Rota" },
       {
         name: "description",
-        content: "Rota approval workflow: Draft → Chief Matron → CNO → Published.",
+        content: "Rota approval workflow: Draft → Submitted → HR Approved → Published.",
       },
     ],
   }),
@@ -53,7 +53,7 @@ type PendingRow = {
   shift: string | null;
 };
 
-type WindowStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+type WindowStatus = "draft" | "submitted" | "hr_approved" | "published";
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 
 type RotaWindow = {
@@ -72,15 +72,13 @@ type ApprovalStep = { key: string; label: string; status: string };
 const STEPS: ApprovalStep[] = [
   { key: "draft", label: "Draft", status: "draft" },
   { key: "submitted", label: "Submitted", status: "submitted" },
-  { key: "approved_chief", label: "Chief Matron", status: "approved_chief" },
-  { key: "approved_cno", label: "CNO", status: "approved_cno" },
+  { key: "hr_approved", label: "HR", status: "hr_approved" },
   { key: "published", label: "Published", status: "published" },
 ];
 
 function dominantStatus(statuses: string[]): WindowStatus {
   if (statuses.includes("published")) return "published";
-  if (statuses.includes("approved_cno")) return "approved_cno";
-  if (statuses.includes("approved_chief")) return "approved_chief";
+  if (statuses.includes("hr_approved")) return "hr_approved";
   if (statuses.includes("submitted")) return "submitted";
   return "draft";
 }
@@ -228,17 +226,15 @@ const FW_LABELS: Record<FacilityWideGroup, string> = {
 
 const STATUS_LABELS: Record<WindowStatus, string> = {
   draft: "Draft",
-  submitted: "Awaiting Chief Matron",
-  approved_chief: "Awaiting CNO",
-  approved_cno: "Awaiting Publication",
+  submitted: "Awaiting HR Approval",
+  hr_approved: "Awaiting Publication",
   published: "Published",
 };
 
 const STATUS_COLORS: Record<WindowStatus, string> = {
   draft: "bg-muted text-muted-foreground border-border",
   submitted: "bg-amber-100 text-amber-800 border-amber-200",
-  approved_chief: "bg-blue-100 text-blue-800 border-blue-200",
-  approved_cno: "bg-violet-100 text-violet-800 border-violet-200",
+  hr_approved: "bg-violet-100 text-violet-800 border-violet-200",
   published: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
@@ -253,10 +249,10 @@ function ApprovalsPage() {
     isAdmin,
     activeRole,
     nurseFacility,
-    canApproveChiefMatron,
-    canApproveCno,
+    canApproveRota,
     canPublishRota,
     canRevertPublished,
+    canGrantRotaEditAccess,
   } = useAuth();
   const qc = useQueryClient();
   const [busy, setBusy] = useState<string | null>(null);
@@ -288,8 +284,6 @@ function ApprovalsPage() {
     isAdmin || activeRole === "cno" || activeRole === "hr_admin" ? null : (nurseFacility ?? null);
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
-  const canApproveChief = canApproveChiefMatron;
-  const canApproveCNO = canApproveCno;
   const canPublish = canPublishRota;
 
   const { data: allNurses = [] } = useQuery({
@@ -324,6 +318,48 @@ function ApprovalsPage() {
     [allNurses],
   );
   const nurseToRole = useMemo(() => new Map(allNurses.map((n) => [n.id, n.role])), [allNurses]);
+
+  // ── HR edit-access request review ────────────────────────────────────────
+  type EditRequest = {
+    id: string;
+    facility: string;
+    ward: string | null;
+    role_group: string | null;
+    period_start: string;
+    period_end: string;
+    requested_by_name: string | null;
+    reason: string;
+    status: "Pending" | "Approved" | "Declined";
+  };
+  const { data: editRequests = [] } = useQuery<EditRequest[]>({
+    queryKey: ["rota-edit-requests-pending"],
+    enabled: canGrantRotaEditAccess,
+    queryFn: () => api.get<EditRequest[]>("/rota-edit-requests?status=Pending"),
+  });
+  const [decidingEditRequest, setDecidingEditRequest] = useState<string | null>(null);
+
+  async function decideEditRequest(req: EditRequest, status: "Approved" | "Declined") {
+    setDecidingEditRequest(req.id);
+    try {
+      const result = await api.patch<{ autoSubmit?: { submitted: boolean; reason?: string } }>(
+        `/rota-edit-requests/${req.id}`,
+        { status },
+      );
+      if (status === "Approved") {
+        toast.success(`Edit access granted to ${req.requested_by_name ?? "the head nurse"}`);
+      } else if (result.autoSubmit?.submitted) {
+        toast.success("Declined — the draft rota was auto-submitted for review");
+      } else {
+        toast.success("Declined");
+      }
+      qc.invalidateQueries({ queryKey: ["rota-edit-requests-pending"] });
+      qc.invalidateQueries({ queryKey: ["approvals"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to decide request");
+    } finally {
+      setDecidingEditRequest(null);
+    }
+  }
 
   const windows = useMemo(
     () => groupIntoWindows(rows, nurseToFacility, nurseToRole),
@@ -441,7 +477,7 @@ function ApprovalsPage() {
 
   // ── DB actions ─────────────────────────────────────────────────────────────
 
-  type AssignStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+  type AssignStatus = "draft" | "submitted" | "hr_approved" | "published";
 
   // Scope a status update to nurses who belong to win.facility (+ ward filter).
   async function scopedStatusUpdate(
@@ -474,13 +510,15 @@ function ApprovalsPage() {
     return null;
   }
 
-  type AssignmentStatus = "draft" | "submitted" | "approved_chief" | "approved_cno" | "published";
+  type AssignmentStatus = "draft" | "submitted" | "hr_approved" | "published";
 
   async function advance(win: RotaWindow, nextStatus: AssignmentStatus) {
     setBusy(winKey(win));
-    const err = await (nextStatus === "published"
-      ? scopedStatusUpdate(win, nextStatus, undefined, "published")
-      : scopedStatusUpdate(win, nextStatus, win.status));
+    // Every stage transition (including publish) filters on the window's
+    // current status — the backend classifies exactly this (status,
+    // filterStatus) pair to pick the right capability check, see
+    // routes/shift-assignments.js.
+    const err = await scopedStatusUpdate(win, nextStatus, win.status);
     setBusy(null);
     if (err) return toast.error(err);
     const targetLabel =
@@ -820,26 +858,21 @@ td.sm{text-align:left;color:#444;min-width:55px}
     let canApprove = false;
     let nextStatus: AssignmentStatus = "draft";
     let approveLabel = "";
-    if (win.status === "submitted" && canApproveChief) {
+    if (win.status === "submitted" && canApproveRota) {
       canApprove = true;
-      nextStatus = "approved_chief";
-      approveLabel = "Approve (Chief Matron)";
-    } else if (win.status === "approved_chief" && canApproveCNO) {
-      canApprove = true;
-      nextStatus = "approved_cno";
-      approveLabel = "Approve (CNO)";
-    } else if (win.status === "approved_cno" && canPublish) {
+      nextStatus = "hr_approved";
+      approveLabel = "Approve (HR)";
+    } else if (win.status === "hr_approved" && canPublish) {
       canApprove = true;
       nextStatus = "published";
       approveLabel = "Publish Rota";
     }
 
+    // Reject-to-draft uses the same capability as approving forward at that
+    // stage — HR (approve_rota) can bounce a submitted OR hr_approved rota
+    // back to draft, matching routes/shift-assignments.js's classification.
     const canReject =
-      win.status !== "draft" &&
-      win.status !== "published" &&
-      ((win.status === "submitted" && canApproveChief) ||
-        (win.status === "approved_chief" && canApproveCNO) ||
-        (win.status === "approved_cno" && canPublish));
+      (win.status === "submitted" || win.status === "hr_approved") && canApproveRota;
 
     const showActions = canApprove || canReject || win.status === "published";
 
@@ -1009,17 +1042,17 @@ td.sm{text-align:left;color:#444;min-width:55px}
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Approval Workflow" subtitle="Draft → Chief Matron → CNO → Published" />
+      <PageHeader title="Approval Workflow" subtitle="Draft → Submitted → HR Approved → Published" />
 
       {/* Workflow stage banners */}
       {workflowStatus?.firstRotaPublished && (
         <div className="space-y-2">
-          {/* Approve1: chief matron action needed */}
-          {(canApproveChiefMatron || isAdmin) && workflowStatus.nextRotaStage === "submitted" && (
+          {/* HR action needed */}
+          {(canApproveRota || isAdmin) && workflowStatus.nextRotaStage === "submitted" && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
               <Clock className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <p className="font-medium">Draft rota awaiting Chief Matron approval</p>
+                <p className="font-medium">Draft rota awaiting HR approval</p>
                 <p className="mt-0.5 opacity-80">
                   The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been
                   submitted. Review and approve it below.
@@ -1028,33 +1061,68 @@ td.sm{text-align:left;color:#444;min-width:55px}
             </div>
           )}
 
-          {/* Approve2: CNO action needed */}
-          {(canApproveCno || isAdmin) && workflowStatus.nextRotaStage === "approved_chief" && (
-            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-              <Clock className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Rota awaiting CNO final approval</p>
-                <p className="mt-0.5 opacity-80">
-                  Chief Matron has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}.
-                  CNO sign-off is required to publish.
-                </p>
-              </div>
-            </div>
-          )}
-
           {/* Publish reminder */}
-          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "approved_cno" && (
+          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "hr_approved" && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
                 <p className="font-medium">Rota approved — ready to publish</p>
                 <p className="mt-0.5 opacity-80">
-                  CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
-                  so nurses can view their schedule.
+                  HR has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
+                  so nurses can view their schedule (or it auto-publishes at the T-14 deadline).
                 </p>
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {/* HR: pending rota edit-access requests */}
+      {canGrantRotaEditAccess && editRequests.length > 0 && (
+        <div className="rounded-xl border bg-card overflow-hidden">
+          <div className="px-4 py-3 border-b bg-muted/30">
+            <p className="text-sm font-semibold">
+              Rota edit-access requests ({editRequests.length})
+            </p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              A head nurse needs your approval to edit a draft rota that's already auto-generated.
+              Declining auto-submits their draft as-is.
+            </p>
+          </div>
+          <div className="divide-y">
+            {editRequests.map((req) => (
+              <div key={req.id} className="px-4 py-3 flex items-start justify-between gap-3 flex-wrap">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">
+                    {req.requested_by_name ?? "Head nurse"} · {req.facility} ·{" "}
+                    {req.ward ?? FW_LABELS[(req.role_group as FacilityWideGroup) ?? "head"]}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {fmtDate(req.period_start)} → {fmtDate(req.period_end)}
+                  </p>
+                  <p className="text-xs mt-1">{req.reason}</p>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    disabled={decidingEditRequest === req.id}
+                    onClick={() => decideEditRequest(req, "Declined")}
+                    className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                  >
+                    Decline
+                  </button>
+                  <button
+                    type="button"
+                    disabled={decidingEditRequest === req.id}
+                    onClick={() => decideEditRequest(req, "Approved")}
+                    className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                  >
+                    Grant Access
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

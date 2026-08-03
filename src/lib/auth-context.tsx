@@ -82,8 +82,11 @@ interface AuthCtx {
   canSubmitApproval: boolean;
   canApproveChiefMatron: boolean;
   canApproveCno: boolean;
+  canApproveRota: boolean;
   canPublishRota: boolean;
   canRevertPublished: boolean;
+  canRequestRotaEditAccess: boolean;
+  canGrantRotaEditAccess: boolean;
   canApproveLeave: boolean;
   canApproveMatronLeave: boolean;
   canRequestLeave: boolean;
@@ -339,12 +342,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canManageStaff: cap("manage_staff", ["admin", "hr_admin"]),
     canManageWards: cap("manage_wards", ["admin", "cno"]),
     canEditRota: cap("edit_rota", ["admin", "chief_matron", "head_nurse"]),
-    canAutoGenerate: cap("auto_generate", ["admin", "head_nurse"]),
+    // Rota generation is now automatic (T-19) — a manual trigger is only ever
+    // an admin emergency override, not a normal head_nurse action.
+    canAutoGenerate: cap("auto_generate", ["admin"]),
     canSubmitApproval: cap("submit_approval", ["admin", "head_nurse"]),
+    // Chief Matron's rota-approval step is retired — these two flags are kept
+    // wired (not deleted) since approve_chief_matron/approve_cno still exist
+    // in the capability matrix, unused, same "leave it" pattern as elsewhere.
     canApproveChiefMatron: cap("approve_chief_matron", ["admin", "chief_matron"]),
     canApproveCno: cap("approve_cno", ["admin", "cno"]),
+    canApproveRota: cap("approve_rota", ["admin", "hr_admin"]),
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
+    canRequestRotaEditAccess: cap("request_rota_edit_access", ["admin", "head_nurse"]),
+    canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "hr_admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),
     canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
     canRequestLeave: cap("request_leave", [

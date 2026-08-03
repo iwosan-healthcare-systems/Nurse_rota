@@ -143,6 +143,7 @@ function RotaPage() {
     canEditRota,
     canAutoGenerate,
     canSubmitApproval,
+    canRequestRotaEditAccess,
     isAdmin,
     user,
     nurseFacility,
@@ -414,6 +415,52 @@ function RotaPage() {
     e.setDate(e.getDate() + DAYS - 1);
     return e;
   }, [startDate]);
+
+  // ── Head-nurse edit-access request (draft editing is now request-gated) ───
+  const editUnit = selectedWard || (selectedFacilityWide as string) || null;
+  const editUnitIsWard = !!selectedWard;
+  const { data: myEditRequests = [] } = useQuery<
+    { id: string; status: "Pending" | "Approved" | "Declined"; revoked_at: string | null }[]
+  >({
+    queryKey: ["my-rota-edit-request", effectiveFacility, editUnit, ymd(startDate), user?.id],
+    enabled: activeRole === "head_nurse" && !!effectiveFacility && !!editUnit && !!user?.id,
+    queryFn: () =>
+      api.get(
+        `/rota-edit-requests?facility=${encodeURIComponent(effectiveFacility)}&${
+          editUnitIsWard ? `ward=${encodeURIComponent(editUnit!)}` : `role_group=${editUnit}`
+        }&period_start=${ymd(startDate)}&requested_by=${user!.id}`,
+      ),
+  });
+  // Most recent request for this unit/period (the API already orders by created_at DESC).
+  const myEditRequest = myEditRequests[0] ?? null;
+  const hasActiveEditGrant =
+    myEditRequest?.status === "Approved" && !myEditRequest.revoked_at;
+  const [showEditRequestModal, setShowEditRequestModal] = useState(false);
+  const [editRequestReason, setEditRequestReason] = useState("");
+  const [submittingEditRequest, setSubmittingEditRequest] = useState(false);
+
+  async function requestEditAccess() {
+    if (!editUnit || !effectiveFacility || !editRequestReason.trim()) return;
+    setSubmittingEditRequest(true);
+    try {
+      await api.post("/rota-edit-requests", {
+        facility: effectiveFacility,
+        ward: editUnitIsWard ? editUnit : null,
+        role_group: editUnitIsWard ? null : editUnit,
+        period_start: ymd(startDate),
+        period_end: ymd(endDate),
+        reason: editRequestReason.trim(),
+      });
+      toast.success("Edit access requested — HR will review it shortly");
+      setShowEditRequestModal(false);
+      setEditRequestReason("");
+      qc.invalidateQueries({ queryKey: ["my-rota-edit-request"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to request edit access");
+    } finally {
+      setSubmittingEditRequest(false);
+    }
+  }
 
   const days = useMemo(
     () =>
@@ -743,8 +790,7 @@ function RotaPage() {
     const filteredIds = new Set(filteredNurses.map((n) => n.id));
     const relevant = assignments.filter((a) => filteredIds.has(a.nurse_id));
     if (relevant.some((a) => a.status === "published")) return "published" as const;
-    if (relevant.some((a) => a.status === "approved_cno")) return "approved_cno" as const;
-    if (relevant.some((a) => a.status === "approved_chief")) return "approved_chief" as const;
+    if (relevant.some((a) => a.status === "hr_approved")) return "hr_approved" as const;
     if (relevant.some((a) => a.status === "submitted")) return "submitted" as const;
     return "draft" as const;
   }, [assignments, filteredNurses]);
@@ -782,8 +828,7 @@ function RotaPage() {
       const statuses = wardStatuses.get(w.name) ?? [];
       if (statuses.length === 0) map.set(w.name, "none");
       else if (statuses.includes("published")) map.set(w.name, "published");
-      else if (statuses.includes("approved_cno")) map.set(w.name, "approved_cno");
-      else if (statuses.includes("approved_chief")) map.set(w.name, "approved_chief");
+      else if (statuses.includes("hr_approved")) map.set(w.name, "hr_approved");
       else if (statuses.includes("submitted")) map.set(w.name, "submitted");
       else map.set(w.name, "draft");
     }
@@ -870,8 +915,7 @@ function RotaPage() {
     const dominant = (s: string[]): string => {
       if (!s.length) return "none";
       if (s.includes("published")) return "published";
-      if (s.includes("approved_cno")) return "approved_cno";
-      if (s.includes("approved_chief")) return "approved_chief";
+      if (s.includes("hr_approved")) return "hr_approved";
       if (s.includes("submitted")) return "submitted";
       return "draft";
     };
@@ -1019,7 +1063,7 @@ function RotaPage() {
     const inApprovalRows = await api
       .get<
         { status: string }[]
-      >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
+      >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,hr_approved&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -1598,7 +1642,7 @@ function RotaPage() {
     const inApprovalRows = await api
       .get<
         { status: string }[]
-      >(`/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,approved_chief,approved_cno&limit=1`)
+      >(`/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,hr_approved&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -1850,6 +1894,14 @@ function RotaPage() {
     ward: string | null,
   ) {
     if (!canEdit) return;
+    // Head nurses (not admin) need an active, HR-granted edit-access request
+    // for this specific ward/period before they can touch a draft cell — see
+    // the requestEditAccess panel above and the matching server-side check in
+    // nurse-api/routes/shift-assignments.js.
+    if (activeRole === "head_nurse" && !isAdmin && !hasActiveEditGrant) {
+      toast.error("Request edit access for this ward before making changes.");
+      return;
+    }
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
     if (existing && existing.status !== "draft") return;
     // LEAVE (approved leave) and LO (accepted locum) cells are locked — regenerate to change them.
@@ -1996,16 +2048,102 @@ function RotaPage() {
               <p className="font-medium">
                 {workflowStatus.nextRotaStage === "draft"
                   ? "Draft rota ready — submit for approval"
-                  : "Time to generate the next rota"}
+                  : "Rota not yet generated (admin override)"}
               </p>
               <p className="mt-0.5 opacity-80">
                 {workflowStatus.nextRotaStage === "draft"
                   ? `The draft schedule for the period starting ${fmtWD(workflowStatus.nextPeriodStart)} is ready. Review it below and submit for approval.`
-                  : `Leave window for the period starting ${fmtWD(workflowStatus.nextPeriodStart)} is closed. Generate the schedule below.`}
+                  : `The rota for the period starting ${fmtWD(workflowStatus.nextPeriodStart)} auto-generates on schedule (T-19). Use this only to trigger it early.`}
               </p>
             </div>
           </div>
         )}
+
+      {/* Edit-access panel — head nurses need an HR-granted request to edit a
+          draft ward/facility-wide unit; admin and other roles are unaffected. */}
+      {activeRole === "head_nurse" &&
+        canRequestRotaEditAccess &&
+        editUnit &&
+        windowLockStatus === "draft" && (
+          <div
+            className={cn(
+              "flex items-start gap-3 rounded-lg border px-4 py-3 mb-2 text-sm",
+              hasActiveEditGrant
+                ? "border-emerald-300 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/20 dark:text-emerald-300 dark:border-emerald-700"
+                : myEditRequest?.status === "Pending"
+                  ? "border-amber-300 bg-amber-50 text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700"
+                  : "border-border bg-muted/40 text-muted-foreground",
+            )}
+          >
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+            <div className="flex-1">
+              {hasActiveEditGrant ? (
+                <p className="font-medium">
+                  Edit access granted — you can make changes until this is submitted.
+                </p>
+              ) : myEditRequest?.status === "Pending" ? (
+                <p className="font-medium">Edit access requested — waiting on HR.</p>
+              ) : (
+                <>
+                  <p className="font-medium">This draft is locked for editing.</p>
+                  <p className="mt-0.5 opacity-80">
+                    Request edit access from HR before making changes
+                    {myEditRequest?.status === "Declined" ? " — your last request was declined." : "."}
+                  </p>
+                </>
+              )}
+            </div>
+            {!hasActiveEditGrant && myEditRequest?.status !== "Pending" && (
+              <button
+                type="button"
+                onClick={() => setShowEditRequestModal(true)}
+                className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium shrink-0"
+              >
+                Request Edit Access
+              </button>
+            )}
+          </div>
+        )}
+
+      {showEditRequestModal && (
+        <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/50" onClick={() => setShowEditRequestModal(false)}>
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-card border rounded-xl shadow-card w-full max-w-sm p-5 space-y-3"
+          >
+            <h2 className="font-semibold">Request edit access</h2>
+            <p className="text-xs text-muted-foreground">
+              {editUnit} · {ymd(startDate)} → {ymd(endDate)}
+            </p>
+            <textarea
+              autoFocus
+              rows={3}
+              placeholder="Reason for the change"
+              value={editRequestReason}
+              onChange={(e) => setEditRequestReason(e.target.value)}
+              className="w-full rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring resize-none"
+            />
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setShowEditRequestModal(false)}
+                disabled={submittingEditRequest}
+                className="h-9 px-4 rounded-md border bg-card text-sm hover:bg-muted disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void requestEditAccess()}
+                disabled={submittingEditRequest || !editRequestReason.trim()}
+                className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50"
+              >
+                {submittingEditRequest ? "Sending…" : "Send Request"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -2169,9 +2307,7 @@ function RotaPage() {
                   "border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300",
                 submitted:
                   "border-sky-200 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:border-sky-700 dark:text-sky-300",
-                approved_chief:
-                  "border-blue-200 bg-blue-50 text-blue-800 dark:bg-blue-950/30 dark:border-blue-700 dark:text-blue-300",
-                approved_cno:
+                hr_approved:
                   "border-violet-200 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-300",
                 published:
                   "border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-300",
@@ -2180,16 +2316,14 @@ function RotaPage() {
                 none: "bg-muted-foreground/30",
                 draft: "bg-amber-400",
                 submitted: "bg-sky-400",
-                approved_chief: "bg-blue-400",
-                approved_cno: "bg-violet-400",
+                hr_approved: "bg-violet-400",
                 published: "bg-emerald-500",
               };
               const statusLabel: Record<string, string> = {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                approved_chief: "Chief ✓",
-                approved_cno: "CNO ✓",
+                hr_approved: "HR ✓",
                 published: "Published",
               };
               return (
@@ -2224,11 +2358,9 @@ function RotaPage() {
                       "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
                       windowLockStatus === "published"
                         ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
-                        : windowLockStatus === "approved_cno"
+                        : windowLockStatus === "hr_approved"
                           ? "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
-                          : windowLockStatus === "approved_chief"
-                            ? "border-blue-300 bg-blue-50 text-blue-700 dark:border-blue-700 dark:bg-blue-950/30 dark:text-blue-300"
-                            : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
+                          : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
                     )}
                   >
                     {windowLockStatus === "published" ? (
@@ -2237,10 +2369,8 @@ function RotaPage() {
                       <Clock className="h-3.5 w-3.5" />
                     )}
                     {windowLockStatus === "published" && "Published — read only"}
-                    {windowLockStatus === "approved_cno" && "CNO Approved — awaiting publication"}
-                    {windowLockStatus === "approved_chief" &&
-                      "Chief Matron Approved — awaiting CNO"}
-                    {windowLockStatus === "submitted" && "Submitted — awaiting approval"}
+                    {windowLockStatus === "hr_approved" && "HR Approved — awaiting publication"}
+                    {windowLockStatus === "submitted" && "Submitted — awaiting HR approval"}
                   </span>
                   {/* New/reactivated staff in a published ward — generate their draft first */}
                   {windowLockStatus === "published" &&
@@ -2353,34 +2483,26 @@ function RotaPage() {
             {facilityWideCardGroups.map(({ key, label, count }) => {
               const status = facilityWideStatusMap[key];
               const isSelected = selectedFacilityWide === key;
-              const isLocked = [
-                "submitted",
-                "approved_chief",
-                "approved_cno",
-                "published",
-              ].includes(status);
+              const isLocked = ["submitted", "hr_approved", "published"].includes(status);
               const chipCls: Record<string, string> = {
                 none: "border-border",
                 draft: "border-amber-200 dark:border-amber-700",
                 submitted: "border-sky-200 dark:border-sky-700",
-                approved_chief: "border-blue-200 dark:border-blue-700",
-                approved_cno: "border-violet-200 dark:border-violet-700",
+                hr_approved: "border-violet-200 dark:border-violet-700",
                 published: "border-emerald-200 dark:border-emerald-700",
               };
               const dotCls: Record<string, string> = {
                 none: "bg-muted-foreground/30",
                 draft: "bg-amber-400",
                 submitted: "bg-sky-400",
-                approved_chief: "bg-blue-400",
-                approved_cno: "bg-violet-400",
+                hr_approved: "bg-violet-400",
                 published: "bg-emerald-500",
               };
               const statusLabel: Record<string, string> = {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                approved_chief: "Chief ✓",
-                approved_cno: "CNO ✓",
+                hr_approved: "HR ✓",
                 published: "Published",
               };
               return (
@@ -2835,11 +2957,9 @@ function RotaPage() {
                     "inline-flex items-center gap-1",
                     windowLockStatus === "published"
                       ? "text-emerald-600 dark:text-emerald-400"
-                      : windowLockStatus === "approved_cno"
+                      : windowLockStatus === "hr_approved"
                         ? "text-violet-600 dark:text-violet-400"
-                        : windowLockStatus === "approved_chief"
-                          ? "text-blue-600 dark:text-blue-400"
-                          : "text-amber-600 dark:text-amber-400",
+                        : "text-amber-600 dark:text-amber-400",
                   )}
                 >
                   {windowLockStatus === "published" ? (
@@ -2848,10 +2968,8 @@ function RotaPage() {
                     <Clock className="h-3 w-3" />
                   )}
                   {windowLockStatus === "published" && "Published schedule — read only"}
-                  {windowLockStatus === "approved_cno" &&
-                    "Approved (CNO) — use Approvals to publish or revert"}
-                  {windowLockStatus === "approved_chief" &&
-                    "Approved (Chief Matron) — use Approvals to advance or revert"}
+                  {windowLockStatus === "hr_approved" &&
+                    "Approved (HR) — use Approvals to publish or revert"}
                   {windowLockStatus === "submitted" &&
                     "Submitted for approval — use Approvals to return to draft if edits are needed"}
                 </span>

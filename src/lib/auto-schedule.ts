@@ -258,7 +258,7 @@ function ymd(d: Date) {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-function parseWards(ward: string | null): string[] {
+export function parseWards(ward: string | null): string[] {
   if (!ward) return [];
   return ward.split("|").filter(Boolean);
 }

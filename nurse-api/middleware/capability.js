@@ -30,15 +30,27 @@ function invalidateCapabilityCache() {
 // the Permissions UI) — it should always mirror the endpoint's pre-migration
 // requireRole(...) list so wrapping a route in requireCapability is
 // behavior-neutral until an admin explicitly edits it.
+//
+// Returns true/false rather than throwing — for the common case (one fixed
+// capability guarding a whole route) use requireCapability() below, which
+// wraps this as Express middleware. checkCapability() is for routes like
+// PATCH /shift-assignments that serve several different transitions off one
+// handler, where the key to check isn't known until the request body/query
+// has been inspected.
+async function checkCapability(req, key, fallbackRoles) {
+  const userRoles = req.user?.roles || [];
+  if (userRoles.includes("admin")) return true;
+  const caps = await loadCapabilities();
+  const entry = caps.find((c) => c.key === key);
+  const allowedRoles = entry ? entry.roles : fallbackRoles;
+  return userRoles.some((r) => allowedRoles.includes(r));
+}
+
 function requireCapability(key, fallbackRoles) {
   return async (req, res, next) => {
     try {
-      const userRoles = req.user?.roles || [];
-      if (userRoles.includes("admin")) return next();
-      const caps = await loadCapabilities();
-      const entry = caps.find((c) => c.key === key);
-      const allowedRoles = entry ? entry.roles : fallbackRoles;
-      if (userRoles.some((r) => allowedRoles.includes(r))) return next();
+      const allowed = await checkCapability(req, key, fallbackRoles);
+      if (allowed) return next();
       return res.status(403).json({ error: "Forbidden" });
     } catch (err) {
       next(err);
@@ -46,4 +58,4 @@ function requireCapability(key, fallbackRoles) {
   };
 }
 
-module.exports = { requireCapability, invalidateCapabilityCache };
+module.exports = { requireCapability, checkCapability, invalidateCapabilityCache };

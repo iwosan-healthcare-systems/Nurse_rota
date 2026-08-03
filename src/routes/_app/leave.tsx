@@ -1350,7 +1350,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     queryFn: () =>
       api
         .get<{ id: string }[]>(
-          `/shift-assignments?nurse_id=${targetNurseId}&status_in=submitted,approved_chief,approved_cno&from=${from}&to=${to}&limit=1`,
+          `/shift-assignments?nurse_id=${targetNurseId}&status_in=submitted,hr_approved&from=${from}&to=${to}&limit=1`,
         )
         .then((arr) => arr.length > 0),
   });

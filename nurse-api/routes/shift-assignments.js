@@ -1,7 +1,60 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireCapability } = require("../middleware/capability");
+const { requireCapability, checkCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+// Mirrors leave-requests.js's facilityWideGroupSlug — maps a nurse's job role
+// to the facility-wide role_group used on ward-less rota_edit_requests rows.
+function roleGroupOf(role) {
+  if (!role) return null;
+  if (/^matron$/i.test(role)) return "matron";
+  if (/^(head|coverage)\s*nurse$/i.test(role)) return "head";
+  if (/^porter(\s*-\s*day)?$/i.test(role)) return "porter";
+  if (/nurse\s*intern|intern\s*nurse/i.test(role)) return "intern";
+  return null;
+}
+
+// A head_nurse (not admin) may only create/update draft cells within a
+// ward/facility-wide-group + period they currently hold an active edit-access
+// grant for (see routes/rota-edit-requests.js). Admin bypasses (usual
+// override); chief_matron is intentionally left ungated here — only
+// head_nurse editing was asked to be gated behind requests. `cells` is an
+// array of { nurse_id, ward, shift_date } — every cell must be covered by an
+// active grant, or the whole request is rejected (no partial writes).
+async function headNurseHasEditGrantForAll(req, cells) {
+  const userRoles = req.user?.roles || [];
+  if (userRoles.includes("admin") || !userRoles.includes("head_nurse")) return true;
+  if (!cells.length) return true;
+
+  const nurseIds = [...new Set(cells.map((c) => c.nurse_id).filter(Boolean))];
+  if (!nurseIds.length) return false;
+  const { rows: nurseRows } = await pool.query(
+    "SELECT id, facility, role FROM nurses WHERE id = ANY($1)",
+    [nurseIds],
+  );
+  const nurseById = new Map(nurseRows.map((n) => [n.id, n]));
+
+  const { rows: grants } = await pool.query(
+    `SELECT facility, ward, role_group, period_start, period_end
+       FROM rota_edit_requests
+      WHERE requested_by = $1 AND status = 'Approved' AND revoked_at IS NULL`,
+    [req.user.userId],
+  );
+
+  return cells.every((cell) => {
+    const nurse = nurseById.get(cell.nurse_id);
+    if (!nurse) return false;
+    const ward = cell.ward || null;
+    const group = ward ? null : roleGroupOf(nurse.role);
+    return grants.some(
+      (g) =>
+        g.facility === nurse.facility &&
+        (ward ? g.ward === ward : g.role_group === group) &&
+        cell.shift_date >= g.period_start &&
+        cell.shift_date <= g.period_end,
+    );
+  });
+}
 
 router.get(
   "/",
@@ -84,6 +137,10 @@ router.post(
     if (!nurse_id || !shift || !shift_date)
       return res.status(400).json({ error: "nurse_id, shift, shift_date required" });
 
+    if (!(await headNurseHasEditGrantForAll(req, [{ nurse_id, ward, shift_date }]))) {
+      return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
@@ -101,6 +158,15 @@ router.post(
     const rows = req.body;
     if (!Array.isArray(rows) || !rows.length)
       return res.status(400).json({ error: "Array of assignments required" });
+
+    if (
+      !(await headNurseHasEditGrantForAll(
+        req,
+        rows.map((r) => ({ nurse_id: r.nurse_id, ward: r.ward, shift_date: r.shift_date })),
+      ))
+    ) {
+      return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
+    }
 
     const client = await pool.connect();
     try {
@@ -164,6 +230,24 @@ router.patch(
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
 
+    const { rows: existingRows } = await pool.query(
+      "SELECT nurse_id, ward, shift_date FROM shift_assignments WHERE id = $1",
+      [req.params.id],
+    );
+    if (!existingRows[0]) return res.status(404).json({ error: "Assignment not found" });
+    const existing = existingRows[0];
+    if (
+      !(await headNurseHasEditGrantForAll(req, [
+        {
+          nurse_id: existing.nurse_id,
+          ward: req.body.ward ?? existing.ward,
+          shift_date: existing.shift_date,
+        },
+      ]))
+    ) {
+      return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
+    }
+
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
     sets.push("updated_at = NOW()");
     const values = fields.map((f) => req.body[f]);
@@ -193,36 +277,69 @@ router.patch(
     } = req.query;
     const { shift, status, ward: newWard } = req.body;
 
-    const userRoles = req.user?.roles || [];
-    const isManager = userRoles.some((r) =>
-      ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"].includes(r),
-    );
-    if (!isManager) {
-      // Self-service exception: a nurse accepting a bank/locum invite flips their
-      // own OFF day to the locum shift type. Never allowed to touch status or ward,
-      // or any nurse other than themselves.
-      const LOCUM_SHIFT_CODES = ["M", "N", "MWC", "NC"];
-      const ids = nurse_ids ? nurse_ids.split(",") : [];
-      if (
-        status ||
-        newWard ||
-        !shift ||
-        !LOCUM_SHIFT_CODES.includes(shift) ||
-        ids.length !== 1 ||
-        filterShift !== "OFF"
-      ) {
-        return res.status(403).json({ error: "Forbidden" });
+    if (status) {
+      // A pipeline-stage transition — classify the exact (status, filterStatus)
+      // pair being requested and gate it with the capability for THAT
+      // transition specifically, rather than one coarse "is some kind of
+      // manager" check. This is what makes "only head_nurse can submit" (not
+      // cno/chief_matron/hr_admin, who could previously submit too) and "only
+      // HR approves" actually enforceable server-side.
+      let capKey;
+      let capFallback;
+      if (status === "submitted" && filterStatus === "draft") {
+        capKey = "submit_approval";
+        capFallback = ["admin", "head_nurse"];
+      } else if (status === "hr_approved" && filterStatus === "submitted") {
+        capKey = "approve_rota";
+        capFallback = ["admin", "hr_admin"];
+      } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
+        // Reject-to-draft — same capability as approving forward at that stage.
+        capKey = "approve_rota";
+        capFallback = ["admin", "hr_admin"];
+      } else if (status === "published" && filterStatus === "hr_approved") {
+        capKey = "publish_rota";
+        capFallback = ["admin", "cno"];
+      } else if (status === "draft" && filterStatus === "published") {
+        capKey = "revert_published";
+        capFallback = ["admin"];
+      } else {
+        return res.status(400).json({ error: "Unsupported status transition" });
       }
-      const { rows: ownNurse } = await pool.query(
-        `SELECT id FROM nurses WHERE profile_id = $1
-         UNION ALL
-         SELECT id FROM nurses WHERE profile_id IS NULL
-           AND LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1))
-         LIMIT 1`,
-        [req.user.userId],
+      const allowed = await checkCapability(req, capKey, capFallback);
+      if (!allowed) return res.status(403).json({ error: "Forbidden" });
+    } else {
+      // No status change requested — either a manager bulk-editing shift/ward,
+      // or the nurse self-service exception below.
+      const userRoles = req.user?.roles || [];
+      const isManager = userRoles.some((r) =>
+        ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"].includes(r),
       );
-      if (!ownNurse[0] || ownNurse[0].id !== ids[0]) {
-        return res.status(403).json({ error: "Forbidden" });
+      if (!isManager) {
+        // Self-service exception: a nurse accepting a bank/locum invite flips their
+        // own OFF day to the locum shift type. Never allowed to touch status or ward,
+        // or any nurse other than themselves.
+        const LOCUM_SHIFT_CODES = ["M", "N", "MWC", "NC"];
+        const ids = nurse_ids ? nurse_ids.split(",") : [];
+        if (
+          newWard ||
+          !shift ||
+          !LOCUM_SHIFT_CODES.includes(shift) ||
+          ids.length !== 1 ||
+          filterShift !== "OFF"
+        ) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
+        const { rows: ownNurse } = await pool.query(
+          `SELECT id FROM nurses WHERE profile_id = $1
+           UNION ALL
+           SELECT id FROM nurses WHERE profile_id IS NULL
+             AND LOWER(name) = LOWER((SELECT full_name FROM profiles WHERE id = $1))
+           LIMIT 1`,
+          [req.user.userId],
+        );
+        if (!ownNurse[0] || ownNurse[0].id !== ids[0]) {
+          return res.status(403).json({ error: "Forbidden" });
+        }
       }
     }
 
