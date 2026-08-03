@@ -57,6 +57,7 @@ const NURSE_ROLES = [
   "Surgical Nurse - Day",
   "Matron",
   "Coverage Nurse",
+  "Coverage Nurse - Day",
   "Nurse Intern",
   "Nursing Assistant",
   "Nursing Assistant - Day",
@@ -64,9 +65,12 @@ const NURSE_ROLES = [
   "Porter - Day",
 ] as const;
 
-// Coverage Nurses, Nurse Interns, and Porters are scheduled independently — no ward is tagged.
+// Coverage Nurses (incl. the Day variant), Nurse Interns, and Porters are
+// scheduled independently — no ward is tagged. Mirrors isGlobalHead in
+// lib/auto-schedule.ts exactly (only "coverage nurse - day" is a real role,
+// not "head nurse - day").
 function isNoWardRole(role: string) {
-  return /^(head|coverage)\s*nurse$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i.test(
+  return /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i.test(
     role,
   );
 }
@@ -97,7 +101,8 @@ function normalizeRole(raw: string): string {
   // Matron — catches "mtron", "mtrn", "maton", "matorn", etc.
   if (/^ma?t[ro]{0,2}n?$/i.test(s)) return "Matron";
 
-  // Coverage Nurse
+  // Coverage Nurse / Coverage Nurse - Day
+  if (/^(coverage|cover)\s*nurse\s*[-–]\s*day$/i.test(s)) return "Coverage Nurse - Day";
   if (/^(coverage|cover)\s*nurse$/i.test(s)) return "Coverage Nurse";
 
   // Nurse Intern

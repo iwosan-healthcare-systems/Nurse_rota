@@ -7,7 +7,8 @@ const pool = require("../db");
 function roleGroupOf(role) {
   if (!role) return null;
   if (/^matron$/i.test(role)) return "matron";
-  if (/^(head|coverage)\s*nurse$/i.test(role)) return "head";
+  if (/^(head|coverage)\s*nurse$/i.test(role) || /^coverage\s*nurse\s*-\s*day$/i.test(role))
+    return "head";
   if (/^porter(\s*-\s*day)?$/i.test(role)) return "porter";
   if (/nurse\s*intern|intern\s*nurse/i.test(role)) return "intern";
   return null;

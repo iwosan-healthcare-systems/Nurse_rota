@@ -301,8 +301,15 @@ export function isInternType(role: string) {
   return /nurse\s*intern|intern\s*nurse/i.test(role);
 }
 
+// Coverage Nurse - Day: same facility-wide Coverage Nurse group (role_group
+// "head" everywhere — submission, approval, the Coverage Nurse card) but
+// morning-only in the scheduling engine (see scheduleCoverageNurses below).
+export function isCoverageNurseDayType(role: string) {
+  return /^coverage\s*nurse\s*-\s*day$/i.test(role);
+}
+
 export function isGlobalHead(role: string) {
-  return /^(head|coverage)\s*nurse$/i.test(role);
+  return /^(head|coverage)\s*nurse$/i.test(role) || isCoverageNurseDayType(role);
 }
 
 export function isMatron(role: string) {
@@ -636,6 +643,7 @@ function scheduleCoverageNurses(
   // period, a second occurrence 16 days later.
   const slotCandidates = new Map<number, number[]>();
   for (let i = 0; i < N; i++) {
+    if (isCoverageNurseDayType(group[i].role)) continue; // day-only nurses never do night coverage
     const first = nBlockStartDay(i);
     for (const slot of [first, first + CL]) {
       if (slot + 3 >= days) continue; // NC block must finish within the period
@@ -892,6 +900,15 @@ function scheduleCoverageNurses(
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
             : NURSE_CYCLE[(nurseEffectiveBase(i) + d) % CL];
       }
+
+      // Coverage Nurse - Day: fully shares the group's phase/MWC-rotation math
+      // above (so MWC duty and its surrounding forced-off days land exactly
+      // the same way as for full-cycle coverage nurses), but never works a
+      // night — whatever position the cycle would resolve to "N" resolves to
+      // "M" instead (their 2nd would-be N-block becomes a 2nd M-block, so
+      // total on/off ratio is unchanged, just no nights). They're already
+      // excluded from NC assignment above, so "NC" can't reach here for them.
+      if (shift === "N" && isCoverageNurseDayType(group[i].role)) shift = "M";
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
     }

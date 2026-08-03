@@ -1732,9 +1732,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
     const nurseARole = nurseA?.role ?? "";
     const nurseACategory = roleCategory(nurseARole);
-    // Mirror the rota's own grouping: Coverage Nurse and Head Nurse are interchangeable.
+    // Mirror the rota's own grouping: Coverage Nurse, Head Nurse, and Coverage
+    // Nurse - Day are all interchangeable (same facility-wide "head" group).
     const isGlobalHeadRole = (r: string | null | undefined) =>
-      !!r && /^(head|coverage)\s*nurse$/i.test(r.trim());
+      !!r && /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$/i.test(r.trim());
     const nurseAIsGlobalHead = isGlobalHeadRole(nurseARole);
     const notNurseA = (n: (typeof switchableNurses)[number]) => n.id !== nurseAId;
     const sameRole = (n: (typeof switchableNurses)[number]) => {

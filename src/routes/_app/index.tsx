@@ -92,11 +92,11 @@ type NurseRecord = {
 };
 
 // Roles that are facility-wide: no ward is managed on the Staff page for them.
-// Mirrors isNoWardRole in staff.tsx (coverage/head nurses, porters).
-// Interns are excluded — they DO get a ward via rotation.
+// Mirrors isNoWardRole in staff.tsx (coverage/head nurses incl. the Day
+// variant, porters). Interns are excluded — they DO get a ward via rotation.
 function isFacilityWideRole(role: string | undefined) {
   if (!role) return false;
-  return /^(head|coverage)\s*nurse$|^matron$|^porter(\s*-\s*day)?$/i.test(role);
+  return /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^matron$|^porter(\s*-\s*day)?$/i.test(role);
 }
 
 type Assignment = {
