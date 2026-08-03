@@ -171,15 +171,19 @@ async function generateUnit({
   const unitIds = unitNurses.map((n) => n.id);
   const unitLabel = ward ?? roleGroup;
 
-  // Defensive no-op — shouldn't fire at T-19 in practice, but never clobber a
-  // unit that's already moved past draft.
-  const { rows: inPipeline } = await pool.query(
+  // Generate exactly once per unit/period. This job ticks every 5 minutes and
+  // "generate is due" stays true for the entire T-19-onward window (not just
+  // the instant T-19 arrives), so without this guard a unit already generated
+  // — whether by this job or by an admin's manual early trigger — would get
+  // silently deleted and regenerated on every single tick, wiping out any
+  // edits a head_nurse made in between (their edit-access grant only protects
+  // against OTHER people's edits, not this job clobbering the whole unit).
+  const { rows: existing } = await pool.query(
     `SELECT 1 FROM shift_assignments
-      WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3
-        AND status IN ('submitted', 'hr_approved') LIMIT 1`,
+      WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3 LIMIT 1`,
     [unitIds, genStart, genEnd],
   );
-  if (inPipeline.length) return;
+  if (existing.length) return;
 
   // Expire any leave request still Pending for this unit's nurses/period. By
   // generation time (T-19) it should already have been decided — rather than
