@@ -49,9 +49,9 @@ async function runAutoDecline() {
            review_note = 'Automatically declined — not reviewed before the deadline (no backdated approval).'
      WHERE status = 'Pending'
        AND (
-         (type != ALL($1::text[]) AND from_date <= CURRENT_DATE)
+         (type::text != ALL($1::text[]) AND from_date <= CURRENT_DATE)
          OR
-         (type = ANY($1::text[]) AND from_date < CURRENT_DATE)
+         (type::text = ANY($1::text[]) AND from_date < CURRENT_DATE)
        )
      RETURNING id, nurse_id, nurse_name, type, from_date, to_date, requested_by, switch_nurse_b
     `,
