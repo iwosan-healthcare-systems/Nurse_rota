@@ -140,38 +140,56 @@ router.post(
     }
     if (!resolvedNurseId) return res.status(400).json({ error: "nurse_id required" });
 
-    const { rows } = await pool.query(
-      `INSERT INTO shift_logs
-     (nurse_id, shift_date, shift_type, started_at, expected_end_at, period_start,
-      is_late, late_minutes, late_reason, latitude, longitude, ip_address,
-      is_locum, locum_request_id, is_swap, swap_note, is_leave, leave_request_id,
-      is_missed, ended_at, hours_logged)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-     RETURNING *`,
-      [
-        resolvedNurseId,
-        shift_date,
-        shift_type,
-        started_at,
-        expected_end_at,
-        period_start,
-        is_late || false,
-        late_minutes || null,
-        late_reason || null,
-        latitude || null,
-        longitude || null,
-        ip_address || null,
-        is_locum || false,
-        locum_request_id || null,
-        is_swap || false,
-        swap_note || null,
-        is_leave || false,
-        leave_request_id || null,
-        is_missed || false,
-        ended_at ?? null,
-        hours_logged != null ? hours_logged : null,
-      ],
-    );
+    let rows;
+    try {
+      ({ rows } = await pool.query(
+        `INSERT INTO shift_logs
+       (nurse_id, shift_date, shift_type, started_at, expected_end_at, period_start,
+        is_late, late_minutes, late_reason, latitude, longitude, ip_address,
+        is_locum, locum_request_id, is_swap, swap_note, is_leave, leave_request_id,
+        is_missed, ended_at, hours_logged)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+       RETURNING *`,
+        [
+          resolvedNurseId,
+          shift_date,
+          shift_type,
+          started_at,
+          expected_end_at,
+          period_start,
+          is_late || false,
+          late_minutes || null,
+          late_reason || null,
+          latitude || null,
+          longitude || null,
+          ip_address || null,
+          is_locum || false,
+          locum_request_id || null,
+          is_swap || false,
+          swap_note || null,
+          is_leave || false,
+          leave_request_id || null,
+          is_missed || false,
+          ended_at ?? null,
+          hours_logged != null ? hours_logged : null,
+        ],
+      ));
+    } catch (err) {
+      // Duplicate double-tap / network retry of the same start-shift request —
+      // the DB unique index (022_prevent_duplicate_shift_logs) rejected the insert.
+      // Treat it as a no-op and hand back the row that already exists instead of a 500.
+      if (err.code === "23505" && err.constraint === "uq_shift_logs_live_start") {
+        const { rows: existing } = await pool.query(
+          `SELECT * FROM shift_logs
+           WHERE nurse_id = $1 AND shift_date = $2 AND shift_type = $3
+             AND is_leave = false AND is_missed = false
+           LIMIT 1`,
+          [resolvedNurseId, shift_date, shift_type],
+        );
+        if (existing[0]) return res.status(200).json(existing[0]);
+      }
+      throw err;
+    }
     res.status(201).json(rows[0]);
   }),
 );
