@@ -190,21 +190,33 @@ router.get(
     }
 
     // Compute the next period start and key milestone dates in Postgres so we
-    // never have to worry about JS Date timezone/DST edge cases.
+    // never have to worry about JS Date timezone/DST edge cases. leave_is_closed
+    // and publish_is_overdue are computed here too (against NOW(), in Africa/Lagos)
+    // rather than as a JS date-string compare — a plain "today >= closureDate"
+    // trips the moment closureDate's calendar day BEGINS (00:00), cutting the
+    // window a full day short. The +1 day here makes the cutoff 23:59:59 Lagos
+    // time on closureDate itself — closed/overdue only once that day has passed.
     const { rows: dateRows } = await pool.query(`
       SELECT
         ($1::date + 1)::text                                 AS next_period_start,
         ($1::date + 1 - INTERVAL '21 days')::date::text     AS leave_closure_date,
-        ($1::date + 1 - INTERVAL '14 days')::date::text     AS publish_deadline
+        ($1::date + 1 - INTERVAL '14 days')::date::text     AS publish_deadline,
+        (
+          ($1::date + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
+          AND NOW() >= (($1::date + 1 - INTERVAL '21 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
+        )                                                     AS leave_is_closed,
+        (
+          NOW() >= (($1::date + 1 - INTERVAL '14 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
+        )                                                     AS publish_is_overdue
     `, [lastDate]);
 
-    const { next_period_start: nextPeriodStart, leave_closure_date: leaveClosureDate, publish_deadline: publishDeadline } = dateRows[0];
-    const today = new Date().toISOString().slice(0, 10);
-
-    // Closure only applies when the next period is still in the future.
-    // If nextPeriodStart is today or in the past the schedule is overdue —
-    // don't block leave in that case (no current cycle to protect).
-    const leaveIsClosed = nextPeriodStart > today && today >= leaveClosureDate;
+    const {
+      next_period_start: nextPeriodStart,
+      leave_closure_date: leaveClosureDate,
+      publish_deadline: publishDeadline,
+      leave_is_closed: leaveIsClosed,
+      publish_is_overdue: publishIsOverdue,
+    } = dateRows[0];
 
     // Determine the highest approval stage reached for the next period.
     // Ordering ensures we return the most-advanced status present.
@@ -231,6 +243,7 @@ router.get(
       leaveClosureDate,
       publishDeadline,
       leaveIsClosed,
+      publishIsOverdue,
       nextRotaStage,
     });
   }),

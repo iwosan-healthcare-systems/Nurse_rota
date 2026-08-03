@@ -186,19 +186,24 @@ router.post(
     // ── Leave closure window enforcement ──────────────────────────────────
     // Once the first rota has been published, all non-exempt leave types are
     // blocked for 21 days leading up to the next schedule period start date.
+    // is_closed is computed against NOW() (Africa/Lagos) rather than a JS
+    // date-string compare, so the window stays open through the whole of the
+    // T-21 calendar day and only closes at 23:59:59 Lagos time that day —
+    // not the instant that day begins.
     if (!EXEMPT_LEAVE_TYPES.includes(type)) {
       const { rows: pubRows } = await pool.query(`
         SELECT
-          (MAX(shift_date::date) + 1)::text                             AS next_start,
-          (MAX(shift_date::date) + 1 - INTERVAL '21 days')::date::text AS closure_date
+          (MAX(shift_date::date) + 1)::text AS next_start,
+          (
+            (MAX(shift_date::date) + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
+            AND NOW() >= ((MAX(shift_date::date) + 1 - INTERVAL '21 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
+          ) AS is_closed
         FROM shift_assignments
         WHERE status = 'published'
       `);
       const nextStart = pubRows[0]?.next_start;
-      const closureDate = pubRows[0]?.closure_date;
-      const today = new Date().toISOString().slice(0, 10);
-      // Only enforce when the next period is still in the future
-      if (nextStart && closureDate && nextStart > today && today >= closureDate) {
+      const isClosed = pubRows[0]?.is_closed;
+      if (isClosed) {
         return res.status(422).json({
           error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick and Emergency Leave can be submitted now.`,
           code: "LEAVE_WINDOW_CLOSED",

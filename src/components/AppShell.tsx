@@ -506,6 +506,7 @@ function RotaReminderBell({
     leaveClosureDate?: string;
     publishDeadline?: string;
     leaveIsClosed?: boolean;
+    publishIsOverdue?: boolean;
     nextRotaStage?: string;
   }>({
     queryKey: ["workflow-status"],
@@ -517,7 +518,8 @@ function RotaReminderBell({
   // Derive the single most-actionable workflow notification for this role.
   const workflowItem = (() => {
     if (!workflowStatus?.firstRotaPublished) return null;
-    const { nextPeriodStart, leaveIsClosed, nextRotaStage, publishDeadline } = workflowStatus;
+    const { nextPeriodStart, leaveIsClosed, nextRotaStage, publishDeadline, publishIsOverdue } =
+      workflowStatus;
     if (!nextPeriodStart) return null;
 
     const isHeadOrAdmin = activeRole === "head_nurse" || activeRole === "admin";
@@ -527,7 +529,7 @@ function RotaReminderBell({
     // For admin, evaluate all stages and return the most urgent one.
     // Highest urgency first so admin sees the blocking step.
     if (isHeadOrAdmin && nextRotaStage === "approved_cno") {
-      const overdue = !!publishDeadline && today >= publishDeadline;
+      const overdue = !!publishIsOverdue;
       return {
         kind: "publish" as const,
         key: `workflow_pub_${nextPeriodStart}`,
