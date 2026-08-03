@@ -65,6 +65,13 @@ router.get(
       conditions.push(`lr.nurse_id = ANY($${params.length + 1})`);
       params.push(ids);
     }
+    // Batch-fetch by request id — used by the notification bell to resolve
+    // details (nurse name, type, outcome) for a set of unread notif_keys
+    // that each carry a leave_requests.id suffix.
+    if (req.query.ids) {
+      conditions.push(`lr.id = ANY($${params.length + 1})`);
+      params.push(req.query.ids.split(","));
+    }
     if (req.query.from_date) {
       conditions.push(`lr.from_date = $${params.length + 1}`);
       params.push(req.query.from_date);

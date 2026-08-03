@@ -501,6 +501,46 @@ router.patch(
 
     const where = "WHERE " + conditions.join(" AND ");
     await pool.query(`UPDATE shift_assignments SET ${sets.join(", ")} ${where}`, params);
+
+    // HR reject-to-draft: notify the head_nurse/admin for this unit. Was a
+    // gap before — this transition wrote nothing, so a returned submission
+    // gave no bell notification at all (the exception-carve-out in
+    // rota-edit-requests.js for re-requesting edit access is the only place
+    // that assumed this event existed).
+    if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved") && nurse_ids) {
+      const nurseIdArr = nurse_ids.split(",");
+      const { rows: nurseRows } = await pool.query(
+        `SELECT DISTINCT facility, role FROM nurses WHERE id = ANY($1) AND facility IS NOT NULL`,
+        [nurseIdArr],
+      );
+      const facilities = [...new Set(nurseRows.map((n) => n.facility))];
+      const unitLabel = ward || roleGroupOf(nurseRows[0]?.role) || "rota";
+      const periodStart = shift_date_from ?? "";
+      for (const facility of facilities) {
+        const facilitySlug = facility.toLowerCase().replace(/\s+/g, "_");
+        const unitSlug = String(unitLabel).toLowerCase().replace(/\s+/g, "_");
+        // "|" separates facility/unit/period — see jobs/auto-generate-rota.js's
+        // notifyUnit() for why a plain "_" join can't be parsed back reliably.
+        const notifKey = `rota_hr_rejected_${facilitySlug}|${unitSlug}|${periodStart}`;
+        const { rows: recipients } = await pool.query(
+          `SELECT DISTINCT p.id
+             FROM profiles p
+             JOIN user_roles ur ON ur.user_id = p.id
+            WHERE ur.role IN ('head_nurse', 'admin') AND p.is_active = true`,
+        );
+        for (const { id } of recipients) {
+          pool
+            .query(
+              `INSERT INTO notification_state (user_id, notif_key, is_read)
+               VALUES ($1, $2, false)
+               ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+              [id, notifKey],
+            )
+            .catch(() => {});
+        }
+      }
+    }
+
     res.json({ success: true });
   }),
 );

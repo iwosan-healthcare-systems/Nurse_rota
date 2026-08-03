@@ -299,7 +299,10 @@ async function notify(userId, notifKey) {
 async function notifyUnit(facility, prefix, unitLabel, periodStart) {
   const facilitySlug = facility.toLowerCase().replace(/\s+/g, "_");
   const unitSlug = String(unitLabel).toLowerCase().replace(/\s+/g, "_");
-  const notifKey = `${prefix}_${facilitySlug}_${unitSlug}_${periodStart}`;
+  // "|" separates the payload segments (facility/unit/period) so the bell can
+  // parse them back out unambiguously — a plain "_" join can't be split
+  // reliably since facility and ward names can themselves contain "_".
+  const notifKey = `${prefix}_${facilitySlug}|${unitSlug}|${periodStart}`;
   const { rows } = await pool.query(
     `SELECT DISTINCT p.id FROM profiles p
        JOIN user_roles ur ON ur.user_id = p.id

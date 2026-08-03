@@ -39,6 +39,13 @@ router.get(
       conditions.push(`accepted_by_nurse_id = $${params.length + 1}`);
       params.push(req.query.accepted_by_nurse_id);
     }
+    // Batch-fetch by request id — used by the notification bell to resolve
+    // details (ward, shift, accepting nurse) for a set of unread notif_keys
+    // that each carry a locum_requests.id suffix.
+    if (req.query.ids) {
+      conditions.push(`id = ANY($${params.length + 1})`);
+      params.push(req.query.ids.split(","));
+    }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     let query = `SELECT * FROM locum_requests ${where} ORDER BY created_at DESC`;
@@ -204,6 +211,12 @@ router.get(
     if (req.query.facility) {
       conditions.push(`lr.facility = $${params.length + 1}`);
       params.push(req.query.facility);
+    }
+    // Batch-fetch by invite id — used by the notification bell to resolve
+    // details for unread locum_flip_failed_ notif_keys.
+    if (req.query.ids) {
+      conditions.push(`li.id = ANY($${params.length + 1})`);
+      params.push(req.query.ids.split(","));
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";

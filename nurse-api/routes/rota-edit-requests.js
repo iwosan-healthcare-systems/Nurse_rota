@@ -59,6 +59,12 @@ router.get(
     if (req.query.active === "true") {
       conditions.push(`status = 'Approved' AND revoked_at IS NULL`);
     }
+    // Batch-fetch by request id — used by the notification bell to resolve
+    // details (requester name, unit, reason) for unread notif_keys.
+    if (req.query.ids) {
+      conditions.push(`id = ANY($${params.length + 1})`);
+      params.push(req.query.ids.split(","));
+    }
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     const { rows } = await pool.query(
       `SELECT * FROM rota_edit_requests ${where} ORDER BY created_at DESC`,

@@ -132,11 +132,18 @@ router.post(
     try {
       await client.query("BEGIN");
       for (const item of items) {
+        // Unlike GET / (which always uses the caller's own ID, deliberately, so
+        // nobody can read another user's notifications), this route is used by
+        // managers to notify OTHER people — a leave approval notifies the
+        // requester, a locum invite notifies the invited nurse, etc. — so an
+        // explicit item.user_id is honored, falling back to the caller's own ID
+        // only when one isn't supplied (e.g. self-targeted writes like a
+        // "arrange cover" reminder to oneself).
         await client.query(
           `INSERT INTO notification_state (user_id, notif_key, is_read)
          VALUES ($1, $2, $3)
          ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = EXCLUDED.is_read, updated_at = NOW()`,
-          [req.user.userId, item.notif_key, item.is_read ?? false],
+          [item.user_id ?? req.user.userId, item.notif_key, item.is_read ?? false],
         );
       }
       await client.query("COMMIT");
