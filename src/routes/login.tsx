@@ -1,7 +1,7 @@
 import { createFileRoute, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, setToken, getToken } from "@/lib/api";
-import { Loader2 } from "lucide-react";
+import { Loader2, Eye, EyeOff } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { toast } from "sonner";
 import {
@@ -43,6 +43,7 @@ function LoginPage() {
   const { setLoggedInUser } = useAuthInternal();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [roleOptions, setRoleOptions] = useState<AppRole[]>([]);
   const [selectedRole, setSelectedRole] = useState<AppRole | "">("");
@@ -211,16 +212,26 @@ function LoginPage() {
                   <label htmlFor="login-password" className="text-sm font-medium">
                     Password
                   </label>
-                  <input
-                    id="login-password"
-                    type="password"
-                    required
-                    minLength={6}
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                  />
+                  <div className="relative mt-1">
+                    <input
+                      id="login-password"
+                      type={showPassword ? "text" : "password"}
+                      required
+                      minLength={6}
+                      autoComplete="current-password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="w-full h-10 px-3 pr-9 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? "Hide password" : "Show password"}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                    >
+                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </button>
+                  </div>
                 </div>
               </>
             )}
