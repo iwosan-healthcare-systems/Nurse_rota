@@ -142,8 +142,8 @@ router.post(
     }
 
     const { rows } = await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by)
-     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role)
+     VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1)) RETURNING *`,
       [nurse_id, shift, shift_date, ward || null, status || "draft", created_by || null],
     );
     res.status(201).json(rows[0]);
@@ -173,8 +173,8 @@ router.post(
       await client.query("BEGIN");
       for (const row of rows) {
         await client.query(
-          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
+          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role)
+         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1))
          ON CONFLICT (nurse_id, shift_date)
          DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status, updated_at = NOW()`,
           [

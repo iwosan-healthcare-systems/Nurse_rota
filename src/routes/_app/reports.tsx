@@ -159,6 +159,11 @@ type ArchiveAssignment = {
   shift_date: string;
   ward: string | null;
   shift: string;
+  // Role captured when the row was first generated — null on rows written
+  // before this column existed. Always prefer this over a live nurse-role
+  // lookup for archive/history display, so a later role change doesn't
+  // rewrite what was actually published at the time.
+  nurse_role: string | null;
 };
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 const FW_LABELS: Record<FacilityWideGroup, string> = {
@@ -254,7 +259,7 @@ function groupArchiveWindows(
       key = `${fac ?? "__NONE__"}|ward|${row.ward}`;
     } else {
       ward = null;
-      const role = nurseToRole.get(row.nurse_id) ?? "";
+      const role = row.nurse_role ?? nurseToRole.get(row.nurse_id) ?? "";
       roleGroup = roleGroupOf(role);
       key = `${fac ?? "__NONE__"}|fw|${roleGroup ?? "other"}`;
     }
@@ -870,19 +875,21 @@ function ReportsContent() {
     const result = new Map<string, string[]>();
     for (const win of allArchiveWindows) {
       const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
-      const nurseIds = new Set(
-        archiveAssignments
-          .filter(
-            (a) =>
-              a.shift_date >= win.startDate &&
-              a.shift_date <= win.endDate &&
-              a.ward === win.ward &&
-              facilityNurseIds.get(a.nurse_id) === win.facility,
-          )
-          .map((a) => a.nurse_id),
+      // Use each row's own role snapshot (role at generation time), falling back to
+      // the live nurse role only for rows written before the snapshot column existed.
+      const matchingRows = archiveAssignments.filter(
+        (a) =>
+          a.shift_date >= win.startDate &&
+          a.shift_date <= win.endDate &&
+          a.ward === win.ward &&
+          facilityNurseIds.get(a.nurse_id) === win.facility,
       );
       const roles = [
-        ...new Set([...nurseIds].map((id) => nurseRoleMap.get(id)).filter(Boolean) as string[]),
+        ...new Set(
+          matchingRows
+            .map((a) => a.nurse_role ?? nurseRoleMap.get(a.nurse_id))
+            .filter(Boolean) as string[],
+        ),
       ].sort();
       result.set(key, roles);
     }
@@ -1258,22 +1265,28 @@ ${staffToPrint
 
   // ── Schedule archive download ─────────────────────────────────────────────
   async function fetchScheduleData(win: ArchiveWindow) {
-    // Scope to the right set of nurses for this window.
-    let facilityNurses = win.facility
-      ? nurses.filter((n) => n.facility === win.facility)
-      : nurses;
-    if (win.ward === null && win.roleGroup) {
-      facilityNurses = facilityNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
-    }
+    // Scope to the right set of nurses for this window's facility. Deliberately
+    // NOT filtered by current role here — a nurse's role today may differ from
+    // her role when this rota was published, and a role change must not make
+    // her vanish from her own history. Facility-wide (roleGroup) windows are
+    // filtered below using each row's own nurse_role snapshot instead.
+    const facilityNurses = win.facility ? nurses.filter((n) => n.facility === win.facility) : nurses;
     const facilityNurseIds = facilityNurses.map((n) => n.id);
 
     const wardParam =
       win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
-    const allAssignments = facilityNurseIds.length
-      ? await api.get<{ nurse_id: string; shift_date: string; shift: string }[]>(
+    let allAssignments = facilityNurseIds.length
+      ? await api.get<{ nurse_id: string; shift_date: string; shift: string; nurse_role: string | null }[]>(
           `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published${wardParam}`,
         )
       : [];
+
+    if (win.ward === null && win.roleGroup) {
+      const nurseRoleMap = new Map(nurses.map((n) => [n.id, n.role]));
+      allAssignments = allAssignments.filter(
+        (a) => roleGroupOf(a.nurse_role ?? nurseRoleMap.get(a.nurse_id) ?? "") === win.roleGroup,
+      );
+    }
 
     const assignMap = new Map(
       allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift]),
