@@ -92,10 +92,12 @@ router.get(
           ) THEN 'chief_matron'
           ELSE COALESCE(n.role, '')
         END AS nurse_role,
-        p.full_name AS requested_by_name
+        p.full_name AS requested_by_name,
+        rp.full_name AS reviewed_by_name
       FROM leave_requests lr
       LEFT JOIN nurses n ON lr.nurse_id = n.id
       LEFT JOIN profiles p ON p.id = lr.requested_by
+      LEFT JOIN profiles rp ON rp.id = lr.reviewed_by
       ${where}
       ORDER BY lr.created_at DESC`;
     if (req.query.limit) {

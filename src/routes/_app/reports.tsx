@@ -151,6 +151,8 @@ type LeaveRequest = {
   reason: string | null;
   created_at: string;
   rota_stage_at_request: "no_rota" | "draft" | "published" | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
 };
 type ArchiveAssignment = {
   nurse_id: string;
@@ -1108,6 +1110,8 @@ function ReportsContent() {
         Status: l.status,
         "Rota Stage": rotaStageLabel(l.rota_stage_at_request),
         "Requested Date": fmtDate(l.created_at),
+        "Reviewed By": l.reviewed_by_name ?? "",
+        "Reviewed On": l.reviewed_at ? fmtDate(l.reviewed_at) : "",
         Reason: l.reason ?? "",
       }));
 
@@ -1120,6 +1124,8 @@ function ReportsContent() {
         To: fmtDate(s.to_date),
         Status: s.status,
         "Requested Date": fmtDate(s.created_at),
+        "Reviewed By": s.reviewed_by_name ?? "",
+        "Reviewed On": s.reviewed_at ? fmtDate(s.reviewed_at) : "",
         Note: s.reason ?? "",
       }));
 
@@ -1128,13 +1134,13 @@ function ReportsContent() {
         wb,
         leaveRows.length ? leaveRows : [{ Note: "No leave requests" }],
         "Leave Requests",
-        [26, 10, 16, 14, 12, 12, 10, 16, 14, 32],
+        [26, 10, 16, 14, 12, 12, 10, 16, 14, 18, 14, 32],
       );
       xlsAddJsonSheet(
         wb,
         switchRows.length ? switchRows : [{ Note: "No switch requests" }],
         "Shift Switches",
-        [26, 10, 16, 12, 12, 10, 14, 32],
+        [26, 10, 16, 10, 12, 12, 10, 14, 18, 14, 32],
       );
       await xlsDownload(wb, `leave-requests-${todayYmd()}.xlsx`);
       toast.success("Exported");
@@ -2278,6 +2284,8 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">Status</th>
                       <th className="text-left px-4 py-3 font-semibold">Rota Stage</th>
                       <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
+                      <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                      <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2322,6 +2330,12 @@ ${sections}
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
                             {fmtDate(l.created_at)}
                           </td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {l.reviewed_by_name ?? "—"}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {l.reviewed_at ? fmtDate(l.reviewed_at) : "—"}
+                          </td>
                         </tr>
                       );
 
@@ -2338,7 +2352,7 @@ ${sections}
                           .flatMap(([facility, fRows]) => [
                             <tr key={`hdr-${facility}`}>
                               <td
-                                colSpan={7}
+                                colSpan={9}
                                 className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
                               >
                                 {facility}

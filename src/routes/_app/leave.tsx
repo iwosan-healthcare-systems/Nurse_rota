@@ -29,6 +29,8 @@ type LeaveRow = {
   status: "Pending" | "Approved" | "Rejected";
   reason: string | null;
   review_note: string | null;
+  reviewed_by_name: string | null;
+  reviewed_at: string | null;
   created_at: string;
 };
 
@@ -766,6 +768,8 @@ function LeaveTable({
                 <th className="text-left font-semibold px-4 py-3">Period</th>
                 <th className="text-left font-semibold px-4 py-3">Requested Date</th>
                 <th className="text-left font-semibold px-4 py-3">Status</th>
+                <th className="text-left font-semibold px-4 py-3">Reviewed By</th>
+                <th className="text-left font-semibold px-4 py-3">Reviewed On</th>
                 {showApproverCols && <th className="text-right font-semibold px-4 py-3">Action</th>}
               </tr>
             </thead>
@@ -773,7 +777,7 @@ function LeaveTable({
               {pagedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={showApproverCols ? 6 : 4}
+                    colSpan={showApproverCols ? 8 : 6}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     No requests match the current filter.
@@ -781,7 +785,7 @@ function LeaveTable({
                 </tr>
               ) : (() => {
                 // When showing all facilities, group rows by facility with a divider header.
-                const cols = showApproverCols ? 6 : 4;
+                const cols = showApproverCols ? 8 : 6;
                 const renderRow = (l: LeaveRow) => {
                   const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
                   return (
@@ -833,6 +837,12 @@ function LeaveTable({
                             {l.review_note}
                           </p>
                         )}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">
+                        {l.reviewed_by_name ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                        {l.reviewed_at ? fmtDateLeave(l.reviewed_at) : "—"}
                       </td>
                       {showApproverCols && (
                         <td className="px-4 py-3">
