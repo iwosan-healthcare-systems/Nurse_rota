@@ -13,6 +13,22 @@ function roleGroupOf(role) {
   return null;
 }
 
+// Resolves the candidate nurse_ids for a unit (a ward, or a facility-wide
+// role_group). For a ward, every nurse in the facility is returned — the
+// actual ward scoping happens against shift_assignments.ward downstream
+// (authoritative per-row), not against the nurse's own "home ward" field.
+// Shared by forceSubmitUnit below and by the three lifecycle cron jobs via
+// getUnitPeriod (lib/rota-period-dates.js), which need the same candidate
+// set to determine a unit's own current period.
+async function resolveUnitNurseIds({ facility, ward, roleGroup }) {
+  const { rows: nurseRows } = await pool.query("SELECT id, role FROM nurses WHERE facility = $1", [
+    facility,
+  ]);
+  return ward
+    ? nurseRows.map((n) => n.id)
+    : nurseRows.filter((n) => roleGroupOf(n.role) === roleGroup).map((n) => n.id);
+}
+
 // Force-submits a draft rota unit (a ward, or a facility-wide role_group) for
 // HR review, running the exact same safety guards the manual submit endpoint
 // enforces (PATCH /shift-assignments in routes/shift-assignments.js:
@@ -25,12 +41,7 @@ function roleGroupOf(role) {
 // { submitted: false, reason: 'PENDING_LEAVES_EXIST'|'UNAPPLIED_LEAVE_EXISTS'|'NO_NURSES', count: 0 }
 // without writing anything if a guard blocks it or the unit is empty.
 async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodEnd }) {
-  const { rows: nurseRows } = await pool.query("SELECT id, role FROM nurses WHERE facility = $1", [
-    facility,
-  ]);
-  const nurseIds = ward
-    ? nurseRows.map((n) => n.id)
-    : nurseRows.filter((n) => roleGroupOf(n.role) === roleGroup).map((n) => n.id);
+  const nurseIds = await resolveUnitNurseIds({ facility, ward, roleGroup });
   if (!nurseIds.length) return { submitted: false, reason: "NO_NURSES", count: 0 };
 
   const { rows: pendingLeaves } = await pool.query(
@@ -86,4 +97,4 @@ async function wasRevertedToDraft({ facility, ward, roleGroup, periodStart }) {
   return rows.length > 0 && rows[0].event_type === "revert" && rows[0].status === "draft";
 }
 
-module.exports = { forceSubmitUnit, roleGroupOf, wasRevertedToDraft };
+module.exports = { forceSubmitUnit, roleGroupOf, wasRevertedToDraft, resolveUnitNurseIds };

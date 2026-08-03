@@ -5,23 +5,13 @@
 // system never silently publishes an unapproved rota.
 const cron = require("node-cron");
 const pool = require("../db");
-const { getNextPeriodDates } = require("../lib/rota-period-dates");
-const { roleGroupOf } = require("../lib/force-submit-rota");
+const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
+const { roleGroupOf, resolveUnitNurseIds } = require("../lib/force-submit-rota");
 
 // Distinct from AUTO_SUBMIT_LOCK_KEY (729316) — see jobs/auto-end-shifts.js
 // for why the lock exists.
 const AUTO_PUBLISH_LOCK_KEY = 729317;
-const DAYS = 28;
 const DRY_RUN = process.env.DRY_RUN_ROTA_JOBS === "true";
-
-function ymd(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return ymd(d);
-}
 
 async function autoPublishRota(opts = {}) {
   const lockClient = await pool.connect();
@@ -39,27 +29,16 @@ async function autoPublishRota(opts = {}) {
   }
 }
 
-// Groups nurses in a facility by ward or facility-wide role_group — same
-// units the other two rota jobs operate on.
-async function scopeUnitNurseIds(facility, ward, roleGroup) {
-  const { rows } = await pool.query("SELECT id, role FROM nurses WHERE facility = $1", [facility]);
-  return ward ? rows.map((n) => n.id) : rows.filter((n) => roleGroupOf(n.role) === roleGroup).map((n) => n.id);
-}
-
 async function runAutoPublish({ simulateToday } = {}) {
-  const dates = await getNextPeriodDates({ simulateToday });
-  if (!dates || !dates.publishIsOverdue) return;
-
-  const periodStart = dates.nextPeriodStart;
-  const periodEnd = addDays(periodStart, DAYS - 1);
-
-  // Publish every hr_approved unit.
+  // Publish every hr_approved unit whose OWN T-14 deadline has passed —
+  // checked per-unit rather than against one global period, since a unit can
+  // be at a different period than the rest of the system (e.g. it fell
+  // behind after being reverted by HR while other units already moved on).
   const { rows: approvedUnits } = await pool.query(
     `SELECT DISTINCT n.facility, sa.ward, n.role
        FROM shift_assignments sa
        JOIN nurses n ON n.id = sa.nurse_id
-      WHERE sa.status = 'hr_approved' AND sa.shift_date BETWEEN $1 AND $2`,
-    [periodStart, periodEnd],
+      WHERE sa.status = 'hr_approved'`,
   );
   const seenApproved = new Set();
   for (const row of approvedUnits) {
@@ -70,16 +49,21 @@ async function runAutoPublish({ simulateToday } = {}) {
     if (!row.ward && !roleGroup) continue;
     const unitLabel = row.ward ?? roleGroup;
 
+    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const period = await getUnitPeriod(nurseIds, row.ward);
+    if (!period) continue; // defensive — hr_approved rows exist, so this shouldn't happen
+    const window = await getWindowForPeriod(period.periodStart, { simulateToday });
+    if (!window.publishIsOverdue) continue;
+
     if (DRY_RUN) {
       console.log(`[DRY-RUN][auto-publish-rota] would publish ${unitKey}`);
       continue;
     }
 
-    const nurseIds = await scopeUnitNurseIds(row.facility, row.ward, roleGroup);
     const wardClause = row.ward ? "AND sa.ward = $4" : "AND sa.ward IS NULL";
     const params = row.ward
-      ? [nurseIds, periodStart, periodEnd, row.ward]
-      : [nurseIds, periodStart, periodEnd];
+      ? [nurseIds, period.periodStart, period.periodEnd, row.ward]
+      : [nurseIds, period.periodStart, period.periodEnd];
 
     const { rowCount } = await pool.query(
       `UPDATE shift_assignments sa
@@ -92,13 +76,13 @@ async function runAutoPublish({ simulateToday } = {}) {
     await pool
       .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
         "Rota auto-published (T-14 deadline)",
-        `${row.facility} · ${unitLabel} · ${periodStart} → ${periodEnd} (${rowCount} cell(s))`,
+        `${row.facility} · ${unitLabel} · ${period.periodStart} → ${period.periodEnd} (${rowCount} cell(s))`,
       ])
       .catch(() => {});
 
     if (roleGroup === "intern") await rotateInterns(row.facility);
 
-    await notifyUnit(row.facility, "rota_autopublished", unitLabel, periodStart, [
+    await notifyUnit(row.facility, "rota_autopublished", unitLabel, period.periodStart, [
       "head_nurse",
       "hr_admin",
       "cno",
@@ -106,14 +90,13 @@ async function runAutoPublish({ simulateToday } = {}) {
     ]);
   }
 
-  // Exception path: units still stuck in draft/submitted at the deadline —
-  // never publish these; alert humans instead.
+  // Exception path: units still stuck in draft/submitted whose OWN T-14
+  // deadline has passed — never publish these; alert humans instead.
   const { rows: stuckUnits } = await pool.query(
     `SELECT DISTINCT n.facility, sa.ward, n.role
        FROM shift_assignments sa
        JOIN nurses n ON n.id = sa.nurse_id
-      WHERE sa.status IN ('draft', 'submitted') AND sa.shift_date BETWEEN $1 AND $2`,
-    [periodStart, periodEnd],
+      WHERE sa.status IN ('draft', 'submitted')`,
   );
   const seenStuck = new Set();
   for (const row of stuckUnits) {
@@ -124,6 +107,12 @@ async function runAutoPublish({ simulateToday } = {}) {
     if (!row.ward && !roleGroup) continue;
     const unitLabel = row.ward ?? roleGroup;
 
+    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const period = await getUnitPeriod(nurseIds, row.ward);
+    if (!period) continue; // defensive — draft/submitted rows exist, so this shouldn't happen
+    const window = await getWindowForPeriod(period.periodStart, { simulateToday });
+    if (!window.publishIsOverdue) continue;
+
     if (DRY_RUN) {
       console.log(
         `[DRY-RUN][auto-publish-rota] would NOT publish ${row.facility}/${unitLabel} — HR approval missing, would alert`,
@@ -133,10 +122,10 @@ async function runAutoPublish({ simulateToday } = {}) {
     await pool
       .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
         "Rota NOT auto-published — HR approval missing at T-14 deadline",
-        `${row.facility} · ${unitLabel} · ${periodStart} → ${periodEnd}`,
+        `${row.facility} · ${unitLabel} · ${period.periodStart} → ${period.periodEnd}`,
       ])
       .catch(() => {});
-    await notifyUnit(row.facility, "rota_publish_deadline_missed", unitLabel, periodStart, [
+    await notifyUnit(row.facility, "rota_publish_deadline_missed", unitLabel, period.periodStart, [
       "hr_admin",
       "cno",
       "admin",

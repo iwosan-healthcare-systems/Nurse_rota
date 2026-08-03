@@ -10,7 +10,7 @@
 // capability rewrite for why manual generation now requires admin).
 const cron = require("node-cron");
 const pool = require("../db");
-const { getNextPeriodDates } = require("../lib/rota-period-dates");
+const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const {
   generateSchedule,
   isMatron,
@@ -59,12 +59,6 @@ async function autoGenerateRota(opts = {}) {
 }
 
 async function runAutoGenerate({ simulateToday } = {}) {
-  const dates = await getNextPeriodDates({ simulateToday });
-  if (!dates || !dates.generateIsDue) return;
-
-  const genStart = dates.nextPeriodStart;
-  const genEnd = addDays(genStart, DAYS - 1);
-
   const { rows: facilities } = await pool.query(
     "SELECT DISTINCT facility FROM nurses WHERE facility IS NOT NULL AND is_active = true",
   );
@@ -81,34 +75,7 @@ async function runAutoGenerate({ simulateToday } = {}) {
          FROM wards WHERE facility = $1 OR facility IS NULL`,
       [facility],
     );
-
     const facilityIds = facilityNurses.map((n) => n.id);
-    let periodOffset = 0;
-    let previousAssignments = [];
-    const dayBefore = addDays(genStart, -1);
-    const { rows: epochRows } = await pool.query(
-      `SELECT shift_date FROM shift_assignments
-        WHERE nurse_id = ANY($1) AND shift_date <= $2
-        ORDER BY shift_date DESC LIMIT 1`,
-      [facilityIds, dayBefore],
-    );
-    if (epochRows[0]) {
-      periodOffset = daysBetween(epochRows[0].shift_date.slice(0, 10), genStart);
-    }
-    if (periodOffset > 0) {
-      const { rows: prevRows } = await pool.query(
-        `SELECT nurse_id, shift_date, shift FROM shift_assignments
-          WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3`,
-        [facilityIds, addDays(genStart, -5), addDays(genStart, -1)],
-      );
-      previousAssignments = prevRows;
-    }
-
-    const { rows: leaveRows } = await pool.query(
-      `SELECT nurse_id, from_date::text, to_date::text, status FROM leave_requests
-        WHERE nurse_id = ANY($1) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2`,
-      [facilityIds, genStart, genEnd],
-    );
 
     // Ward-based units — everyone not in a facility-wide role, grouped by their first ward.
     const wardNurses = facilityNurses.filter(
@@ -118,15 +85,12 @@ async function runAutoGenerate({ simulateToday } = {}) {
     for (const wardName of wardNames) {
       await generateUnit({
         facility,
+        facilityIds,
         unitNurses: wardNurses.filter((n) => parseWards(n.ward)[0] === wardName),
         wardsForGen: wards.filter((w) => w.name === wardName),
         ward: wardName,
         roleGroup: null,
-        genStart,
-        genEnd,
-        periodOffset,
-        previousAssignments,
-        leave: leaveRows,
+        simulateToday,
       });
     }
 
@@ -142,42 +106,67 @@ async function runAutoGenerate({ simulateToday } = {}) {
       if (!groupNurses.length) continue;
       await generateUnit({
         facility,
+        facilityIds,
         unitNurses: groupNurses,
         wardsForGen: [],
         ward: null,
         roleGroup: key,
-        genStart,
-        genEnd,
-        periodOffset,
-        previousAssignments,
-        leave: leaveRows,
+        simulateToday,
       });
     }
   }
 }
 
-async function generateUnit({
-  facility,
-  unitNurses,
-  wardsForGen,
-  ward,
-  roleGroup,
-  genStart,
-  genEnd,
-  periodOffset,
-  previousAssignments,
-  leave,
-}) {
+async function generateUnit({ facility, facilityIds, unitNurses, wardsForGen, ward, roleGroup, simulateToday }) {
   const unitIds = unitNurses.map((n) => n.id);
   const unitLabel = ward ?? roleGroup;
 
-  // Generate exactly once per unit/period. This job ticks every 5 minutes and
-  // "generate is due" stays true for the entire T-19-onward window (not just
-  // the instant T-19 arrives), so without this guard a unit already generated
-  // — whether by this job or by an admin's manual early trigger — would get
-  // silently deleted and regenerated on every single tick, wiping out any
-  // edits a head_nurse made in between (their edit-access grant only protects
-  // against OTHER people's edits, not this job clobbering the whole unit).
+  // Determine this unit's OWN current period, independent of any other
+  // unit/facility — a unit can fall behind the rest of the system (e.g. it
+  // was reverted by HR after other units already published further ahead),
+  // and a single global "next period" would otherwise regenerate over its
+  // still-unfinished work or check its deadline against the wrong dates.
+  const period = await getUnitPeriod(unitIds, ward);
+  if (!period || period.hasActive) return; // never published yet, or already mid-lifecycle for its own period
+
+  const window = await getWindowForPeriod(period.periodStart, { simulateToday });
+  if (!window.generateIsDue) return;
+
+  const genStart = period.periodStart;
+  const genEnd = period.periodEnd;
+
+  // Pattern-continuity lookback stays facility-wide (matches the manual
+  // Generate button's behavior) even though genStart is now unit-specific —
+  // only the reference date moved per-unit, not the scope of history used.
+  let periodOffset = 0;
+  let previousAssignments = [];
+  const dayBefore = addDays(genStart, -1);
+  const { rows: epochRows } = await pool.query(
+    `SELECT shift_date FROM shift_assignments
+      WHERE nurse_id = ANY($1) AND shift_date <= $2
+      ORDER BY shift_date DESC LIMIT 1`,
+    [facilityIds, dayBefore],
+  );
+  if (epochRows[0]) {
+    periodOffset = daysBetween(epochRows[0].shift_date.slice(0, 10), genStart);
+  }
+  if (periodOffset > 0) {
+    const { rows: prevRows } = await pool.query(
+      `SELECT nurse_id, shift_date, shift FROM shift_assignments
+        WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3`,
+      [facilityIds, addDays(genStart, -5), addDays(genStart, -1)],
+    );
+    previousAssignments = prevRows;
+  }
+
+  const { rows: leave } = await pool.query(
+    `SELECT nurse_id, from_date::text, to_date::text, status FROM leave_requests
+      WHERE nurse_id = ANY($1) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2`,
+    [unitIds, genStart, genEnd],
+  );
+
+  // Defensive backstop — getUnitPeriod()'s hasActive check above should
+  // already prevent reaching here with existing rows for this unit/period.
   const { rows: existing } = await pool.query(
     `SELECT 1 FROM shift_assignments
       WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3 LIMIT 1`,

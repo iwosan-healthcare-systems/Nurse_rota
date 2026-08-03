@@ -1,7 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
-const { getNextPeriodDates } = require("../lib/rota-period-dates");
+const { getWindowForPeriod } = require("../lib/rota-period-dates");
 const { forceSubmitUnit, wasRevertedToDraft } = require("../lib/force-submit-rota");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -81,6 +81,12 @@ router.post(
 
     // The edit-access window is only open from T-19 (auto-generate) to T-17
     // (auto-submit deadline) — enforced here, not just hidden in the UI.
+    // Computed directly from THIS request's period_start (getWindowForPeriod),
+    // not the globally-inferred "next period" (getNextPeriodDates) — a unit
+    // that's fallen behind the rest of the system (e.g. reverted by HR after
+    // other wards/facilities already published further ahead) has its own
+    // period_start, which the global inference would otherwise silently
+    // replace with the wrong, more-advanced period.
     //
     // Exception: if HR reviewed this unit after T-17 and sent it back to
     // draft (reject), the normal window is already closed and can never
@@ -88,9 +94,9 @@ router.post(
     // flagged. In that specific case only, allow a fresh request even though
     // we're past editCloseDate. wasRevertedToDraft() confirms the unit's
     // most recent transition really is that revert (not just any old draft).
-    const dates = await getNextPeriodDates();
+    const dates = await getWindowForPeriod(period_start);
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
-    if (!dates || today < dates.generateDate) {
+    if (today < dates.generateDate) {
       return res.status(422).json({
         error: "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
         code: "OUTSIDE_EDIT_WINDOW",

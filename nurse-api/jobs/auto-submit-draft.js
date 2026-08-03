@@ -4,23 +4,18 @@
 // the draft is reverted back, edit access does not return; must re-request."
 const cron = require("node-cron");
 const pool = require("../db");
-const { getNextPeriodDates } = require("../lib/rota-period-dates");
-const { forceSubmitUnit, roleGroupOf, wasRevertedToDraft } = require("../lib/force-submit-rota");
+const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
+const {
+  forceSubmitUnit,
+  roleGroupOf,
+  wasRevertedToDraft,
+  resolveUnitNurseIds,
+} = require("../lib/force-submit-rota");
 
 // Distinct from AUTO_GENERATE_LOCK_KEY (729315) — see jobs/auto-end-shifts.js
 // for why the lock exists.
 const AUTO_SUBMIT_LOCK_KEY = 729316;
-const DAYS = 28;
 const DRY_RUN = process.env.DRY_RUN_ROTA_JOBS === "true";
-
-function ymd(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-function addDays(dateStr, n) {
-  const d = new Date(dateStr + "T00:00:00");
-  d.setDate(d.getDate() + n);
-  return ymd(d);
-}
 
 async function autoSubmitDraft(opts = {}) {
   const lockClient = await pool.connect();
@@ -39,20 +34,16 @@ async function autoSubmitDraft(opts = {}) {
 }
 
 async function runAutoSubmit({ simulateToday } = {}) {
-  const dates = await getNextPeriodDates({ simulateToday });
-  if (!dates || !dates.editIsClosed) return;
-
-  const periodStart = dates.nextPeriodStart;
-  const periodEnd = addDays(periodStart, DAYS - 1);
-
-  // Every distinct (facility, ward|role_group) that still has a draft cell
-  // in this period.
+  // Every distinct (facility, ward|role_group) that currently has a draft
+  // cell, regardless of date — each unit's own T-17 deadline is checked
+  // individually below, since a unit can be at a different period than the
+  // rest of the system (e.g. it fell behind after being reverted by HR while
+  // other units already moved on).
   const { rows: units } = await pool.query(
     `SELECT DISTINCT n.facility, sa.ward, n.role
        FROM shift_assignments sa
        JOIN nurses n ON n.id = sa.nurse_id
-      WHERE sa.status = 'draft' AND sa.shift_date BETWEEN $1 AND $2`,
-    [periodStart, periodEnd],
+      WHERE sa.status = 'draft'`,
   );
 
   const seen = new Set();
@@ -64,11 +55,24 @@ async function runAutoSubmit({ simulateToday } = {}) {
 
     if (!row.ward && !roleGroup) continue; // unclassifiable role, skip defensively
 
+    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const period = await getUnitPeriod(nurseIds, row.ward);
+    if (!period) continue; // defensive — draft rows exist, so this shouldn't happen
+    const window = await getWindowForPeriod(period.periodStart, { simulateToday });
+    if (!window.editIsClosed) continue;
+
     // HR already reviewed this unit and explicitly sent it back to draft —
     // don't silently re-submit the same as-is draft on the very next tick.
     // It now waits for the head_nurse to request edit access, fix it, and
     // resubmit manually (see routes/rota-edit-requests.js's window exception).
-    if (await wasRevertedToDraft({ facility: row.facility, ward: row.ward, roleGroup, periodStart })) {
+    if (
+      await wasRevertedToDraft({
+        facility: row.facility,
+        ward: row.ward,
+        roleGroup,
+        periodStart: period.periodStart,
+      })
+    ) {
       continue;
     }
 
@@ -81,8 +85,8 @@ async function runAutoSubmit({ simulateToday } = {}) {
       facility: row.facility,
       ward: row.ward,
       roleGroup,
-      periodStart,
-      periodEnd,
+      periodStart: period.periodStart,
+      periodEnd: period.periodEnd,
     });
 
     const unitLabel = row.ward ?? roleGroup;
@@ -90,16 +94,16 @@ async function runAutoSubmit({ simulateToday } = {}) {
       await pool
         .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
           "Rota auto-submitted (T-17 deadline)",
-          `${row.facility} · ${unitLabel} · ${periodStart} → ${periodEnd} (${result.count} cell(s))`,
+          `${row.facility} · ${unitLabel} · ${period.periodStart} → ${period.periodEnd} (${result.count} cell(s))`,
         ])
         .catch(() => {});
-      await notifyUnit(row.facility, "rota_autosubmitted", unitLabel, periodStart, [
+      await notifyUnit(row.facility, "rota_autosubmitted", unitLabel, period.periodStart, [
         "head_nurse",
         "hr_admin",
         "admin",
       ]);
     } else if (result.reason !== "NO_NURSES") {
-      await notifyUnit(row.facility, "rota_autosubmit_blocked", unitLabel, periodStart, [
+      await notifyUnit(row.facility, "rota_autosubmit_blocked", unitLabel, period.periodStart, [
         "head_nurse",
         "hr_admin",
         "admin",
@@ -107,27 +111,27 @@ async function runAutoSubmit({ simulateToday } = {}) {
     }
   }
 
-  // Close out every live edit-access grant for this period, regardless of
-  // whether its unit had a draft cell (a request could be Pending with no
-  // draft rows left, e.g. everything was already deleted/regenerated) —
-  // EXCEPT a unit HR just reverted to draft after review. This job re-runs
-  // every 5 minutes and editIsClosed stays true for the rest of the period,
-  // so without this exclusion a grant freshly approved for the post-revert
-  // re-request case (see routes/rota-edit-requests.js) would get revoked
-  // again on the very next tick.
+  // Close out every live edit-access grant whose OWN unit/period is past
+  // T-17 — checked per-grant now rather than against one global period_start,
+  // for the same reason as above. EXCEPT a unit HR just reverted to draft
+  // after review: this job re-runs every 5 minutes and editIsClosed stays
+  // true for the rest of that unit's period, so without this exclusion a
+  // grant freshly approved for the post-revert re-request case (see
+  // routes/rota-edit-requests.js) would get revoked again on the very next
+  // tick.
   if (!DRY_RUN) {
     const { rows: liveGrants } = await pool.query(
-      `SELECT id, facility, ward, role_group FROM rota_edit_requests
-        WHERE period_start = $1
-          AND (status = 'Pending' OR (status = 'Approved' AND revoked_at IS NULL))`,
-      [periodStart],
+      `SELECT id, facility, ward, role_group, period_start FROM rota_edit_requests
+        WHERE status = 'Pending' OR (status = 'Approved' AND revoked_at IS NULL)`,
     );
     for (const grant of liveGrants) {
+      const window = await getWindowForPeriod(grant.period_start, { simulateToday });
+      if (!window.editIsClosed) continue;
       const reverted = await wasRevertedToDraft({
         facility: grant.facility,
         ward: grant.ward,
         roleGroup: grant.role_group,
-        periodStart,
+        periodStart: grant.period_start,
       });
       if (reverted) continue;
       await pool.query(
