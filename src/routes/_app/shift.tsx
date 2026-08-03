@@ -356,13 +356,13 @@ function ShiftPage() {
     },
   });
 
-  const currentPeriodHours = currentPeriodLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const currentPeriodHours = currentPeriodLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const swapPeriodHours = currentPeriodLogs
     .filter((l) => l.is_swap)
-    .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+    .reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const leavePeriodHours = currentPeriodLogs
     .filter((l) => l.is_leave)
-    .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+    .reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const missedPeriodCount = currentPeriodLogs.filter((l) => l.is_missed).length;
 
   // ── Auto-end: check every minute whether the shift's expected end has passed ──

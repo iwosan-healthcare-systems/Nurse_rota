@@ -976,7 +976,7 @@ function LocumHistoryView({
       const log = r.accepted_by_nurse_id
         ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
         : undefined;
-      acc[key].hours += log?.hours_logged ?? 0;
+      acc[key].hours += Number(log?.hours_logged ?? 0);
       return acc;
     }, {}),
   ).sort((a, b) => b.count - a.count);

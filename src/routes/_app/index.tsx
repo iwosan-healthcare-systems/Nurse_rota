@@ -316,10 +316,10 @@ function NurseDashboard() {
 
   const regularLogs = periodLogs.filter((l) => !l.is_swap);
   const additionalLogs = periodLogs.filter((l) => l.is_swap && l.hours_logged != null);
-  const periodHours = regularLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
-  const additionalHours = additionalLogs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const periodHours = regularLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
+  const additionalHours = additionalLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
-  const targetHours = nurseRecord?.target_hours ?? 185;
+  const targetHours = Number(nurseRecord?.target_hours ?? 185);
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
   const completedShiftCount = regularLogs.filter(
     (l) => l.hours_logged !== null && !l.is_missed,
@@ -508,7 +508,7 @@ function NurseDashboard() {
                 )}
               {activeLog?.ended_at && (
                 <p className="text-sm text-muted-foreground">
-                  Completed · {fmtHoursDetailed(activeLog.hours_logged ?? 0)} logged
+                  Completed · {fmtHoursDetailed(Number(activeLog.hours_logged ?? 0))} logged
                 </p>
               )}
             </div>
@@ -797,18 +797,18 @@ function ManagementAlerts() {
 
   const wfReady = !!workflowStatus?.firstRotaPublished;
   const stage = workflowStatus?.nextRotaStage;
-  const canWfGenPub = activeRole === "head_nurse" || isAdmin;
-  const canWfA1 = activeRole === "chief_matron" || isAdmin;
-  const canWfA2 = activeRole === "cno" || isAdmin;
+  // Generation is now automatic (T-19) — a manual trigger is admin-only, so
+  // this banner becomes purely informational for everyone else.
+  const canWfGenerate = isAdmin;
+  const canWfSubmit = activeRole === "head_nurse" || isAdmin;
+  const canWfApproveRota = activeRole === "hr_admin" || isAdmin;
+  const canWfPublish = activeRole === "cno" || isAdmin;
   const showWfGenerate =
-    wfReady &&
-    workflowStatus?.leaveIsClosed &&
-    canWfGenPub &&
-    (stage === "none" || stage === "draft");
-  const showWfApprove1 = wfReady && stage === "submitted" && canWfA1;
-  const showWfApprove2 = wfReady && stage === "approved_chief" && canWfA2;
-  const showWfPublish = wfReady && stage === "approved_cno" && canWfGenPub;
-  const showWorkflowBanner = showWfGenerate || showWfApprove1 || showWfApprove2 || showWfPublish;
+    wfReady && workflowStatus?.leaveIsClosed && canWfGenerate && stage === "none";
+  const showWfSubmit = wfReady && stage === "draft" && canWfSubmit;
+  const showWfApproveRota = wfReady && stage === "submitted" && canWfApproveRota;
+  const showWfPublish = wfReady && stage === "hr_approved" && canWfPublish;
+  const showWorkflowBanner = showWfGenerate || showWfSubmit || showWfApproveRota || showWfPublish;
 
   const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
   const showPendingLeaveMatron = canApproveLeave && !isAdmin && pendingLeaveNotifKeys.length > 0;
@@ -831,56 +831,42 @@ function ManagementAlerts() {
   return (
     <div className="space-y-3">
       {showWfGenerate && (
-        <div
-          className={`rounded-xl border-2 p-4 flex items-start gap-3 ${
-            stage === "draft"
-              ? "border-amber-400 bg-amber-50 dark:bg-amber-950/30"
-              : "border-blue-400 bg-blue-50 dark:bg-blue-950/30"
-          }`}
-        >
-          <Clock
-            className={`h-5 w-5 shrink-0 mt-0.5 ${stage === "draft" ? "text-amber-600" : "text-blue-600"}`}
-          />
+        <div className="rounded-xl border-2 border-blue-400 bg-blue-50 dark:bg-blue-950/30 p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 mt-0.5 text-blue-600" />
           <div className="flex-1 min-w-0">
-            <p
-              className={`font-bold ${stage === "draft" ? "text-amber-800 dark:text-amber-300" : "text-blue-800 dark:text-blue-300"}`}
-            >
-              {stage === "draft"
-                ? "Draft rota ready — submit for approval"
-                : "Time to generate the next rota"}
+            <p className="font-bold text-blue-800 dark:text-blue-300">
+              Rota not yet generated (admin override)
             </p>
-            <p
-              className={`text-sm mt-1 ${stage === "draft" ? "text-amber-700 dark:text-amber-400" : "text-blue-700 dark:text-blue-400"}`}
-            >
-              {stage === "draft"
-                ? `The draft schedule for ${wfPeriodStr} is ready. Go to the Rota page to review and submit it.`
-                : `Leave window for ${wfPeriodStr} is closed. Go to the Rota page to generate the schedule.`}
+            <p className="text-sm mt-1 text-blue-700 dark:text-blue-400">
+              Leave window for {wfPeriodStr} is closed. The rota auto-generates on schedule (T-19) —
+              use the Rota page only to trigger it early.
             </p>
           </div>
         </div>
       )}
-      {showWfApprove1 && (
+      {showWfSubmit && (
+        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
+          <Clock className="h-5 w-5 shrink-0 mt-0.5 text-amber-600" />
+          <div className="flex-1 min-w-0">
+            <p className="font-bold text-amber-800 dark:text-amber-300">
+              Draft rota ready — submit for approval
+            </p>
+            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+              The draft schedule for {wfPeriodStr} is ready. Go to the Rota page to review and
+              submit it (it auto-submits at the T-17 deadline if you don't).
+            </p>
+          </div>
+        </div>
+      )}
+      {showWfApproveRota && (
         <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
           <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
-              Draft rota awaiting Chief Matron approval
+              Draft rota awaiting HR approval
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
               The rota for {wfPeriodStr} has been submitted. Go to Approvals to review and approve.
-            </p>
-          </div>
-        </div>
-      )}
-      {showWfApprove2 && (
-        <div className="rounded-xl border-2 border-amber-400 bg-amber-50 dark:bg-amber-950/30 p-4 flex items-start gap-3">
-          <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
-          <div className="flex-1 min-w-0">
-            <p className="font-bold text-amber-800 dark:text-amber-300">
-              Rota awaiting CNO final approval
-            </p>
-            <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              Chief Matron approved the rota for {wfPeriodStr}. Go to Approvals for CNO sign-off.
             </p>
           </div>
         </div>
@@ -893,7 +879,8 @@ function ManagementAlerts() {
               Rota approved — ready to publish
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              CNO has approved the rota for {wfPeriodStr}. Go to Approvals to publish it.
+              HR has approved the rota for {wfPeriodStr}. Go to Approvals to publish it (or it
+              auto-publishes at the T-14 deadline).
             </p>
           </div>
         </div>

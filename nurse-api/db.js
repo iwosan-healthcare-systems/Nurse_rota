@@ -7,6 +7,15 @@ const { Pool, types } = require('pg');
 // "T00:00:00" to build a local-midnight Date.
 types.setTypeParser(1082, (val) => val);
 
+// Return NUMERIC columns (hours_logged, target_hours, hours_this_month, total_hours)
+// as JS numbers instead of strings. pg's default returns NUMERIC as a string to avoid
+// precision loss on values too large/precise for float64 — not a concern for hour
+// counts here. Left unparsed, "9.00" + "9.00" is string concatenation ("9.009.00"),
+// which silently corrupts any reduce()/+= accumulation into a non-numeric string —
+// Math.floor/round on that then renders as "NaN" (e.g. the nurse dashboard's
+// "NaNh NaNm" hours-this-period bug).
+types.setTypeParser(1700, (val) => (val === null ? null : parseFloat(val)));
+
 const pool = new Pool({
   host: process.env.DB_HOST,
   port: parseInt(process.env.DB_PORT || '5432'),
