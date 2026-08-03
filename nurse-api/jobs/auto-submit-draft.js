@@ -5,7 +5,7 @@
 const cron = require("node-cron");
 const pool = require("../db");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
-const { forceSubmitUnit, roleGroupOf } = require("../lib/force-submit-rota");
+const { forceSubmitUnit, roleGroupOf, wasRevertedToDraft } = require("../lib/force-submit-rota");
 
 // Distinct from AUTO_GENERATE_LOCK_KEY (729315) — see jobs/auto-end-shifts.js
 // for why the lock exists.
@@ -64,6 +64,14 @@ async function runAutoSubmit({ simulateToday } = {}) {
 
     if (!row.ward && !roleGroup) continue; // unclassifiable role, skip defensively
 
+    // HR already reviewed this unit and explicitly sent it back to draft —
+    // don't silently re-submit the same as-is draft on the very next tick.
+    // It now waits for the head_nurse to request edit access, fix it, and
+    // resubmit manually (see routes/rota-edit-requests.js's window exception).
+    if (await wasRevertedToDraft({ facility: row.facility, ward: row.ward, roleGroup, periodStart })) {
+      continue;
+    }
+
     if (DRY_RUN) {
       console.log(`[DRY-RUN][auto-submit-draft] would force-submit ${unitKey}`);
       continue;
@@ -101,15 +109,34 @@ async function runAutoSubmit({ simulateToday } = {}) {
 
   // Close out every live edit-access grant for this period, regardless of
   // whether its unit had a draft cell (a request could be Pending with no
-  // draft rows left, e.g. everything was already deleted/regenerated).
+  // draft rows left, e.g. everything was already deleted/regenerated) —
+  // EXCEPT a unit HR just reverted to draft after review. This job re-runs
+  // every 5 minutes and editIsClosed stays true for the rest of the period,
+  // so without this exclusion a grant freshly approved for the post-revert
+  // re-request case (see routes/rota-edit-requests.js) would get revoked
+  // again on the very next tick.
   if (!DRY_RUN) {
-    await pool.query(
-      `UPDATE rota_edit_requests
-          SET revoked_at = NOW(), revoke_reason = 'auto_closed_t17', updated_at = NOW()
+    const { rows: liveGrants } = await pool.query(
+      `SELECT id, facility, ward, role_group FROM rota_edit_requests
         WHERE period_start = $1
           AND (status = 'Pending' OR (status = 'Approved' AND revoked_at IS NULL))`,
       [periodStart],
     );
+    for (const grant of liveGrants) {
+      const reverted = await wasRevertedToDraft({
+        facility: grant.facility,
+        ward: grant.ward,
+        roleGroup: grant.role_group,
+        periodStart,
+      });
+      if (reverted) continue;
+      await pool.query(
+        `UPDATE rota_edit_requests
+            SET revoked_at = NOW(), revoke_reason = 'auto_closed_t17', updated_at = NOW()
+          WHERE id = $1`,
+        [grant.id],
+      );
+    }
   }
 }
 

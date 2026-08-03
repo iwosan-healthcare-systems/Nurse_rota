@@ -2,7 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
-const { forceSubmitUnit } = require("../lib/force-submit-rota");
+const { forceSubmitUnit, wasRevertedToDraft } = require("../lib/force-submit-rota");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 async function notify(userId, notifKey) {
@@ -81,13 +81,34 @@ router.post(
 
     // The edit-access window is only open from T-19 (auto-generate) to T-17
     // (auto-submit deadline) — enforced here, not just hidden in the UI.
+    //
+    // Exception: if HR reviewed this unit after T-17 and sent it back to
+    // draft (reject), the normal window is already closed and can never
+    // reopen on its own — the head_nurse would have no way to fix what HR
+    // flagged. In that specific case only, allow a fresh request even though
+    // we're past editCloseDate. wasRevertedToDraft() confirms the unit's
+    // most recent transition really is that revert (not just any old draft).
     const dates = await getNextPeriodDates();
     const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
-    if (!dates || today < dates.generateDate || dates.editIsClosed) {
+    if (!dates || today < dates.generateDate) {
       return res.status(422).json({
         error: "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
         code: "OUTSIDE_EDIT_WINDOW",
       });
+    }
+    if (dates.editIsClosed) {
+      const reopened = await wasRevertedToDraft({
+        facility,
+        ward: ward || null,
+        roleGroup: ward ? null : role_group,
+        periodStart: period_start,
+      });
+      if (!reopened) {
+        return res.status(422).json({
+          error: "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
+          code: "OUTSIDE_EDIT_WINDOW",
+        });
+      }
     }
 
     try {

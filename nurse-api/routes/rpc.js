@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
+const { getNextPeriodDates } = require("../lib/rota-period-dates");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 router.post(
@@ -170,10 +171,11 @@ router.post(
 //
 // Timeline (all relative to next period start date):
 //   T-21  : leave_closure_date  — non-exempt leave requests blocked
-//   T-19/20: generate window     — head nurse notified to generate rota
-//   T-14  : publish_deadline    — rota must be published by this date
+//   T-19  : generate_date       — system auto-generates the draft rota
+//   T-17  : edit_close_date     — draft force-submitted; edit-access grants close
+//   T-14  : publish_deadline    — system auto-publishes if HR-approved
 //
-// nextRotaStage: 'none' | 'draft' | 'submitted' | 'approved_chief' | 'approved_cno' | 'published'
+// nextRotaStage: 'none' | 'draft' | 'submitted' | 'hr_approved' | 'published'
 router.get(
   "/workflow-status",
   wrap(async (req, res) => {
@@ -225,24 +227,33 @@ router.get(
       WHERE shift_date >= $1
       ORDER BY
         CASE status
-          WHEN 'published'      THEN 1
-          WHEN 'approved_cno'   THEN 2
-          WHEN 'approved_chief' THEN 3
-          WHEN 'submitted'      THEN 4
-          WHEN 'draft'          THEN 5
-          ELSE 6
+          WHEN 'published'   THEN 1
+          WHEN 'hr_approved' THEN 2
+          WHEN 'submitted'   THEN 3
+          WHEN 'draft'       THEN 4
+          ELSE 5
         END
       LIMIT 1
     `, [nextPeriodStart]);
 
     const nextRotaStage = stageRows[0]?.status ?? 'none';
 
+    // T-19/T-17 milestone dates + due-flags come from the shared lib (single
+    // source of truth for the auto-generate/auto-submit jobs) — added here so
+    // the dashboard can show the full T-21..T-14 timeline, not just leave
+    // closure and publish deadline.
+    const periodDates = await getNextPeriodDates();
+
     res.json({
       firstRotaPublished: true,
       nextPeriodStart,
       leaveClosureDate,
+      generateDate: periodDates?.generateDate,
+      editCloseDate: periodDates?.editCloseDate,
       publishDeadline,
       leaveIsClosed,
+      generateIsDue: periodDates?.generateIsDue ?? false,
+      editIsClosed: periodDates?.editIsClosed ?? false,
       publishIsOverdue,
       nextRotaStage,
     });

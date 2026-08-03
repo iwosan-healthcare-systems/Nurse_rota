@@ -138,7 +138,7 @@ router.post(
       const { rows: inApprovalRows } = await pool.query(
         `SELECT 1 FROM shift_assignments
           WHERE nurse_id = $1
-            AND status IN ('submitted', 'approved_chief', 'approved_cno')
+            AND status IN ('submitted', 'hr_approved')
             AND shift_date BETWEEN $2 AND $3
           LIMIT 1`,
         [nurse_id, from_date, to_date],
@@ -337,7 +337,16 @@ router.patch(
       }
 
       // When a leave request is approved, flip the nurse's shift cells to LEAVE
-      // for every date in the leave window that already exists in shift_assignments.
+      // for every date in the leave window that already exists in shift_assignments —
+      // including draft cells. Draft used to be excluded here, leaving the flip
+      // to a manual "Regenerate" click on the Rota page (see reapply-leave in
+      // shift-assignments.js, still there as a manual re-trigger / historical
+      // catch-up path, and its UNAPPLIED_LEAVE_EXISTS submit-time guard, still
+      // there as a defensive backstop). Draft rota status can't itself block
+      // this: a leave request can only be Pending against a draft or published
+      // rota in the first place (POST / here rejects new requests once the
+      // rota is submitted/hr_approved), so by approval time the rota is either
+      // still draft or already published — never mid-review.
       const leave = rows[0];
       let creditsToApply = [];
       if (
@@ -354,7 +363,6 @@ router.patch(
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
               AND shift != 'LEAVE'
-              AND status != 'draft'
             RETURNING shift_date, pre_leave_shift`,
           [leave.nurse_id, leave.from_date, leave.to_date],
         );
@@ -449,47 +457,57 @@ router.patch(
             const facility = nurseRows[0]?.facility;
             const nurseRole = nurseRows[0]?.role || "";
             if (!facility) return;
-            // Find draft assignments for THIS specific nurse, grouped by ward.
-            // A nurse may appear in multiple wards (rare) or in facility-wide (ward = null).
-            const { rows: draftRows } = await pool.query(
-              `SELECT sa.ward, MIN(sa.shift_date)::text AS period_start
-                 FROM shift_assignments sa
-                WHERE sa.nurse_id = $1
-                  AND sa.status = 'draft'
-                  AND EXISTS (
-                    SELECT 1 FROM shift_assignments sa2
-                     WHERE sa2.nurse_id = sa.nurse_id
-                       AND sa2.status = 'draft'
-                       AND sa2.ward IS NOT DISTINCT FROM sa.ward
-                       AND sa2.shift_date BETWEEN $2 AND $3
-                  )
-                GROUP BY sa.ward`,
-              [leave.nurse_id, leave.from_date, leave.to_date],
-            );
-            if (!draftRows.length) return;
             const facilitySlug = facility.toLowerCase().replace(/\s+/g, "_");
-            // Notify all head_nurse and admin profiles
-            const { rows: generators } = await pool.query(
-              `SELECT DISTINCT p.id
-                 FROM profiles p
-                 JOIN user_roles ur ON ur.user_id = p.id
-                WHERE ur.role IN ('head_nurse', 'admin')
-                  AND p.is_active = true`,
-            );
-            for (const draftRow of draftRows) {
-              const wardSlug = draftRow.ward
-                ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
-                : facilityWideGroupSlug(nurseRole);
-              const notifKey = `rota_regenerate_needed_${facilitySlug}_${draftRow.period_start}_${wardSlug}`;
-              for (const { id } of generators) {
-                pool
-                  .query(
-                    `INSERT INTO notification_state (user_id, notif_key, is_read)
-                     VALUES ($1, $2, false)
-                     ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
-                    [id, notifKey],
-                  )
-                  .catch(() => {});
+
+            // Approved leave is now flipped to LEAVE automatically above — no
+            // "regenerate" prompt needed. A Rejected leave leaves the draft's
+            // existing shift exactly as it was (nothing was ever flipped for a
+            // Pending request), but the head_nurse may still want to know a
+            // decision landed, e.g. to re-arrange cover they'd informally
+            // planned around — so that ping stays for Rejected only.
+            if (leave.status === "Rejected") {
+              // Find draft assignments for THIS specific nurse, grouped by ward.
+              // A nurse may appear in multiple wards (rare) or in facility-wide (ward = null).
+              const { rows: draftRows } = await pool.query(
+                `SELECT sa.ward, MIN(sa.shift_date)::text AS period_start
+                   FROM shift_assignments sa
+                  WHERE sa.nurse_id = $1
+                    AND sa.status = 'draft'
+                    AND EXISTS (
+                      SELECT 1 FROM shift_assignments sa2
+                       WHERE sa2.nurse_id = sa.nurse_id
+                         AND sa2.status = 'draft'
+                         AND sa2.ward IS NOT DISTINCT FROM sa.ward
+                         AND sa2.shift_date BETWEEN $2 AND $3
+                    )
+                  GROUP BY sa.ward`,
+                [leave.nurse_id, leave.from_date, leave.to_date],
+              );
+              if (draftRows.length) {
+                // Notify all head_nurse and admin profiles
+                const { rows: generators } = await pool.query(
+                  `SELECT DISTINCT p.id
+                     FROM profiles p
+                     JOIN user_roles ur ON ur.user_id = p.id
+                    WHERE ur.role IN ('head_nurse', 'admin')
+                      AND p.is_active = true`,
+                );
+                for (const draftRow of draftRows) {
+                  const wardSlug = draftRow.ward
+                    ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
+                    : facilityWideGroupSlug(nurseRole);
+                  const notifKey = `rota_regenerate_needed_${facilitySlug}_${draftRow.period_start}_${wardSlug}`;
+                  for (const { id } of generators) {
+                    pool
+                      .query(
+                        `INSERT INTO notification_state (user_id, notif_key, is_read)
+                         VALUES ($1, $2, false)
+                         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                        [id, notifKey],
+                      )
+                      .catch(() => {});
+                  }
+                }
               }
             }
 

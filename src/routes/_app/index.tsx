@@ -778,7 +778,12 @@ function ManagementAlerts() {
   const { data: workflowStatus } = useQuery<{
     firstRotaPublished: boolean;
     nextPeriodStart?: string;
+    leaveClosureDate?: string;
+    generateDate?: string;
+    editCloseDate?: string;
+    publishDeadline?: string;
     leaveIsClosed?: boolean;
+    editIsClosed?: boolean;
     nextRotaStage?: string;
   }>({
     queryKey: ["workflow-status"],
@@ -809,6 +814,44 @@ function ManagementAlerts() {
   const showWfApproveRota = wfReady && stage === "submitted" && canWfApproveRota;
   const showWfPublish = wfReady && stage === "hr_approved" && canWfPublish;
   const showWorkflowBanner = showWfGenerate || showWfSubmit || showWfApproveRota || showWfPublish;
+  const wfPeriodStr = fmtWD(workflowStatus?.nextPeriodStart);
+
+  // Status timeline banner — unlike the role-gated "action needed" banners
+  // above, this one is visible to every role (everyone renders ManagementAlerts,
+  // see the comment on Dashboard()) so anyone can see where the next rota
+  // period stands across T-21/T-19/T-17/T-14, not just whoever's turn it is
+  // to act.
+  const fmtGenerateDate = fmtWD(workflowStatus?.generateDate);
+  const fmtEditCloseDate = fmtWD(workflowStatus?.editCloseDate);
+  const fmtLeaveCloseDate = fmtWD(workflowStatus?.leaveClosureDate);
+  const fmtPublishDeadline = fmtWD(workflowStatus?.publishDeadline);
+  let wfTimelineTitle = "";
+  let wfTimelineDetail = "";
+  let wfTimelineDone = false;
+  if (stage === "none") {
+    if (workflowStatus?.leaveIsClosed) {
+      wfTimelineTitle = `Leave requests closed for ${wfPeriodStr}`;
+      wfTimelineDetail = `The rota for this period auto-generates on ${fmtGenerateDate} (T-19).`;
+    } else {
+      wfTimelineTitle = `Next rota period: ${wfPeriodStr}`;
+      wfTimelineDetail = `Leave requests for this period close ${fmtLeaveCloseDate} (T-21).`;
+    }
+  } else if (stage === "draft") {
+    wfTimelineTitle = `Draft rota generated for ${wfPeriodStr}`;
+    wfTimelineDetail = `Open for edits (by request to HR) until ${fmtEditCloseDate} (T-17), when it's automatically submitted for HR review.`;
+  } else if (stage === "submitted") {
+    wfTimelineTitle = `Rota for ${wfPeriodStr} submitted for HR review`;
+    wfTimelineDetail = `HR approval is due by ${fmtPublishDeadline} (T-14).`;
+  } else if (stage === "hr_approved") {
+    wfTimelineTitle = `Rota for ${wfPeriodStr} approved by HR`;
+    wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.`;
+    wfTimelineDone = true;
+  } else if (stage === "published") {
+    wfTimelineTitle = `Rota for ${wfPeriodStr} published`;
+    wfTimelineDetail = `This period is confirmed and takes effect ${wfPeriodStr}.`;
+    wfTimelineDone = true;
+  }
+  const showWfTimeline = wfReady && !!wfTimelineTitle;
 
   const showRegenAlert = canSeeRegen && regenNotifKeys.length > 0;
   const showPendingLeaveMatron = canApproveLeave && !isAdmin && pendingLeaveNotifKeys.length > 0;
@@ -822,14 +865,48 @@ function ManagementAlerts() {
     !showPendingLeaveMatron &&
     !showGeneralPendingForMatron &&
     !showPendingLeaveInfo &&
-    !showWorkflowBanner
+    !showWorkflowBanner &&
+    !showWfTimeline
   )
     return null;
 
-  const wfPeriodStr = fmtWD(workflowStatus?.nextPeriodStart);
-
   return (
     <div className="space-y-3">
+      {showWfTimeline && (
+        <div
+          className={`rounded-xl border-2 p-4 flex items-start gap-3 ${
+            wfTimelineDone
+              ? "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30"
+              : "border-sky-400 bg-sky-50 dark:bg-sky-950/30"
+          }`}
+        >
+          {wfTimelineDone ? (
+            <CheckCircle2 className="h-5 w-5 shrink-0 mt-0.5 text-emerald-600" />
+          ) : (
+            <CalendarDays className="h-5 w-5 shrink-0 mt-0.5 text-sky-600" />
+          )}
+          <div className="flex-1 min-w-0">
+            <p
+              className={`font-bold ${
+                wfTimelineDone
+                  ? "text-emerald-800 dark:text-emerald-300"
+                  : "text-sky-800 dark:text-sky-300"
+              }`}
+            >
+              {wfTimelineTitle}
+            </p>
+            <p
+              className={`text-sm mt-1 ${
+                wfTimelineDone
+                  ? "text-emerald-700 dark:text-emerald-400"
+                  : "text-sky-700 dark:text-sky-400"
+              }`}
+            >
+              {wfTimelineDetail}
+            </p>
+          </div>
+        </div>
+      )}
       {showWfGenerate && (
         <div className="rounded-xl border-2 border-blue-400 bg-blue-50 dark:bg-blue-950/30 p-4 flex items-start gap-3">
           <Clock className="h-5 w-5 shrink-0 mt-0.5 text-blue-600" />

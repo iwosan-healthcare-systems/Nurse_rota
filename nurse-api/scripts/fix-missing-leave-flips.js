@@ -11,9 +11,9 @@
 //
 // This script finds every shift_assignments row that disagrees with an approved
 // (non-Swap) leave request covering that date, regardless of the row's status
-// (draft/submitted/approved_chief/approved_cno/published) — matching exactly
-// what /shift-assignments/reapply-leave already does for a single nurse/date
-// range, just applied system-wide in one pass.
+// (draft/submitted/hr_approved/published) — matching exactly what
+// /shift-assignments/reapply-leave already does for a single nurse/date range,
+// just applied system-wide in one pass.
 //
 // Run from /home/ubuntu/nurse-api on NRota:
 //   node scripts/fix-missing-leave-flips.js            (dry run — prints every mismatch found)

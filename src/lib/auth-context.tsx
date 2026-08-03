@@ -80,8 +80,6 @@ interface AuthCtx {
   canEditRota: boolean;
   canAutoGenerate: boolean;
   canSubmitApproval: boolean;
-  canApproveChiefMatron: boolean;
-  canApproveCno: boolean;
   canApproveRota: boolean;
   canPublishRota: boolean;
   canRevertPublished: boolean;
@@ -346,11 +344,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // an admin emergency override, not a normal head_nurse action.
     canAutoGenerate: cap("auto_generate", ["admin"]),
     canSubmitApproval: cap("submit_approval", ["admin", "head_nurse"]),
-    // Chief Matron's rota-approval step is retired — these two flags are kept
-    // wired (not deleted) since approve_chief_matron/approve_cno still exist
-    // in the capability matrix, unused, same "leave it" pattern as elsewhere.
-    canApproveChiefMatron: cap("approve_chief_matron", ["admin", "chief_matron"]),
-    canApproveCno: cap("approve_cno", ["admin", "cno"]),
     canApproveRota: cap("approve_rota", ["admin", "hr_admin"]),
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),

@@ -99,16 +99,6 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Submit Rota for Approval",
     roles: ["admin", "head_nurse"],
   },
-  {
-    key: "approve_chief_matron",
-    label: "Chief Matron Approval Step (retired — no longer enforced)",
-    roles: ["admin", "chief_matron"],
-  },
-  {
-    key: "approve_cno",
-    label: "CNO Approval Step (retired — no longer enforced)",
-    roles: ["admin", "cno"],
-  },
   { key: "approve_rota", label: "Approve Rota (HR review step)", roles: ["admin", "hr_admin"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
   { key: "revert_published", label: "Revert Published Rota to Draft", roles: ["admin"] },
