@@ -2715,7 +2715,9 @@ function RotaPage() {
           description={
             isNurseTier
               ? "Your schedule for this period has not been published yet. Check back later."
-              : "Auto-generate a rota to see the 28-day view. The schedule will appear here once generated."
+              : canGenerate
+                ? "The rota auto-generates on schedule (T-19, 19 days before the period starts). Use the button below only to trigger it early."
+                : "The rota for this period hasn't been generated yet — it auto-generates on schedule (T-19, 19 days before the period starts). No action is needed."
           }
           action={
             canGenerate && effectiveFacility && selectedWard ? (
@@ -2724,11 +2726,11 @@ function RotaPage() {
                 onClick={openGenDialog}
                 className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
               >
-                <CalendarDays className="h-4 w-4" /> Auto-generate
+                <CalendarDays className="h-4 w-4" /> Generate Now (Admin Override)
               </button>
             ) : canGenerate ? (
               <p className="text-xs text-muted-foreground">
-                Select a facility and ward to generate a schedule.
+                Select a facility and ward to generate early.
               </p>
             ) : undefined
           }
