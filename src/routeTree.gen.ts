@@ -25,6 +25,7 @@ import { Route as AppLocumRouteImport } from './routes/_app/locum'
 import { Route as AppLeaveRouteImport } from './routes/_app/leave'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
+import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift.history'
 
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
@@ -105,6 +106,11 @@ const AppApprovalsRoute = AppApprovalsRouteImport.update({
   path: '/approvals',
   getParentRoute: () => AppRoute,
 } as any)
+const AppShiftHistoryRoute = AppShiftHistoryRouteImport.update({
+  id: '/history',
+  path: '/history',
+  getParentRoute: () => AppShiftRoute,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
@@ -118,10 +124,11 @@ export interface FileRoutesByFullPath {
   '/reports': typeof AppReportsRoute
   '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
-  '/shift': typeof AppShiftRoute
+  '/shift': typeof AppShiftRouteWithChildren
   '/staff': typeof AppStaffRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
+  '/shift/history': typeof AppShiftHistoryRoute
 }
 export interface FileRoutesByTo {
   '/login': typeof LoginRoute
@@ -134,11 +141,12 @@ export interface FileRoutesByTo {
   '/reports': typeof AppReportsRoute
   '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
-  '/shift': typeof AppShiftRoute
+  '/shift': typeof AppShiftRouteWithChildren
   '/staff': typeof AppStaffRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
   '/': typeof AppIndexRoute
+  '/shift/history': typeof AppShiftHistoryRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -153,11 +161,12 @@ export interface FileRoutesById {
   '/_app/reports': typeof AppReportsRoute
   '/_app/roles': typeof AppRolesRoute
   '/_app/rota': typeof AppRotaRoute
-  '/_app/shift': typeof AppShiftRoute
+  '/_app/shift': typeof AppShiftRouteWithChildren
   '/_app/staff': typeof AppStaffRoute
   '/_app/users': typeof AppUsersRoute
   '/_app/wards': typeof AppWardsRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/shift/history': typeof AppShiftHistoryRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -177,6 +186,7 @@ export interface FileRouteTypes {
     | '/staff'
     | '/users'
     | '/wards'
+    | '/shift/history'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/login'
@@ -194,6 +204,7 @@ export interface FileRouteTypes {
     | '/users'
     | '/wards'
     | '/'
+    | '/shift/history'
   id:
     | '__root__'
     | '/_app'
@@ -212,6 +223,7 @@ export interface FileRouteTypes {
     | '/_app/users'
     | '/_app/wards'
     | '/_app/'
+    | '/_app/shift/history'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -333,8 +345,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppApprovalsRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/shift/history': {
+      id: '/_app/shift/history'
+      path: '/history'
+      fullPath: '/shift/history'
+      preLoaderRoute: typeof AppShiftHistoryRouteImport
+      parentRoute: typeof AppShiftRoute
+    }
   }
 }
+
+interface AppShiftRouteChildren {
+  AppShiftHistoryRoute: typeof AppShiftHistoryRoute
+}
+
+const AppShiftRouteChildren: AppShiftRouteChildren = {
+  AppShiftHistoryRoute: AppShiftHistoryRoute,
+}
+
+const AppShiftRouteWithChildren = AppShiftRoute._addFileChildren(
+  AppShiftRouteChildren,
+)
 
 interface AppRouteChildren {
   AppApprovalsRoute: typeof AppApprovalsRoute
@@ -346,7 +377,7 @@ interface AppRouteChildren {
   AppReportsRoute: typeof AppReportsRoute
   AppRolesRoute: typeof AppRolesRoute
   AppRotaRoute: typeof AppRotaRoute
-  AppShiftRoute: typeof AppShiftRoute
+  AppShiftRoute: typeof AppShiftRouteWithChildren
   AppStaffRoute: typeof AppStaffRoute
   AppUsersRoute: typeof AppUsersRoute
   AppWardsRoute: typeof AppWardsRoute
@@ -363,7 +394,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppReportsRoute: AppReportsRoute,
   AppRolesRoute: AppRolesRoute,
   AppRotaRoute: AppRotaRoute,
-  AppShiftRoute: AppShiftRoute,
+  AppShiftRoute: AppShiftRouteWithChildren,
   AppStaffRoute: AppStaffRoute,
   AppUsersRoute: AppUsersRoute,
   AppWardsRoute: AppWardsRoute,

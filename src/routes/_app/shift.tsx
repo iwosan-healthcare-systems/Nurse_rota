@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -1005,8 +1005,7 @@ function ShiftPage() {
 const HISTORY_PAGE = 5;
 
 function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
-  const [showAll, setShowAll] = useState(false);
-  const visible = showAll ? logs : logs.slice(0, HISTORY_PAGE);
+  const visible = logs.slice(0, HISTORY_PAGE);
 
   return (
     <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
@@ -1080,24 +1079,12 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
           </div>
         ))}
       </div>
-      {!showAll && logs.length > HISTORY_PAGE && (
-        <button
-          type="button"
-          onClick={() => setShowAll(true)}
-          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
-        >
-          Show all ({logs.length - HISTORY_PAGE} more)
-        </button>
-      )}
-      {showAll && logs.length > HISTORY_PAGE && (
-        <button
-          type="button"
-          onClick={() => setShowAll(false)}
-          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
-        >
-          Show less
-        </button>
-      )}
+      <Link
+        to="/shift/history"
+        className="block w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
+      >
+        View all history{logs.length > HISTORY_PAGE ? ` (${logs.length - HISTORY_PAGE} more)` : ""}
+      </Link>
     </div>
   );
 }

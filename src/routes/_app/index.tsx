@@ -64,6 +64,17 @@ function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Hours implied by a published shift_assignments cell (9h M/MWC, 15h N/NC, 0h OFF).
+ *  A LEAVE cell is credited using pre_leave_shift — the shift it covered before being
+ *  flipped to LEAVE — so approved leave still counts toward the period total. Mirrors
+ *  scheduledHoursFor in shift.tsx. */
+function scheduledHoursFor(shift: string, preLeaveShift: string | null) {
+  const code = shift === "LEAVE" ? (preLeaveShift ?? "") : shift;
+  if (code === "M" || code === "MWC") return 9;
+  if (code === "N" || code === "NC") return 15;
+  return 0;
+}
+
 function fmtHours(dec: number) {
   const h = Math.floor(dec);
   const m = Math.round((dec - h) * 60);
@@ -261,6 +272,37 @@ function NurseDashboard() {
     },
   });
 
+  // Total hours this nurse is actually rostered for in the current period, computed
+  // from her own published shift_assignments — not the manually-set target_hours
+  // field. Same period-boundary approach as shift.tsx: the earliest published
+  // assignment within the trailing 27-day window marks the period start, then the
+  // full 28-day block is fetched from there.
+  const { data: periodAssignments = [] } = useQuery<
+    { shift: string; pre_leave_shift: string | null }[]
+  >({
+    queryKey: ["my-period-assignments-dash", nurseId],
+    enabled: !!nurseId,
+    queryFn: async () => {
+      const lookback = new Date();
+      lookback.setDate(lookback.getDate() - 27);
+      const lb = ymd(lookback);
+      const winRow = await api
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
+        .catch(() => []);
+      const periodStart = winRow[0]?.shift_date ?? lb;
+      const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
+      periodEndDate.setDate(periodEndDate.getDate() + 27);
+      const periodEnd = ymd(periodEndDate);
+      return api
+        .get<
+          { shift: string; pre_leave_shift: string | null }[]
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&status=published`)
+        .catch(() => []);
+    },
+  });
+
   const { data: myLeave = [] } = useQuery<LeaveRequest[]>({
     queryKey: ["my-leave", nurseId],
     enabled: !!nurseId,
@@ -319,7 +361,11 @@ function NurseDashboard() {
   const periodHours = regularLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const additionalHours = additionalLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
-  const targetHours = Number(nurseRecord?.target_hours ?? 180);
+  const scheduledHours = periodAssignments.reduce(
+    (s, a) => s + scheduledHoursFor(a.shift, a.pre_leave_shift),
+    0,
+  );
+  const targetHours = scheduledHours || Number(nurseRecord?.target_hours ?? 180);
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
   const completedShiftCount = regularLogs.filter(
     (l) => l.hours_logged !== null && !l.is_missed,
