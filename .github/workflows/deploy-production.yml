@@ -36,8 +36,24 @@ jobs:
               echo "Skipping already-applied migration: $name"
             fi
           done
+          MARKER="=== deploy $(date -u +"%Y-%m-%dT%H:%M:%SZ") commit ${{ github.sha }} ==="
+          mkdir -p /home/ubuntu/.pm2/logs
+          echo "$MARKER" | tee -a /home/ubuntu/.pm2/logs/nurse-api-uat-out.log /home/ubuntu/.pm2/logs/nurse-api-uat-error.log > /dev/null
           pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat --cwd /home/ubuntu/nurse-api-uat
           pm2 save
+
+      - name: Health check (UAT)
+        run: |
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:3002/api/health > /dev/null; then
+              echo "UAT API is up."
+              exit 0
+            fi
+            echo "Attempt $i: not up yet, retrying in 2s..."
+            sleep 2
+          done
+          echo "::error::UAT API did not respond on /api/health after deploy — check pm2 logs nurse-api-uat"
+          exit 1
 
   build-frontend:
     name: Build frontend (master)
@@ -107,5 +123,21 @@ jobs:
               echo "Skipping already-applied migration: $name"
             fi
           done
+          MARKER="=== deploy $(date -u +"%Y-%m-%dT%H:%M:%SZ") commit ${{ github.sha }} ==="
+          mkdir -p /home/ubuntu/.pm2/logs
+          echo "$MARKER" | tee -a /home/ubuntu/.pm2/logs/nurse-api-out.log /home/ubuntu/.pm2/logs/nurse-api-error.log > /dev/null
           pm2 reload nurse-api || pm2 start server.js --name nurse-api --cwd /home/ubuntu/nurse-api -i 4
           pm2 save
+
+      - name: Health check (Production)
+        run: |
+          for i in $(seq 1 10); do
+            if curl -sf http://localhost:3001/api/health > /dev/null; then
+              echo "Production API is up."
+              exit 0
+            fi
+            echo "Attempt $i: not up yet, retrying in 2s..."
+            sleep 2
+          done
+          echo "::error::Production API did not respond on /api/health after deploy — check pm2 logs nurse-api"
+          exit 1

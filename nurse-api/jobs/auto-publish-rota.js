@@ -118,6 +118,29 @@ async function runAutoPublish({ simulateToday } = {}) {
       "cno",
       "admin",
     ]);
+
+    // Publishing is the one event every staff nurse in the unit cares about,
+    // not just managers — everyone whose schedule just went live gets their
+    // own copy, same as the manual-publish path in routes/shift-assignments.js.
+    const { rows: staffEmails } = await pool.query(
+      `SELECT DISTINCT COALESCE(
+         (SELECT p.email FROM profiles p WHERE p.id = n.profile_id),
+         (SELECT p.email FROM profiles p WHERE LOWER(p.full_name) = LOWER(n.name) LIMIT 1)
+       ) AS email
+       FROM nurses n WHERE n.id = ANY($1)`,
+      [nurseIds],
+    );
+    for (const { email } of staffEmails) {
+      if (!email) continue;
+      sendMail({
+        to: email,
+        subject: `Your rota is published — ${unitLabel}`,
+        title: "Your rota is published",
+        bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${row.facility} (period starting ${fmtPeriodDate(period.periodStart)}) has been published automatically at the T-14 deadline. You can view your schedule now.</p>`,
+        ctaText: "View My Rota",
+        ctaUrl: portalUrl("/rota"),
+      }).catch(() => {});
+    }
   }
 
   // Exception path: units still stuck in draft/submitted whose OWN T-14
@@ -219,20 +242,25 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
       WHERE ur.role = ANY($1) AND p.is_active = true`,
     [roles],
   );
-  for (const { id } of rows) {
-    await pool
+  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
+  for (const { id, email } of rows) {
+    // This job re-checks every stuck unit on every 5-minute tick for as long
+    // as it stays unresolved, calling notifyUnit() again each time — the
+    // bell entry is meant to keep re-surfacing as unread, but email must NOT
+    // go out again on every tick. `xmax = 0` reports whether this row was
+    // just INSERTed vs already existed and only got touched by the ON
+    // CONFLICT branch — email only fires the first time this notif_key is seen.
+    const { rows: upserted } = await pool
       .query(
         `INSERT INTO notification_state (user_id, notif_key, is_read)
          VALUES ($1, $2, false)
-         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()
+         RETURNING (xmax = 0) AS is_new`,
         [id, notifKey],
       )
-      .catch(() => {});
-  }
+      .catch(() => ({ rows: [{ is_new: false }] }));
 
-  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
-  if (copy) {
-    for (const { email } of rows) {
+    if (copy && upserted[0]?.is_new) {
       sendMail({
         to: email,
         subject: copy.subject,

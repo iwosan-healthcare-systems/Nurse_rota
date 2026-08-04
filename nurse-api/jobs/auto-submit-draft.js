@@ -185,20 +185,27 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
       WHERE ur.role = ANY($1) AND p.is_active = true`,
     [roles],
   );
-  for (const { id } of rows) {
-    await pool
+  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
+  for (const { id, email } of rows) {
+    // This job re-checks every blocked/still-draft unit on every 5-minute
+    // tick for as long as it stays blocked, calling notifyUnit() again each
+    // time — so the bell entry is meant to keep re-surfacing as unread, but
+    // email must NOT go out again on every tick (that's a fresh email every
+    // 5 minutes for however long the block lasts). `xmax = 0` is Postgres's
+    // way of reporting whether this row was just INSERTed vs already existed
+    // and only got UPDATEd by the ON CONFLICT branch — email only fires the
+    // first time this exact notif_key is seen.
+    const { rows: upserted } = await pool
       .query(
         `INSERT INTO notification_state (user_id, notif_key, is_read)
          VALUES ($1, $2, false)
-         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()
+         RETURNING (xmax = 0) AS is_new`,
         [id, notifKey],
       )
-      .catch(() => {});
-  }
+      .catch(() => ({ rows: [{ is_new: false }] }));
 
-  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
-  if (copy) {
-    for (const { email } of rows) {
+    if (copy && upserted[0]?.is_new) {
       sendMail({
         to: email,
         subject: copy.subject,

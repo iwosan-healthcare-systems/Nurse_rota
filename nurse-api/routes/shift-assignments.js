@@ -623,6 +623,31 @@ router.patch(
               }).catch(() => {});
             }
           }
+
+          // Publishing is the one event every staff nurse in the unit cares
+          // about, not just managers — everyone whose schedule just went live
+          // gets their own copy, separate from the manager email above.
+          if (status === "published") {
+            const { rows: staffEmails } = await pool.query(
+              `SELECT DISTINCT COALESCE(
+                 (SELECT p.email FROM profiles p WHERE p.id = n.profile_id),
+                 (SELECT p.email FROM profiles p WHERE LOWER(p.full_name) = LOWER(n.name) LIMIT 1)
+               ) AS email
+               FROM nurses n WHERE n.id = ANY($1)`,
+              [nurseIdArr],
+            );
+            for (const { email } of staffEmails) {
+              if (!email) continue;
+              sendMail({
+                to: email,
+                subject: `Your rota is published — ${unitLabel}`,
+                title: "Your rota is published",
+                bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> (${facilities.join(", ")}), period starting ${periodLabel}, has been published. You can view your schedule now.</p>`,
+                ctaText: "View My Rota",
+                ctaUrl: portalUrl("/rota"),
+              }).catch(() => {});
+            }
+          }
         })().catch(() => {});
       }
     }
