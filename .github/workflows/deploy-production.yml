@@ -29,7 +29,17 @@ jobs:
               "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
             if [ "$applied" = "0" ]; then
               echo "Applying migration: $name"
-              PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -f "$f"
+              # ON_ERROR_STOP: psql stops at the first failing statement instead of
+              # printing the error and plowing on to the rest of the file.
+              # --single-transaction: wraps the whole file in BEGIN/COMMIT, so a
+              # failure rolls back everything the file did — no partially-applied
+              # schema left behind. Combined with the exit-code check below, a
+              # failed migration can no longer get silently marked as applied.
+              if ! PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat \
+                  -v ON_ERROR_STOP=1 --single-transaction -f "$f"; then
+                echo "::error::Migration $name FAILED on UAT — deploy stopped before restarting the API. It was rolled back (single-transaction), so the DB is unchanged. Fix the migration and push again."
+                exit 1
+              fi
               PGPASSWORD="${{ secrets.DB_PASSWORD_UAT }}" psql -h 10.1.2.182 -U nurseapp_uat -d nurse_rota_uat -c \
                 "INSERT INTO schema_migrations (name) VALUES ('$name');"
             else
@@ -38,7 +48,12 @@ jobs:
           done
           MARKER="=== deploy $(date -u +"%Y-%m-%dT%H:%M:%SZ") commit ${{ github.sha }} ==="
           mkdir -p /home/ubuntu/.pm2/logs
-          echo "$MARKER" | tee -a /home/ubuntu/.pm2/logs/nurse-api-uat-out.log /home/ubuntu/.pm2/logs/nurse-api-uat-error.log > /dev/null
+          # Fork mode (this app) writes one unsuffixed log file, but glob both
+          # patterns anyway so this keeps working unchanged if that ever changes.
+          for f in /home/ubuntu/.pm2/logs/nurse-api-uat-out.log /home/ubuntu/.pm2/logs/nurse-api-uat-out-*.log \
+                   /home/ubuntu/.pm2/logs/nurse-api-uat-error.log /home/ubuntu/.pm2/logs/nurse-api-uat-error-*.log; do
+            [ -f "$f" ] && echo "$MARKER" >> "$f"
+          done
           pm2 reload nurse-api-uat || pm2 start server.js --name nurse-api-uat --cwd /home/ubuntu/nurse-api-uat
           pm2 save
 
@@ -116,7 +131,17 @@ jobs:
               "SELECT COUNT(*) FROM schema_migrations WHERE name='$name';")
             if [ "$applied" = "0" ]; then
               echo "Applying migration: $name"
-              PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -f "$f"
+              # ON_ERROR_STOP: psql stops at the first failing statement instead of
+              # printing the error and plowing on to the rest of the file.
+              # --single-transaction: wraps the whole file in BEGIN/COMMIT, so a
+              # failure rolls back everything the file did — no partially-applied
+              # schema left behind. Combined with the exit-code check below, a
+              # failed migration can no longer get silently marked as applied.
+              if ! PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota \
+                  -v ON_ERROR_STOP=1 --single-transaction -f "$f"; then
+                echo "::error::Migration $name FAILED on Production — deploy stopped before restarting the API. It was rolled back (single-transaction), so the DB is unchanged. Fix the migration and push again."
+                exit 1
+              fi
               PGPASSWORD="${{ secrets.DB_PASSWORD }}" psql -h 10.1.2.182 -U nurseapp -d nurse_rota -c \
                 "INSERT INTO schema_migrations (name) VALUES ('$name');"
             else
@@ -125,7 +150,14 @@ jobs:
           done
           MARKER="=== deploy $(date -u +"%Y-%m-%dT%H:%M:%SZ") commit ${{ github.sha }} ==="
           mkdir -p /home/ubuntu/.pm2/logs
-          echo "$MARKER" | tee -a /home/ubuntu/.pm2/logs/nurse-api-out.log /home/ubuntu/.pm2/logs/nurse-api-error.log > /dev/null
+          # Cluster mode (this app, 4 workers) gives each worker its own numbered
+          # log file (nurse-api-out-<pm_id>.log) instead of one shared file — glob
+          # both the plain and numbered patterns so the marker reaches whichever
+          # ones actually exist, however many workers are currently running.
+          for f in /home/ubuntu/.pm2/logs/nurse-api-out.log /home/ubuntu/.pm2/logs/nurse-api-out-*.log \
+                   /home/ubuntu/.pm2/logs/nurse-api-error.log /home/ubuntu/.pm2/logs/nurse-api-error-*.log; do
+            [ -f "$f" ] && echo "$MARKER" >> "$f"
+          done
           pm2 reload nurse-api || pm2 start server.js --name nurse-api --cwd /home/ubuntu/nurse-api -i 4
           pm2 save
 

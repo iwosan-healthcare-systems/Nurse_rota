@@ -212,16 +212,18 @@ router.post(
     // T-21 calendar day and only closes at 23:59:59 Lagos time that day —
     // not the instant that day begins.
     if (!EXEMPT_LEAVE_TYPES.includes(type)) {
-      const { rows: pubRows } = await pool.query(`
-        SELECT
+      const { rows: pubRows } = await pool.query(
+        `SELECT
           (MAX(shift_date::date) + 1)::text AS next_start,
           (
             (MAX(shift_date::date) + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
             AND NOW() >= ((MAX(shift_date::date) + 1 - INTERVAL '21 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
+            AND $1::date <= (MAX(shift_date::date) + 28)
           ) AS is_closed
         FROM shift_assignments
-        WHERE status = 'published'
-      `);
+        WHERE status = 'published'`,
+        [from_date],
+      );
       const nextStart = pubRows[0]?.next_start;
       const isClosed = pubRows[0]?.is_closed;
       if (isClosed) {

@@ -1450,7 +1450,18 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     staleTime: 5 * 60 * 1000,
     queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
   });
-  const leaveWindowClosed = workflowStatus?.firstRotaPublished && workflowStatus.leaveIsClosed;
+  // The closure window only applies to the period being closed (next period ≤ nextPeriodStart + 27 days).
+  // Leave for dates beyond that period has its own future closure window and must not be blocked now.
+  const nextPeriodStart = workflowStatus?.nextPeriodStart;
+  const nextPeriodEnd = nextPeriodStart
+    ? new Date(new Date(nextPeriodStart + "T00:00:00").getTime() + 27 * 86400000)
+        .toISOString()
+        .slice(0, 10)
+    : null;
+  const leaveWindowClosed =
+    !!workflowStatus?.firstRotaPublished &&
+    !!workflowStatus.leaveIsClosed &&
+    (!nextPeriodEnd || !from || from <= nextPeriodEnd);
 
   // In-approval rota: all leave blocked for those dates.
   // Published / closure window: only 3 exempt types allowed.
