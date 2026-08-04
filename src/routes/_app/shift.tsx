@@ -135,6 +135,15 @@ function isWorkShift(shift: string) {
 function normalizeShiftType(shift: string): "M" | "N" {
   return isMorningShift(shift) ? "M" : "N";
 }
+/** Hours implied by a published shift_assignments cell (9h M/MWC, 15h N/NC, 0h OFF).
+ *  A LEAVE cell is credited using pre_leave_shift — the shift it covered before
+ *  being flipped to LEAVE — so approved leave still counts toward the period total. */
+function scheduledHoursFor(shift: string, preLeaveShift: string | null): number {
+  const code = shift === "LEAVE" ? (preLeaveShift ?? "") : shift;
+  if (isMorningShift(code)) return 9;
+  if (isNightShift(code)) return 15;
+  return 0;
+}
 function shiftLabel(shift: string) {
   if (shift === "M") return "Morning Shift";
   if (shift === "N") return "Night Shift";
@@ -1181,6 +1190,37 @@ function AllNursesShiftView() {
     }
   }
 
+  // Total hours each nurse is rostered for in the current period, computed from her
+  // own published shift_assignments — not the manually-set target_hours field. Period
+  // boundaries are found the same way as the per-nurse dashboard's currentPeriodLogs
+  // query: the earliest published assignment within the trailing 27-day window marks
+  // the period start, then the full 28-day block is fetched from there.
+  const { data: periodAssignments = [] } = useQuery<
+    { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
+  >({
+    queryKey: ["all-period-assignments", lbStr],
+    queryFn: async () => {
+      const winRow = await api
+        .get<{ shift_date: string }[]>(`/shift-assignments?from=${lbStr}&status=published&limit=1`)
+        .catch(() => []);
+      const periodStart = winRow[0]?.shift_date ?? lbStr;
+      const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
+      periodEndDate.setDate(periodEndDate.getDate() + 27);
+      const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, "0")}-${String(periodEndDate.getDate()).padStart(2, "0")}`;
+      return api
+        .get<
+          { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
+        >(`/shift-assignments?from=${periodStart}&to=${periodEnd}&status=published`)
+        .catch(() => []);
+    },
+  });
+
+  const scheduledHoursMap = new Map<string, number>();
+  for (const a of periodAssignments) {
+    const h = scheduledHoursFor(a.shift, a.pre_leave_shift);
+    if (h > 0) scheduledHoursMap.set(a.nurse_id, (scheduledHoursMap.get(a.nurse_id) ?? 0) + h);
+  }
+
   function openEndModal(nurseId: string, nurseName: string) {
     const active = activeMap.get(nurseId);
     if (!active) return;
@@ -1329,7 +1369,7 @@ function AllNursesShiftView() {
               <th className="text-left px-4 py-3 font-semibold">Ward</th>
               <th className="text-left px-4 py-3 font-semibold">Facility</th>
               <th className="text-right px-4 py-3 font-semibold">Shifts</th>
-              <th className="text-right px-4 py-3 font-semibold">Hours</th>
+              <th className="text-right px-4 py-3 font-semibold">Current Period Hours</th>
               <th className="text-left px-4 py-3 font-semibold w-40">Progress</th>
               <th className="text-right px-4 py-3 font-semibold">Late</th>
               <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -1340,7 +1380,11 @@ function AllNursesShiftView() {
               const hrs = hoursMap.get(n.id) ?? 0;
               const shifts = shiftsMap.get(n.id) ?? 0;
               const lateCount = lateMap.get(n.id) ?? 0;
-              const target = n.target_hours || 185;
+              // Total hours this nurse is actually rostered for this period, computed
+              // from her own shift_assignments (9h per M/MWC, 15h per N/NC — including
+              // LEAVE cells via pre_leave_shift) — not the manually-set target_hours,
+              // which is a fixed figure that doesn't reflect what she's really scheduled.
+              const target = scheduledHoursMap.get(n.id) || n.target_hours || 180;
               const pct = Math.min(Math.round((hrs / target) * 100), 100);
               const activeEntry = activeMap.get(n.id);
               const isActive = !!activeEntry;
@@ -1358,7 +1402,7 @@ function AllNursesShiftView() {
                   <td className="px-4 py-3 text-right tabular-nums font-semibold">
                     {fmtHours(hrs)}
                     <span className="text-xs font-normal text-muted-foreground ml-1">
-                      / {target}h
+                      / {Math.round(target)}h
                     </span>
                   </td>
                   <td className="px-4 py-3">

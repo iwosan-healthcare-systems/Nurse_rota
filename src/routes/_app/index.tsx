@@ -319,7 +319,7 @@ function NurseDashboard() {
   const periodHours = regularLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const additionalHours = additionalLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
-  const targetHours = Number(nurseRecord?.target_hours ?? 185);
+  const targetHours = Number(nurseRecord?.target_hours ?? 180);
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
   const completedShiftCount = regularLogs.filter(
     (l) => l.hours_logged !== null && !l.is_missed,
