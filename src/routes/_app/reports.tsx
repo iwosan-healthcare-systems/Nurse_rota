@@ -20,6 +20,7 @@ import {
   Building2,
   CalendarRange,
   Stethoscope,
+  ArrowLeftRight,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
@@ -210,6 +211,30 @@ function periodLookbackYmd() {
   return ymd(d);
 }
 
+// Shift switch requests are stored as leave_requests with type="Swap" and a reason
+// field starting with this sentinel — mirrors parseSwitch in leave.tsx.
+const SWITCH_PREFIX = "SHIFT_SWITCH|";
+function parseSwitchReason(reason: string | null): {
+  nurseBName: string;
+  shiftA: string;
+  shiftB: string;
+  interWard: boolean;
+  note: string;
+} | null {
+  if (!reason?.startsWith(SWITCH_PREFIX)) return null;
+  const parts = reason.slice(SWITCH_PREFIX.length).split("|");
+  const nurseBName = parts[1] ?? "";
+  const shiftA = parts[2] ?? "";
+  const shiftB = parts[3] ?? "";
+  let interWard = false;
+  let note = "";
+  for (let i = 4; i < parts.length; i++) {
+    if (parts[i] === "INTER_WARD") interWard = true;
+    else if (parts[i].startsWith("NOTE:")) note = parts.slice(i).join("|").slice(5);
+  }
+  return { nurseBName, shiftA, shiftB, interWard, note };
+}
+
 function fmtDate(d: string) {
   return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
@@ -369,6 +394,9 @@ function ReportsContent() {
   const [locumReqPageSize, setLocumReqPageSize] = useState(20);
   const [leavePage, setLeavePage] = useState(1);
   const [leavePageSize, setLeavePageSize] = useState(20);
+  const [leaveSubTab, setLeaveSubTab] = useState<"leave" | "switches">("leave");
+  const [switchPage, setSwitchPage] = useState(1);
+  const [switchPageSize, setSwitchPageSize] = useState(20);
   const [missedPage, setMissedPage] = useState(1);
   const [missedPageSize, setMissedPageSize] = useState(20);
   // Date range filters per tab (Today / Yesterday / Last Week / custom range)
@@ -564,6 +592,11 @@ function ReportsContent() {
     [filteredScopeLeave],
   );
 
+  const filteredSwitches = useMemo(
+    () => filteredScopeLeave.filter((l) => l.type === "Swap"),
+    [filteredScopeLeave],
+  );
+
   const filteredMissedLogs = useMemo(() => {
     let data = scopedMissedLogs;
     if (missedRange.from) data = data.filter((l) => l.shift_date >= missedRange.from);
@@ -586,6 +619,7 @@ function ReportsContent() {
     setLocumPage(1);
     setLocumReqPage(1);
     setLeavePage(1);
+    setSwitchPage(1);
     setMissedPage(1);
   }, [
     reportFacility,
@@ -618,6 +652,11 @@ function ReportsContent() {
     filteredLeaveOnly,
     leavePageSize,
     leavePage,
+  );
+  const { pageItems: pagedSwitches, totalPages: switchTotalPages } = usePagination(
+    filteredSwitches,
+    switchPageSize,
+    switchPage,
   );
   const { pageItems: pagedMissedLogs, totalPages: missedTotalPages } = usePagination(
     filteredMissedLogs,
@@ -2208,6 +2247,42 @@ ${sections}
                   </button>
                 </div>
               </div>
+
+              {/* Sub-tabs — mirrors the Leave Requests / Shift Switches split on the
+                  main Leave & Requests page, so switches have somewhere to be seen in
+                  full instead of just the 6-item preview card below. */}
+              <div className="flex border-b mb-6">
+                <button
+                  type="button"
+                  onClick={() => setLeaveSubTab("leave")}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    leaveSubTab === "leave"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Leave Requests
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLeaveSubTab("switches")}
+                  className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+                    leaveSubTab === "switches"
+                      ? "border-primary text-primary"
+                      : "border-transparent text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  Shift Switches
+                  {switches.length > 0 && (
+                    <span className="ml-1.5 inline-flex items-center justify-center h-4 min-w-4 px-1 rounded-full bg-muted text-muted-foreground text-[10px] font-bold">
+                      {switches.length}
+                    </span>
+                  )}
+                </button>
+              </div>
+
+              {leaveSubTab === "leave" ? (
+              <>
               <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
                 <Stat icon={PlaneTakeoff} label="Total Leave Requests" value={leaveOnly.length} />
                 <Stat icon={Clock} label="Pending" value={pending.length} />
@@ -2280,6 +2355,15 @@ ${sections}
                           </span>
                         </div>
                       ))}
+                      {switches.length > 6 && (
+                        <button
+                          type="button"
+                          onClick={() => setLeaveSubTab("switches")}
+                          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground pt-2 underline"
+                        >
+                          View all ({switches.length - 6} more)
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2411,6 +2495,168 @@ ${sections}
                   }}
                 />
               </div>
+              </>
+              ) : (() => {
+                const switchesFiltered = filteredSwitches;
+                const switchPending = switchesFiltered.filter((s) => s.status === "Pending");
+                const switchApproved = switchesFiltered.filter((s) => s.status === "Approved");
+                const switchRejected = switchesFiltered.filter((s) => s.status === "Rejected");
+                const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+
+                const renderSwitchRow = (s: (typeof pagedSwitches)[0]) => {
+                  const sw = parseSwitchReason(s.reason);
+                  return (
+                    <tr key={s.id} className="border-t hover:bg-muted/30">
+                      <td className="px-4 py-3 font-medium">
+                        {(s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)?.name ?? "Unknown"}
+                      </td>
+                      <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
+                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                        {fmtDate(s.from_date)}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                        {sw ? (
+                          <span className="inline-flex items-center gap-1">
+                            {sw.interWard && (
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                Inter-Ward
+                              </span>
+                            )}
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                              {sw.shiftA || "—"}
+                            </span>
+                            <ArrowLeftRight className="h-3 w-3" />
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                              {sw.shiftB || "—"}
+                            </span>
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground max-w-45">
+                        {sw?.note ? (
+                          <span className="block truncate" title={sw.note}>
+                            {sw.note}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                        {fmtDate(s.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        {s.status === "Rejected" && !s.reviewed_by_name ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
+                            Time Elapsed
+                          </span>
+                        ) : (
+                          <span
+                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                              s.status === "Approved"
+                                ? "bg-emerald-100 text-emerald-700"
+                                : s.status === "Rejected"
+                                  ? "bg-rose-100 text-rose-700"
+                                  : "bg-amber-100 text-amber-700"
+                            }`}
+                          >
+                            {s.status}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{s.reviewed_by_name ?? "—"}</td>
+                      <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                        {s.reviewed_at ? fmtDate(s.reviewed_at) : "—"}
+                      </td>
+                    </tr>
+                  );
+                };
+
+                return (
+                  <>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+                      <Stat
+                        icon={CalendarDays}
+                        label="Total Shift Switches"
+                        value={switchesFiltered.length}
+                      />
+                      <Stat icon={Clock} label="Pending" value={switchPending.length} />
+                      <Stat icon={CheckCircle2} label="Approved" value={switchApproved.length} />
+                      <Stat icon={XCircle} label="Rejected" value={switchRejected.length} />
+                    </div>
+
+                    <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                            <tr>
+                              <th className="text-left px-4 py-3 font-semibold">Nurse A</th>
+                              <th className="text-left px-4 py-3 font-semibold">Nurse B</th>
+                              <th className="text-left px-4 py-3 font-semibold">Date</th>
+                              <th className="text-left px-4 py-3 font-semibold">Shifts</th>
+                              <th className="text-left px-4 py-3 font-semibold">Reason / Note</th>
+                              <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
+                              <th className="text-left px-4 py-3 font-semibold">Status</th>
+                              <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                              <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {pagedSwitches.length === 0 ? (
+                              <tr>
+                                <td
+                                  colSpan={9}
+                                  className="px-4 py-8 text-center text-sm text-muted-foreground"
+                                >
+                                  No switch requests match the current filter.
+                                </td>
+                              </tr>
+                            ) : !reportFacility ? (
+                              (() => {
+                                const grouped = new Map<string, typeof pagedSwitches>();
+                                for (const s of pagedSwitches) {
+                                  const f =
+                                    (s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)?.facility ??
+                                    "Unknown";
+                                  if (!grouped.has(f)) grouped.set(f, []);
+                                  grouped.get(f)!.push(s);
+                                }
+                                return [...grouped.entries()]
+                                  .sort(([a], [b]) => a.localeCompare(b))
+                                  .flatMap(([facility, fRows]) => [
+                                    <tr key={`hdr-${facility}`}>
+                                      <td
+                                        colSpan={9}
+                                        className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                                      >
+                                        {facility}
+                                      </td>
+                                    </tr>,
+                                    ...fRows.map(renderSwitchRow),
+                                  ]);
+                              })()
+                            ) : (
+                              pagedSwitches.map(renderSwitchRow)
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                      <Pagination
+                        page={switchPage}
+                        totalPages={switchTotalPages}
+                        pageSize={switchPageSize}
+                        totalItems={switchesFiltered.length}
+                        onPage={setSwitchPage}
+                        onPageSize={(s) => {
+                          setSwitchPageSize(s);
+                          setSwitchPage(1);
+                        }}
+                      />
+                    </div>
+                  </>
+                );
+              })()}
             </>
           );
         })()}
