@@ -53,7 +53,9 @@ async function autoGenerateRota(opts = {}) {
   } catch (err) {
     console.error("[auto-generate-rota] Error:", err.message);
   } finally {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [AUTO_GENERATE_LOCK_KEY]).catch(() => {});
+    await lockClient
+      .query("SELECT pg_advisory_unlock($1)", [AUTO_GENERATE_LOCK_KEY])
+      .catch(() => {});
     lockClient.release();
   }
 }
@@ -79,7 +81,11 @@ async function runAutoGenerate({ simulateToday } = {}) {
 
     // Ward-based units — everyone not in a facility-wide role, grouped by their first ward.
     const wardNurses = facilityNurses.filter(
-      (n) => !isGlobalHead(n.role) && !isMatron(n.role) && !isInternType(n.role) && !isPorterType(n.role),
+      (n) =>
+        !isGlobalHead(n.role) &&
+        !isMatron(n.role) &&
+        !isInternType(n.role) &&
+        !isPorterType(n.role),
     );
     const wardNames = [...new Set(wardNurses.map((n) => parseWards(n.ward)[0]).filter(Boolean))];
     for (const wardName of wardNames) {
@@ -117,7 +123,15 @@ async function runAutoGenerate({ simulateToday } = {}) {
   }
 }
 
-async function generateUnit({ facility, facilityIds, unitNurses, wardsForGen, ward, roleGroup, simulateToday }) {
+async function generateUnit({
+  facility,
+  facilityIds,
+  unitNurses,
+  wardsForGen,
+  ward,
+  roleGroup,
+  simulateToday,
+}) {
   const unitIds = unitNurses.map((n) => n.id);
   const unitLabel = ward ?? roleGroup;
 

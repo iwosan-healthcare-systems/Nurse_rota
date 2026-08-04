@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability, checkCapability } = require("../middleware/capability");
+const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Mirrors leave-requests.js's facilityWideGroupSlug — maps a nurse's job role
@@ -13,6 +14,18 @@ function roleGroupOf(role) {
   if (/^porter(\s*-\s*day)?$/i.test(role)) return "porter";
   if (/nurse\s*intern|intern\s*nurse/i.test(role)) return "intern";
   return null;
+}
+
+const ROLE_GROUP_LABELS = { matron: "Matron", head: "Coverage Nurse", porter: "Porter", intern: "Nurse Intern" };
+
+function fmtPeriodDate(d) {
+  return d
+    ? new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
 }
 
 // A head_nurse (not admin) may only create/update draft cells within a
@@ -539,6 +552,78 @@ router.patch(
             )
             .catch(() => {});
         }
+      }
+    }
+
+    // Email the next actor (or, for publish, everyone with a stake) for a
+    // manual rota pipeline transition — the automatic equivalents (T-17
+    // auto-submit, T-14 auto-publish) send their own emails from their cron
+    // jobs, since they don't go through this endpoint at all.
+    if (status && nurse_ids) {
+      let recipientRoles = null;
+      let subject = null;
+      let bodyHtml = null;
+      let ctaPath = "/rota";
+      if (status === "submitted" && filterStatus === "draft") {
+        recipientRoles = ["hr_admin"];
+        subject = "Rota submitted for review";
+        ctaPath = "/approvals";
+      } else if (status === "hr_approved" && filterStatus === "submitted") {
+        recipientRoles = ["cno"];
+        subject = "Rota approved by HR — ready to publish";
+        ctaPath = "/approvals";
+      } else if (status === "published" && filterStatus === "hr_approved") {
+        recipientRoles = ["head_nurse", "hr_admin", "cno", "admin"];
+        subject = "Rota published";
+        ctaPath = "/rota";
+      } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
+        recipientRoles = ["head_nurse"];
+        subject = "Rota returned to draft — changes needed";
+        ctaPath = "/rota";
+      }
+
+      if (recipientRoles) {
+        (async () => {
+          const nurseIdArr = nurse_ids.split(",");
+          const { rows: nurseRows } = await pool.query(
+            `SELECT DISTINCT facility, role FROM nurses WHERE id = ANY($1) AND facility IS NOT NULL`,
+            [nurseIdArr],
+          );
+          if (!nurseRows.length) return;
+          const facilities = [...new Set(nurseRows.map((n) => n.facility))];
+          const unitLabel =
+            ward || ROLE_GROUP_LABELS[roleGroupOf(nurseRows[0]?.role)] || "the rota";
+          const periodLabel = fmtPeriodDate(shift_date_from);
+
+          bodyHtml = `<p>The rota for <strong>${unitLabel}</strong> (${facilities.join(", ")}), period starting ${periodLabel}, ${
+            status === "submitted"
+              ? "has been submitted and is awaiting HR approval."
+              : status === "hr_approved"
+                ? "has been approved by HR and is ready to publish."
+                : status === "published"
+                  ? "has been published."
+                  : "has been returned to draft by HR — changes are needed before resubmitting."
+          }</p>`;
+
+          for (const role of recipientRoles) {
+            const { rows: recipients } = await pool.query(
+              `SELECT DISTINCT p.id, p.email FROM profiles p
+                 JOIN user_roles ur ON ur.user_id = p.id AND ur.role = $1
+                WHERE p.is_active = true`,
+              [role],
+            );
+            for (const { email } of recipients) {
+              sendMail({
+                to: email,
+                subject: `${subject} — ${unitLabel}`,
+                title: subject,
+                bodyHtml,
+                ctaText: ctaPath === "/approvals" ? "Open Approvals" : "Open Rota",
+                ctaUrl: portalUrl(ctaPath),
+              }).catch(() => {});
+            }
+          }
+        })().catch(() => {});
       }
     }
 

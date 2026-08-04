@@ -11,6 +11,30 @@ const {
   wasRevertedToDraft,
   resolveUnitNurseIds,
 } = require("../lib/force-submit-rota");
+const { sendMail, portalUrl } = require("../lib/mailer");
+
+function fmtPeriodDate(d) {
+  return d
+    ? new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
+}
+
+const EMAIL_COPY = {
+  rota_autosubmitted: (facility, unitLabel, periodStart) => ({
+    subject: `Rota auto-submitted for review — ${unitLabel}`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) reached the T-17 deadline still in draft and was automatically submitted for HR review.</p>`,
+    ctaPath: "/approvals",
+  }),
+  rota_autosubmit_blocked: (facility, unitLabel, periodStart) => ({
+    subject: `Action needed: rota could not auto-submit — ${unitLabel}`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) hit the T-17 deadline but could not be auto-submitted — unresolved leave requests are still blocking it. Please review.</p>`,
+    ctaPath: "/rota",
+  }),
+};
 
 // Distinct from AUTO_GENERATE_LOCK_KEY (729315) — see jobs/auto-end-shifts.js
 // for why the lock exists.
@@ -55,7 +79,11 @@ async function runAutoSubmit({ simulateToday } = {}) {
 
     if (!row.ward && !roleGroup) continue; // unclassifiable role, skip defensively
 
-    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const nurseIds = await resolveUnitNurseIds({
+      facility: row.facility,
+      ward: row.ward,
+      roleGroup,
+    });
     const period = await getUnitPeriod(nurseIds, row.ward);
     if (!period) continue; // defensive — draft rows exist, so this shouldn't happen
     const window = await getWindowForPeriod(period.periodStart, { simulateToday });
@@ -152,7 +180,7 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
   // ward names can themselves contain "_").
   const notifKey = `${prefix}_${facilitySlug}|${unitSlug}|${periodStart}`;
   const { rows } = await pool.query(
-    `SELECT DISTINCT p.id FROM profiles p
+    `SELECT DISTINCT p.id, p.email FROM profiles p
        JOIN user_roles ur ON ur.user_id = p.id
       WHERE ur.role = ANY($1) AND p.is_active = true`,
     [roles],
@@ -166,6 +194,20 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
         [id, notifKey],
       )
       .catch(() => {});
+  }
+
+  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
+  if (copy) {
+    for (const { email } of rows) {
+      sendMail({
+        to: email,
+        subject: copy.subject,
+        title: copy.subject,
+        bodyHtml: copy.bodyHtml,
+        ctaText: copy.ctaPath === "/approvals" ? "Open Approvals" : "Open Rota",
+        ctaUrl: portalUrl(copy.ctaPath),
+      }).catch(() => {});
+    }
   }
 }
 

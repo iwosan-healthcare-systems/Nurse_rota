@@ -7,6 +7,30 @@ const cron = require("node-cron");
 const pool = require("../db");
 const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const { roleGroupOf, resolveUnitNurseIds } = require("../lib/force-submit-rota");
+const { sendMail, portalUrl } = require("../lib/mailer");
+
+function fmtPeriodDate(d) {
+  return d
+    ? new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
+}
+
+const EMAIL_COPY = {
+  rota_autopublished: (facility, unitLabel, periodStart) => ({
+    subject: `Rota published — ${unitLabel}`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) has been published automatically at the T-14 deadline.</p>`,
+    ctaPath: "/rota",
+  }),
+  rota_publish_deadline_missed: (facility, unitLabel, periodStart) => ({
+    subject: `Action needed: rota not published — ${unitLabel}`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) hit the T-14 publish deadline still without HR approval, so it was <strong>not</strong> published automatically. Please review and resolve.</p>`,
+    ctaPath: "/approvals",
+  }),
+};
 
 // Distinct from AUTO_SUBMIT_LOCK_KEY (729316) — see jobs/auto-end-shifts.js
 // for why the lock exists.
@@ -24,7 +48,9 @@ async function autoPublishRota(opts = {}) {
   } catch (err) {
     console.error("[auto-publish-rota] Error:", err.message);
   } finally {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [AUTO_PUBLISH_LOCK_KEY]).catch(() => {});
+    await lockClient
+      .query("SELECT pg_advisory_unlock($1)", [AUTO_PUBLISH_LOCK_KEY])
+      .catch(() => {});
     lockClient.release();
   }
 }
@@ -49,7 +75,11 @@ async function runAutoPublish({ simulateToday } = {}) {
     if (!row.ward && !roleGroup) continue;
     const unitLabel = row.ward ?? roleGroup;
 
-    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const nurseIds = await resolveUnitNurseIds({
+      facility: row.facility,
+      ward: row.ward,
+      roleGroup,
+    });
     const period = await getUnitPeriod(nurseIds, row.ward);
     if (!period) continue; // defensive — hr_approved rows exist, so this shouldn't happen
     const window = await getWindowForPeriod(period.periodStart, { simulateToday });
@@ -107,7 +137,11 @@ async function runAutoPublish({ simulateToday } = {}) {
     if (!row.ward && !roleGroup) continue;
     const unitLabel = row.ward ?? roleGroup;
 
-    const nurseIds = await resolveUnitNurseIds({ facility: row.facility, ward: row.ward, roleGroup });
+    const nurseIds = await resolveUnitNurseIds({
+      facility: row.facility,
+      ward: row.ward,
+      roleGroup,
+    });
     const period = await getUnitPeriod(nurseIds, row.ward);
     if (!period) continue; // defensive — draft/submitted rows exist, so this shouldn't happen
     const window = await getWindowForPeriod(period.periodStart, { simulateToday });
@@ -139,9 +173,10 @@ async function runAutoPublish({ simulateToday } = {}) {
 // triggers on a manual publish, since auto-publish has no req to call that
 // route through.
 async function rotateInterns(facility) {
-  const { rows: wardRows } = await pool.query("SELECT name FROM wards WHERE facility = $1 ORDER BY name", [
-    facility,
-  ]);
+  const { rows: wardRows } = await pool.query(
+    "SELECT name FROM wards WHERE facility = $1 ORDER BY name",
+    [facility],
+  );
   const wardNames = wardRows.map((r) => r.name);
   if (!wardNames.length) return;
 
@@ -156,10 +191,16 @@ async function rotateInterns(facility) {
   for (const intern of interns) {
     const currentWard = intern.ward ? intern.ward.split("|")[0] : null;
     const idx = wardNames.indexOf(currentWard);
-    const nextWard = currentWard === null ? wardNames[0] : wardNames[(idx === -1 ? 0 : idx + 1) % wardNames.length];
+    const nextWard =
+      currentWard === null
+        ? wardNames[0]
+        : wardNames[(idx === -1 ? 0 : idx + 1) % wardNames.length];
     if (nextWard !== intern.ward) {
       await pool
-        .query("UPDATE nurses SET ward = $1, updated_at = NOW() WHERE id = $2", [nextWard, intern.id])
+        .query("UPDATE nurses SET ward = $1, updated_at = NOW() WHERE id = $2", [
+          nextWard,
+          intern.id,
+        ])
         .catch(() => {});
     }
   }
@@ -173,7 +214,7 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
   // ward names can themselves contain "_").
   const notifKey = `${prefix}_${facilitySlug}|${unitSlug}|${periodStart}`;
   const { rows } = await pool.query(
-    `SELECT DISTINCT p.id FROM profiles p
+    `SELECT DISTINCT p.id, p.email FROM profiles p
        JOIN user_roles ur ON ur.user_id = p.id
       WHERE ur.role = ANY($1) AND p.is_active = true`,
     [roles],
@@ -187,6 +228,20 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
         [id, notifKey],
       )
       .catch(() => {});
+  }
+
+  const copy = EMAIL_COPY[prefix]?.(facility, unitLabel, periodStart);
+  if (copy) {
+    for (const { email } of rows) {
+      sendMail({
+        to: email,
+        subject: copy.subject,
+        title: copy.subject,
+        bodyHtml: copy.bodyHtml,
+        ctaText: copy.ctaPath === "/approvals" ? "Open Approvals" : "Open Rota",
+        ctaUrl: portalUrl(copy.ctaPath),
+      }).catch(() => {});
+    }
   }
 }
 

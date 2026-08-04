@@ -25,17 +25,18 @@ const AUTO_EXPIRE_LOCUM_LOCK_KEY = 729314;
 async function autoExpireLocumRequests() {
   const lockClient = await pool.connect();
   try {
-    const { rows: lockRows } = await lockClient.query(
-      "SELECT pg_try_advisory_lock($1) AS locked",
-      [AUTO_EXPIRE_LOCUM_LOCK_KEY],
-    );
+    const { rows: lockRows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [
+      AUTO_EXPIRE_LOCUM_LOCK_KEY,
+    ]);
     if (!lockRows[0].locked) return; // another instance already holds the lock this tick
 
     await runAutoExpireLocumRequests();
   } catch (err) {
     console.error("[auto-expire-locum] Error:", err.message);
   } finally {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [AUTO_EXPIRE_LOCUM_LOCK_KEY]).catch(() => {});
+    await lockClient
+      .query("SELECT pg_advisory_unlock($1)", [AUTO_EXPIRE_LOCUM_LOCK_KEY])
+      .catch(() => {});
     lockClient.release();
   }
 }

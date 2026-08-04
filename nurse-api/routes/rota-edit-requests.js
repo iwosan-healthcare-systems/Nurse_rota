@@ -3,6 +3,7 @@ const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getWindowForPeriod } = require("../lib/rota-period-dates");
 const { forceSubmitUnit, wasRevertedToDraft } = require("../lib/force-submit-rota");
+const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 async function notify(userId, notifKey) {
@@ -17,14 +18,34 @@ async function notify(userId, notifKey) {
     .catch(() => {});
 }
 
-async function notifyRole(role, notifKey) {
+// Resolves every active profile with a given role — used both for the
+// in-app bell (notifyRole) and for emailing the same group.
+async function activeProfilesWithRole(role) {
   const { rows } = await pool.query(
-    `SELECT DISTINCT p.id FROM profiles p
+    `SELECT DISTINCT p.id, p.email FROM profiles p
        JOIN user_roles ur ON ur.user_id = p.id AND ur.role = $1
       WHERE p.is_active = true`,
     [role],
   );
+  return rows;
+}
+
+async function notifyRole(role, notifKey) {
+  const rows = await activeProfilesWithRole(role);
   for (const { id } of rows) await notify(id, notifKey);
+}
+
+async function profileEmail(userId) {
+  if (!userId) return null;
+  const { rows } = await pool.query("SELECT email FROM profiles WHERE id = $1", [userId]);
+  return rows[0]?.email ?? null;
+}
+
+// Mirrors FW_LABELS on the frontend (approvals.tsx/rota.tsx) — kept as its
+// own small copy here, matching this codebase's existing convention.
+const ROLE_GROUP_LABELS = { matron: "Matron", head: "Coverage Nurse", porter: "Porter", intern: "Nurse Intern" };
+function unitLabel(row) {
+  return row.ward ?? ROLE_GROUP_LABELS[row.role_group] ?? row.role_group ?? "the rota";
 }
 
 router.get(
@@ -141,6 +162,17 @@ router.post(
       );
       const created = rows[0];
       await notifyRole("hr_admin", `rota_edit_pending_${created.id}`);
+      const hrProfiles = await activeProfilesWithRole("hr_admin");
+      for (const { email } of hrProfiles) {
+        sendMail({
+          to: email,
+          subject: `Edit access requested — ${unitLabel(created)}`,
+          title: "Rota edit-access request",
+          bodyHtml: `<p><strong>${created.requested_by_name ?? "A head nurse"}</strong> has requested permission to edit the auto-generated draft for <strong>${unitLabel(created)}</strong> · ${created.facility}.</p><p>Reason given: "${created.reason}"</p>`,
+          ctaText: "Review in Approvals",
+          ctaUrl: portalUrl("/approvals"),
+        }).catch(() => {});
+      }
       res.status(201).json(created);
     } catch (err) {
       if (err.code === "23505") {
@@ -174,6 +206,8 @@ router.patch(
       return res.status(404).json({ error: "Request not found or already decided" });
     }
 
+    const requesterEmail = await profileEmail(updated.requested_by);
+
     if (status === "Declined") {
       // Declining an edit-access request also force-submits the as-is draft —
       // if the safety guards block that (pending/unapplied leave), the rota
@@ -186,10 +220,26 @@ router.patch(
         periodEnd: updated.period_end,
       });
       await notify(updated.requested_by, `rota_edit_declined_${updated.id}`);
+      sendMail({
+        to: requesterEmail,
+        subject: `Edit access declined — ${unitLabel(updated)}`,
+        title: "Edit-access request declined",
+        bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was declined${updated.review_note ? ` — "${updated.review_note}"` : ""}.</p><p>The draft has been auto-submitted as-is for HR review.</p>`,
+        ctaText: "Open Rota",
+        ctaUrl: portalUrl("/rota"),
+      }).catch(() => {});
       return res.json({ ...updated, autoSubmit: result });
     }
 
     await notify(updated.requested_by, `rota_edit_approved_${updated.id}`);
+    sendMail({
+      to: requesterEmail,
+      subject: `Edit access approved — ${unitLabel(updated)}`,
+      title: "Edit-access request approved",
+      bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was approved. You can now make changes to the draft.</p>`,
+      ctaText: "Open Rota",
+      ctaUrl: portalUrl("/rota"),
+    }).catch(() => {});
     res.json(updated);
   }),
 );

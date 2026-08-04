@@ -1,7 +1,47 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
+const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+function fmtShiftDate(d) {
+  return new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+async function activeProfilesWithRole(role) {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT p.id, p.email FROM profiles p
+       JOIN user_roles ur ON ur.user_id = p.id AND ur.role = $1
+      WHERE p.is_active = true`,
+    [role],
+  );
+  return rows;
+}
+
+async function profileEmail(userId) {
+  if (!userId) return null;
+  const { rows } = await pool.query("SELECT email FROM profiles WHERE id = $1", [userId]);
+  return rows[0]?.email ?? null;
+}
+
+// Resolves a nurses.id to their login profile email — same COALESCE chain
+// (profile_id link, then name match) used throughout the jobs/routes that
+// need to email a specific nurse.
+async function nurseEmail(nurseId) {
+  if (!nurseId) return null;
+  const { rows } = await pool.query(
+    `SELECT COALESCE(
+       (SELECT p.email FROM nurses n JOIN profiles p ON p.id = n.profile_id WHERE n.id = $1),
+       (SELECT p.email FROM nurses n JOIN profiles p ON LOWER(p.full_name) = LOWER(n.name) WHERE n.id = $1 LIMIT 1)
+     ) AS email`,
+    [nurseId],
+  );
+  return rows[0]?.email ?? null;
+}
 
 // ── Locum Requests ────────────────────────────────────────────
 
@@ -96,7 +136,22 @@ router.post(
         role_needed || null,
       ],
     );
-    res.status(201).json(rows[0]);
+    const created = rows[0];
+    res.status(201).json(created);
+
+    (async () => {
+      const cnoProfiles = await activeProfilesWithRole("cno");
+      for (const { email } of cnoProfiles) {
+        sendMail({
+          to: email,
+          subject: `New locum shift request — ${created.ward}`,
+          title: "New locum shift request",
+          bodyHtml: `<p><strong>${created.requested_by_name}</strong> requested a ${created.shift} locum shift for <strong>${created.ward}</strong> · ${created.facility} on ${fmtShiftDate(created.shift_date)}.</p>`,
+          ctaText: "Review Request",
+          ctaUrl: portalUrl("/locum"),
+        }).catch(() => {});
+      }
+    })().catch(() => {});
   }),
 );
 
@@ -130,7 +185,26 @@ router.patch(
       values,
     );
     if (!rows[0]) return res.status(404).json({ error: "Locum request not found" });
-    res.json(rows[0]);
+    const updated = rows[0];
+    res.json(updated);
+
+    if (fields.includes("status") && (updated.status === "approved" || updated.status === "declined")) {
+      (async () => {
+        const email = await profileEmail(updated.requested_by);
+        if (!email) return;
+        const approved = updated.status === "approved";
+        sendMail({
+          to: email,
+          subject: `Locum request ${approved ? "approved" : "declined"} — ${updated.ward}`,
+          title: `Locum request ${approved ? "approved" : "declined"}`,
+          bodyHtml: approved
+            ? `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift} on ${fmtShiftDate(updated.shift_date)} was approved. Send invites to off-duty nurses to fill it.</p>`
+            : `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift} on ${fmtShiftDate(updated.shift_date)} was declined${updated.decline_reason ? ` — "${updated.decline_reason}"` : ""}.</p>`,
+          ctaText: "Open Bank Shift (Locum)",
+          ctaUrl: portalUrl("/locum"),
+        }).catch(() => {});
+      })().catch(() => {});
+    }
   }),
 );
 
@@ -184,7 +258,49 @@ router.post(
        RETURNING *`,
       [nurseId, nurseName, req.params.id],
     );
-    res.json(rows[0] ?? null);
+    const updated = rows[0] ?? null;
+    res.json(updated);
+
+    if (updated?.status === "filled") {
+      (async () => {
+        const recipientIds = new Set();
+        if (updated.requested_by) recipientIds.add(updated.requested_by);
+        if (updated.reviewed_by) recipientIds.add(updated.reviewed_by);
+        if (recipientIds.size) {
+          const { rows: recipients } = await pool.query("SELECT email FROM profiles WHERE id = ANY($1)", [
+            [...recipientIds],
+          ]);
+          for (const { email } of recipients) {
+            sendMail({
+              to: email,
+              subject: `Locum shift filled — ${updated.ward}`,
+              title: "Locum shift filled",
+              bodyHtml: `<p><strong>${nurseName}</strong> accepted the ${updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)}.</p>`,
+              ctaText: "Open Bank Shift (Locum)",
+              ctaUrl: portalUrl("/locum"),
+            }).catch(() => {});
+          }
+        }
+
+        // Other nurses whose invite for this request is now moot.
+        const { rows: others } = await pool.query(
+          `SELECT DISTINCT li.nurse_id FROM locum_invites li
+            WHERE li.locum_request_id = $1 AND li.status = 'pending'`,
+          [req.params.id],
+        );
+        for (const { nurse_id } of others) {
+          const email = await nurseEmail(nurse_id);
+          if (!email) continue;
+          sendMail({
+            to: email,
+            subject: `Locum shift filled — ${updated.ward}`,
+            title: "Locum shift already filled",
+            bodyHtml: `<p>The ${updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)} you were invited to has been filled by someone else.</p>`,
+            ctaUrl: portalUrl("/locum"),
+          }).catch(() => {});
+        }
+      })().catch(() => {});
+    }
   }),
 );
 
@@ -252,6 +368,32 @@ router.post(
       }
       await client.query("COMMIT");
       res.status(201).json(results);
+
+      (async () => {
+        if (!results.length) return;
+        // Invites in one batch usually share a request, but resolve per unique
+        // id rather than assume — small batches, negligible extra cost.
+        const requestIds = [...new Set(results.map((r) => r.locum_request_id))];
+        const { rows: reqRows } = await pool.query(
+          "SELECT * FROM locum_requests WHERE id = ANY($1)",
+          [requestIds],
+        );
+        const reqById = new Map(reqRows.map((r) => [r.id, r]));
+        for (const invite of results) {
+          const lr = reqById.get(invite.locum_request_id);
+          if (!lr) continue;
+          const email = await nurseEmail(invite.nurse_id);
+          if (!email) continue;
+          sendMail({
+            to: email,
+            subject: `Locum shift invite — ${lr.ward}`,
+            title: "You've been invited to a locum shift",
+            bodyHtml: `<p>You've been invited to cover a ${lr.shift} locum shift for <strong>${lr.ward}</strong> · ${lr.facility} on ${fmtShiftDate(lr.shift_date)}.</p>`,
+            ctaText: "Respond to Invite",
+            ctaUrl: portalUrl("/locum"),
+          }).catch(() => {});
+        }
+      })().catch(() => {});
     } catch (err) {
       await client.query("ROLLBACK");
       throw err;

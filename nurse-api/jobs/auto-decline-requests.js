@@ -25,17 +25,18 @@ const GRACE_TYPES = ["Sick", "Emergency"];
 async function autoDeclineExpiredRequests() {
   const lockClient = await pool.connect();
   try {
-    const { rows: lockRows } = await lockClient.query(
-      "SELECT pg_try_advisory_lock($1) AS locked",
-      [AUTO_DECLINE_LOCK_KEY],
-    );
+    const { rows: lockRows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [
+      AUTO_DECLINE_LOCK_KEY,
+    ]);
     if (!lockRows[0].locked) return; // another instance already holds the lock this tick
 
     await runAutoDecline();
   } catch (err) {
     console.error("[auto-decline] Error:", err.message);
   } finally {
-    await lockClient.query("SELECT pg_advisory_unlock($1)", [AUTO_DECLINE_LOCK_KEY]).catch(() => {});
+    await lockClient
+      .query("SELECT pg_advisory_unlock($1)", [AUTO_DECLINE_LOCK_KEY])
+      .catch(() => {});
     lockClient.release();
   }
 }
@@ -74,7 +75,10 @@ async function runAutoDecline() {
       ])
       .catch((err) => console.error("[auto-decline] audit log failed:", err.message));
 
-    await notify(r.requested_by, isSwap ? `switch_rejected_${r.id}_initiator` : `leave_rejected_${r.id}`);
+    await notify(
+      r.requested_by,
+      isSwap ? `switch_rejected_${r.id}_initiator` : `leave_rejected_${r.id}`,
+    );
 
     const profileId = await findProfileId(r.nurse_id, r.nurse_name);
     if (profileId && profileId !== r.requested_by) {

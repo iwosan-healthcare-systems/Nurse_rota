@@ -1,7 +1,18 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
+const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+function fmtDateRange(from, to) {
+  const fmt = (d) =>
+    new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+      day: "numeric",
+      month: "short",
+      year: "numeric",
+    });
+  return from === to ? fmt(from) : `${fmt(from)} → ${fmt(to)}`;
+}
 
 // Map a nurse role string to the facility-wide group slug used in notification keys.
 // Mirrors the isMatron / isGlobalHead / isPorterType / isInternType helpers on the frontend.
@@ -278,7 +289,57 @@ router.post(
         rotaStageAtRequest,
       ],
     );
-    res.status(201).json(rows[0]);
+    const created = rows[0];
+    res.status(201).json(created);
+
+    // Email whoever is meant to review this: CNO for a shift switch or for
+    // leave belonging to a chief_matron (mirrors the same routing the GET /
+    // query above exposes as nurse_role for the frontend to follow); chief
+    // matron(s) at the nurse's own facility for everything else. Fire after
+    // responding — this is a side effect, never worth delaying the response for.
+    (async () => {
+      let approverRole = "chief_matron";
+      let facilityFilter = null;
+      if (type === "Swap") {
+        approverRole = "cno";
+      } else if (nurse_id) {
+        const { rows: roleRows } = await pool.query(
+          `SELECT
+             EXISTS (
+               SELECT 1 FROM nurses n
+               JOIN user_roles ur ON ur.user_id = n.profile_id AND ur.role = 'chief_matron'
+               WHERE n.id = $1
+             ) AS is_chief_matron,
+             (SELECT facility FROM nurses WHERE id = $1) AS facility`,
+          [nurse_id],
+        );
+        if (roleRows[0]?.is_chief_matron) approverRole = "cno";
+        else facilityFilter = roleRows[0]?.facility ?? null;
+      }
+
+      const params = facilityFilter ? [approverRole, facilityFilter] : [approverRole];
+      const facilityClause = facilityFilter
+        ? "AND EXISTS (SELECT 1 FROM nurses n2 WHERE LOWER(n2.name) = LOWER(p.full_name) AND n2.facility = $2)"
+        : "";
+      const { rows: approvers } = await pool.query(
+        `SELECT DISTINCT p.id, p.email FROM profiles p
+           JOIN user_roles ur ON ur.user_id = p.id AND ur.role = $1
+          WHERE p.is_active = true ${facilityClause}`,
+        params,
+      );
+
+      const typeLabel = type === "Swap" ? "shift switch" : `${type.toLowerCase()} leave`;
+      for (const { email } of approvers) {
+        sendMail({
+          to: email,
+          subject: `New ${typeLabel} request — ${created.nurse_name}`,
+          title: `New ${typeLabel} request`,
+          bodyHtml: `<p><strong>${created.nurse_name}</strong> has a new ${typeLabel} request for ${fmtDateRange(created.from_date, created.to_date)}${created.reason ? ` — "${created.reason}"` : ""}.</p>`,
+          ctaText: "Review Request",
+          ctaUrl: portalUrl("/leave"),
+        }).catch(() => {});
+      }
+    })().catch(() => {});
   }),
 );
 
@@ -548,6 +609,44 @@ router.patch(
             }
           })
           .catch(() => {});
+      }
+
+      // Email the requester (and the nurse themself, if a different person
+      // submitted on their behalf) on the outcome — mirrors the in-app bell
+      // notification leave.tsx already writes client-side, but email has to
+      // be sent server-side since it needs the Graph credentials.
+      if (leave.status === "Approved" || leave.status === "Rejected") {
+        (async () => {
+          const recipientIds = new Set();
+          if (leave.requested_by) recipientIds.add(leave.requested_by);
+          if (leave.nurse_id) {
+            const { rows: nurseProfileRows } = await pool.query(
+              `SELECT COALESCE(
+                 (SELECT p.id FROM nurses n JOIN profiles p ON p.id = n.profile_id WHERE n.id = $1),
+                 (SELECT p.id FROM nurses n JOIN profiles p ON LOWER(p.full_name) = LOWER(n.name) WHERE n.id = $1 LIMIT 1)
+               ) AS profile_id`,
+              [leave.nurse_id],
+            );
+            if (nurseProfileRows[0]?.profile_id) recipientIds.add(nurseProfileRows[0].profile_id);
+          }
+          if (!recipientIds.size) return;
+          const { rows: recipients } = await pool.query(
+            "SELECT email FROM profiles WHERE id = ANY($1)",
+            [[...recipientIds]],
+          );
+          const typeLabel = leave.type === "Swap" ? "shift switch" : `${leave.type.toLowerCase()} leave`;
+          const approved = leave.status === "Approved";
+          for (const { email } of recipients) {
+            sendMail({
+              to: email,
+              subject: `${typeLabel[0].toUpperCase()}${typeLabel.slice(1)} request ${approved ? "approved" : "declined"} — ${leave.nurse_name}`,
+              title: `${typeLabel[0].toUpperCase()}${typeLabel.slice(1)} request ${approved ? "approved" : "declined"}`,
+              bodyHtml: `<p>${leave.nurse_name}'s ${typeLabel} request for ${fmtDateRange(leave.from_date, leave.to_date)} was <strong>${approved ? "approved" : "declined"}</strong>${leave.review_note ? ` — "${leave.review_note}"` : ""}.</p>`,
+              ctaText: "Open Leave & Requests",
+              ctaUrl: portalUrl("/leave"),
+            }).catch(() => {});
+          }
+        })().catch(() => {});
       }
 
       res.json(leave);
