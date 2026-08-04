@@ -1087,7 +1087,7 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
       </div>
       )}
       <Link
-        to="/shift/history"
+        to="/shift-history"
         className="flex items-center justify-center gap-1 w-full text-sm font-semibold text-primary hover:bg-primary/5 py-3 border-t transition-colors"
       >
         View all history{logs.length > HISTORY_PAGE ? ` (${logs.length - HISTORY_PAGE} more)` : ""}
