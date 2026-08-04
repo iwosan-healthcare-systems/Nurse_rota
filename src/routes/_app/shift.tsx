@@ -10,6 +10,7 @@ import {
   ArrowLeftRight,
   CalendarDays,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Lock,
   MapPin,
@@ -997,7 +998,7 @@ function ShiftPage() {
       </div>
 
       {/* Recent shift history */}
-      {currentPeriodLogs.length > 0 && <ShiftHistory logs={currentPeriodLogs} />}
+      <ShiftHistory logs={currentPeriodLogs} />
     </div>
   );
 }
@@ -1013,6 +1014,11 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
         <h2 className="font-semibold text-sm">Shift history — current period</h2>
         <span className="text-xs text-muted-foreground">{logs.length} shifts</span>
       </div>
+      {logs.length === 0 ? (
+        <p className="px-5 py-6 text-center text-sm text-muted-foreground">
+          No shifts logged this period yet.
+        </p>
+      ) : (
       <div className="divide-y">
         {visible.map((log) => (
           <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
@@ -1079,11 +1085,13 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
           </div>
         ))}
       </div>
+      )}
       <Link
         to="/shift/history"
-        className="block w-full text-center text-xs text-muted-foreground hover:text-foreground py-3 border-t underline"
+        className="flex items-center justify-center gap-1 w-full text-sm font-semibold text-primary hover:bg-primary/5 py-3 border-t transition-colors"
       >
         View all history{logs.length > HISTORY_PAGE ? ` (${logs.length - HISTORY_PAGE} more)` : ""}
+        <ChevronRight className="h-4 w-4" />
       </Link>
     </div>
   );

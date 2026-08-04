@@ -21,6 +21,7 @@ import {
   CalendarRange,
   Stethoscope,
   ArrowLeftRight,
+  ChevronRight,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
@@ -2359,9 +2360,10 @@ ${sections}
                         <button
                           type="button"
                           onClick={() => setLeaveSubTab("switches")}
-                          className="cursor-pointer w-full text-center text-xs text-muted-foreground hover:text-foreground pt-2 underline"
+                          className="cursor-pointer flex items-center justify-center gap-1 w-full text-sm font-semibold text-primary hover:bg-primary/5 py-2 mt-1 rounded-md transition-colors"
                         >
                           View all ({switches.length - 6} more)
+                          <ChevronRight className="h-4 w-4" />
                         </button>
                       )}
                     </div>
