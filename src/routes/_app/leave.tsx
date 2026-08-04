@@ -844,6 +844,7 @@ function LeaveTable({
               <tr>
                 {showApproverCols && <th className="text-left font-semibold px-4 py-3">Nurse</th>}
                 <th className="text-left font-semibold px-4 py-3">Type</th>
+                <th className="text-left font-semibold px-4 py-3">Reason</th>
                 <th className="text-left font-semibold px-4 py-3">Period</th>
                 <th className="text-left font-semibold px-4 py-3">Requested Date</th>
                 <th className="text-left font-semibold px-4 py-3">Status</th>
@@ -856,7 +857,7 @@ function LeaveTable({
               {pagedRows.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={showApproverCols ? 8 : 6}
+                    colSpan={showApproverCols ? 9 : 7}
                     className="px-4 py-8 text-center text-sm text-muted-foreground"
                   >
                     No requests match the current filter.
@@ -864,7 +865,7 @@ function LeaveTable({
                 </tr>
               ) : (() => {
                 // When showing all facilities, group rows by facility with a divider header.
-                const cols = showApproverCols ? 8 : 6;
+                const cols = showApproverCols ? 9 : 7;
                 const renderRow = (l: LeaveRow) => {
                   const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
                   return (
@@ -880,6 +881,15 @@ function LeaveTable({
                         </td>
                       )}
                       <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                      <td className="px-4 py-3 text-muted-foreground max-w-50">
+                        {l.reason ? (
+                          <span className="block truncate" title={l.reason}>
+                            {l.reason}
+                          </span>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
                         {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
                           ? fmtDateLeave(l.from_date)

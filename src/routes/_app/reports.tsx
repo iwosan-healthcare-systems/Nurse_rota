@@ -2292,6 +2292,7 @@ ${sections}
                     <tr>
                       <th className="text-left px-4 py-3 font-semibold">Nurse</th>
                       <th className="text-left px-4 py-3 font-semibold">Type</th>
+                      <th className="text-left px-4 py-3 font-semibold">Reason</th>
                       <th className="text-left px-4 py-3 font-semibold">From</th>
                       <th className="text-left px-4 py-3 font-semibold">To</th>
                       <th className="text-left px-4 py-3 font-semibold">Status</th>
@@ -2310,6 +2311,15 @@ ${sections}
                             {(l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.name ?? "Unknown"}
                           </td>
                           <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                          <td className="px-4 py-3 text-muted-foreground max-w-50">
+                            {l.reason ? (
+                              <span className="block truncate" title={l.reason}>
+                                {l.reason}
+                              </span>
+                            ) : (
+                              "—"
+                            )}
+                          </td>
                           <td className="px-4 py-3 tabular-nums text-muted-foreground">
                             {fmtDate(l.from_date)}
                           </td>
@@ -2374,7 +2384,7 @@ ${sections}
                           .flatMap(([facility, fRows]) => [
                             <tr key={`hdr-${facility}`}>
                               <td
-                                colSpan={9}
+                                colSpan={10}
                                 className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
                               >
                                 {facility}
