@@ -60,6 +60,49 @@ function isShiftSwitch(row: LeaveRow) {
   return row.type === "Swap" && row.reason?.startsWith(SWITCH_PREFIX);
 }
 
+function isMorningType(shift: string) {
+  return shift === "M" || shift === "MWC";
+}
+function isNightType(shift: string) {
+  return shift === "N" || shift === "NC";
+}
+
+// A Night shift runs 17:00 day D -> 08:00 day D+1; a Morning shift runs 08:00 -> 17:00
+// the same day. Either ordering back-to-back leaves zero rest: a Night the day before
+// ending 08:00 immediately followed by a Morning starting 08:00 that same day, or a
+// Morning ending 17:00 immediately followed by a Night starting 17:00 that same day.
+function hasRestConflict(
+  prevDayShift: string | null | undefined,
+  newShift: string,
+  nextDayShift: string | null | undefined,
+) {
+  if (isNightType(prevDayShift ?? "") && isMorningType(newShift)) return true;
+  if (isNightType(newShift) && isMorningType(nextDayShift ?? "")) return true;
+  return false;
+}
+
+// A nurse's published shift the day before and the day after `date` — used to check a
+// proposed new shift for that nurse on `date` won't create a zero-rest back-to-back
+// with a shift she's already published for on an adjacent day.
+async function fetchAdjacentShifts(nurseId: string, date: string) {
+  const d = new Date(date.slice(0, 10) + "T00:00:00");
+  const prev = new Date(d);
+  prev.setDate(prev.getDate() - 1);
+  const next = new Date(d);
+  next.setDate(next.getDate() + 1);
+  const fmt = (x: Date) =>
+    `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+  const [prevArr, nextArr] = await Promise.all([
+    api.get<{ shift: string }[]>(
+      `/shift-assignments?nurse_id=${nurseId}&shift_date=${fmt(prev)}&status=published&limit=1`,
+    ),
+    api.get<{ shift: string }[]>(
+      `/shift-assignments?nurse_id=${nurseId}&shift_date=${fmt(next)}&status=published&limit=1`,
+    ),
+  ]);
+  return { prevShift: prevArr[0]?.shift ?? null, nextShift: nextArr[0]?.shift ?? null };
+}
+
 const statusStyle: Record<string, string> = {
   Pending: "bg-warning/20 text-warning-foreground",
   Approved: "bg-success/15 text-success",
@@ -416,6 +459,14 @@ function LeavePage() {
               "Cannot apply — no valid working shift (M/N) was recorded for Nurse A at request time. Please re-submit the switch request.",
             );
           }
+          // Re-validate the rest conflict at approval time too — the day-before/after
+          // assignments may have changed since this was submitted.
+          const { prevShift, nextShift } = await fetchAdjacentShifts(sw.nurseBId, sw.date);
+          if (hasRestConflict(prevShift, targetShift, nextShift)) {
+            return toast.error(
+              `Cannot approve — this would leave ${sw.nurseBName} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
+            );
+          }
           // Idempotent: skip if nurse B already has the target shift (retry-safe).
           if (assignB.shift !== targetShift) {
             await api.patch(`/shift-assignments/${assignB.id}`, { shift: targetShift });
@@ -426,6 +477,23 @@ function LeavePage() {
             sw.date,
           );
         } else {
+          // Re-validate rest conflicts at approval time for BOTH nurses — each one
+          // takes on the other's current shift, and either side could create a
+          // zero-rest back-to-back against their own already-published adjacent days.
+          const [adjA, adjB] = await Promise.all([
+            fetchAdjacentShifts(l.nurse_id ?? "", sw.date),
+            fetchAdjacentShifts(sw.nurseBId, sw.date),
+          ]);
+          if (hasRestConflict(adjA.prevShift, assignB.shift, adjA.nextShift)) {
+            return toast.error(
+              `Cannot approve — this would leave ${l.nurse_name} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
+            );
+          }
+          if (hasRestConflict(adjB.prevShift, assignA.shift, adjB.nextShift)) {
+            return toast.error(
+              `Cannot approve — this would leave ${sw.nurseBName} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
+            );
+          }
           // Idempotent: skip if shifts are already in the swapped state (retry-safe).
           const alreadySwapped = assignA.shift === sw.shiftB && assignB.shift === sw.shiftA;
           if (!alreadySwapped) {
@@ -1865,6 +1933,36 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       return toast.error(
         "Nurse A is on approved leave — please select the Leave switch type instead.",
       );
+    }
+
+    // Block a swap that would leave either nurse with zero rest between shifts —
+    // e.g. a Night shift ending 08:00 immediately followed by a Morning shift
+    // starting that same morning. Checks each nurse's NEW shift on this date
+    // against their own already-published shift the day before and after.
+    // Re-validated again at approval time in reviewSwitch (defense in depth).
+    const nurseBForCheck = nurses.find((n) => n.id === nurseBId);
+    if (shiftA === "LEAVE") {
+      const { prevShift, nextShift } = await fetchAdjacentShifts(nurseBId, date);
+      if (hasRestConflict(prevShift, coverShift, nextShift)) {
+        return toast.error(
+          `This would leave ${nurseBForCheck?.name ?? "Nurse B"} with no rest between shifts — check their shift the day before/after ${date}.`,
+        );
+      }
+    } else {
+      const [adjA, adjB] = await Promise.all([
+        fetchAdjacentShifts(nurseAId, date),
+        fetchAdjacentShifts(nurseBId, date),
+      ]);
+      if (hasRestConflict(adjA.prevShift, shiftB, adjA.nextShift)) {
+        return toast.error(
+          `This would leave ${nurseA?.name ?? "Nurse A"} with no rest between shifts — check their shift the day before/after ${date}.`,
+        );
+      }
+      if (hasRestConflict(adjB.prevShift, effectiveShift, adjB.nextShift)) {
+        return toast.error(
+          `This would leave ${nurseBForCheck?.name ?? "Nurse B"} with no rest between shifts — check their shift the day before/after ${date}.`,
+        );
+      }
     }
 
     setBusy(true);

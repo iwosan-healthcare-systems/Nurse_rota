@@ -186,7 +186,11 @@ function ShiftPage() {
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
-      if (new Date().getHours() < 12) {
+      // Matches the Night shift's actual window end (17:00 D → 08:00 D+1) — using a
+      // looser cutoff here (this was previously < 12, i.e. all morning) meant any
+      // legitimate new assignment for today (e.g. from an approved shift swap) was
+      // masked by yesterday's already-finished Night shift until noon.
+      if (new Date().getHours() < 8) {
         const yd = new Date();
         yd.setDate(yd.getDate() - 1);
         const yesterdayStr = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
