@@ -678,4 +678,156 @@ router.patch(
   }),
 );
 
+// Undo an already-Approved leave request: restores the nurse's original shift
+// assignments (from pre_leave_shift, captured at approval time), removes any
+// hours already credited for it (whether from the approval-time top-up or the
+// auto-end-shifts cron crediting a date that's since arrived) and claws back
+// the reversed hours from hours_this_month. Admin-only — this undoes a
+// decision that already took effect, not a normal step in the review flow.
+// Kept as a distinct 'Reverted' status (see migration 029) rather than
+// rewriting back to 'Pending' or 'Rejected', so the history stays honest.
+router.post(
+  "/:id/revert",
+  requireRole("admin"),
+  wrap(async (req, res) => {
+    const { reason } = req.body;
+    if (!reason || !reason.trim())
+      return res.status(400).json({ error: "A reason is required to revert an approved leave" });
+
+    const client = await pool.connect();
+    let leave, restoredCount, hoursToReverse;
+    try {
+      await client.query("BEGIN");
+
+      const { rows: leaveRows } = await client.query(
+        "SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE",
+        [req.params.id],
+      );
+      leave = leaveRows[0];
+      if (!leave) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leave request not found" });
+      }
+      if (leave.status !== "Approved") {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Only an Approved leave request can be reverted" });
+      }
+      if (leave.type === "Swap") {
+        await client.query("ROLLBACK");
+        return res
+          .status(400)
+          .json({ error: "Shift switches can't be reverted from here — reject and re-request instead" });
+      }
+
+      const { rows: restoredRows } = await client.query(
+        `UPDATE shift_assignments
+            SET shift = pre_leave_shift, pre_leave_shift = NULL, updated_at = NOW()
+          WHERE nurse_id = $1
+            AND shift_date BETWEEN $2 AND $3
+            AND shift = 'LEAVE'
+            AND pre_leave_shift IS NOT NULL
+          RETURNING shift_date`,
+        [leave.nurse_id, leave.from_date, leave.to_date],
+      );
+      restoredCount = restoredRows.length;
+
+      const { rows: removedLogs } = await client.query(
+        `DELETE FROM shift_logs
+          WHERE leave_request_id = $1 AND is_leave = true
+          RETURNING hours_logged`,
+        [leave.id],
+      );
+      hoursToReverse = removedLogs.reduce((s, r) => s + Number(r.hours_logged || 0), 0);
+
+      await client.query(
+        `UPDATE leave_requests
+            SET status = 'Reverted',
+                revert_reason = $2,
+                reverted_by = $3,
+                reverted_at = NOW()
+          WHERE id = $1`,
+        [leave.id, reason.trim(), req.user.userId],
+      );
+
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Claw back any credited hours — outside the transaction, same pattern as
+    // the approval-time top-up above (increment_nurse_hours is its own atomic
+    // statement, not part of the leave/shift_assignments transaction).
+    if (hoursToReverse > 0) {
+      await pool
+        .query("SELECT increment_nurse_hours($1, $2)", [leave.nurse_id, -hoursToReverse])
+        .catch((err) =>
+          console.error(`[leave-revert] hours reversal failed for ${leave.nurse_id}:`, err.message),
+        );
+    }
+
+    await pool
+      .query(
+        "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role, target) VALUES ($1,$2,$3,$4,$5)",
+        [
+          "Leave request reverted",
+          req.user.userId,
+          req.user.full_name || "Admin",
+          req.user.roles?.[0] ?? null,
+          `${leave.nurse_name} · ${leave.type} · ${fmtDateRange(leave.from_date, leave.to_date)} · ` +
+            `${restoredCount} shift(s) restored${hoursToReverse > 0 ? `, ${hoursToReverse}h reversed` : ""} · ` +
+            `Reason: ${reason.trim()}`,
+        ],
+      )
+      .catch(() => {});
+
+    // Notify + email the original requester and the nurse themself.
+    const recipientIds = new Set();
+    if (leave.requested_by) recipientIds.add(leave.requested_by);
+    if (leave.nurse_id) {
+      const { rows: nurseProfileRows } = await pool.query(
+        `SELECT COALESCE(
+           (SELECT p.id FROM nurses n JOIN profiles p ON p.id = n.profile_id WHERE n.id = $1),
+           (SELECT p.id FROM nurses n JOIN profiles p ON LOWER(p.full_name) = LOWER(n.name) WHERE n.id = $1 LIMIT 1)
+         ) AS profile_id`,
+        [leave.nurse_id],
+      );
+      if (nurseProfileRows[0]?.profile_id) recipientIds.add(nurseProfileRows[0].profile_id);
+    }
+    for (const id of recipientIds) {
+      pool
+        .query(
+          `INSERT INTO notification_state (user_id, notif_key, is_read)
+           VALUES ($1, $2, false)
+           ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+          [id, `leave_reverted_${leave.id}`],
+        )
+        .catch(() => {});
+    }
+    if (recipientIds.size) {
+      const { rows: recipients } = await pool
+        .query("SELECT email FROM profiles WHERE id = ANY($1)", [[...recipientIds]])
+        .catch(() => ({ rows: [] }));
+      const typeLabel = `${leave.type.toLowerCase()} leave`;
+      for (const { email } of recipients) {
+        sendMail({
+          to: email,
+          subject: `Approved ${typeLabel} reverted — ${leave.nurse_name}`,
+          title: "Approved leave reverted",
+          bodyHtml:
+            `<p>${leave.nurse_name}'s approved ${typeLabel} for ${fmtDateRange(leave.from_date, leave.to_date)} ` +
+            `has been reverted — the original shift assignment has been restored.</p>` +
+            `<p><strong>Reason:</strong> ${reason.trim()}</p>`,
+          ctaText: "Open Leave & Requests",
+          ctaUrl: portalUrl("/leave"),
+        }).catch(() => {});
+      }
+    }
+
+    res.json({ ...leave, status: "Reverted", restored_count: restoredCount, hours_reversed: hoursToReverse });
+  }),
+);
+
 module.exports = router;

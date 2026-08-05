@@ -148,13 +148,14 @@ type LeaveRequest = {
   nurse_id: string | null;
   from_date: string;
   to_date: string;
-  status: "Pending" | "Approved" | "Rejected";
+  status: "Pending" | "Approved" | "Rejected" | "Expired" | "Reverted";
   type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave" | "Leave of Absence";
   reason: string | null;
   created_at: string;
   rota_stage_at_request: "no_rota" | "draft" | "published" | null;
   reviewed_by_name: string | null;
   reviewed_at: string | null;
+  revert_reason: string | null;
 };
 type ArchiveAssignment = {
   nurse_id: string;
@@ -2415,10 +2416,17 @@ ${sections}
                           <td className="px-4 py-3">
                             {/* A "Rejected" row with no reviewer was auto-declined by the
                                 deadline cron, not actively rejected by a person — show that
-                                distinctly rather than implying someone reviewed and declined it. */}
-                            {l.status === "Rejected" && !l.reviewed_by_name ? (
+                                distinctly rather than implying someone reviewed and declined it.
+                                "Expired" (rota generation reached it undecided) is the same
+                                "system closed this out" situation, so it gets the same label. */}
+                            {(l.status === "Rejected" && !l.reviewed_by_name) ||
+                            l.status === "Expired" ? (
                               <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
                                 Time Elapsed
+                              </span>
+                            ) : l.status === "Reverted" ? (
+                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-violet-100 text-violet-700">
+                                Reverted
                               </span>
                             ) : (
                               <span
@@ -2432,6 +2440,14 @@ ${sections}
                               >
                                 {l.status}
                               </span>
+                            )}
+                            {l.status === "Reverted" && l.revert_reason && (
+                              <p
+                                className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-40"
+                                title={l.revert_reason}
+                              >
+                                {l.revert_reason}
+                              </p>
                             )}
                           </td>
                           <td className="px-4 py-3">

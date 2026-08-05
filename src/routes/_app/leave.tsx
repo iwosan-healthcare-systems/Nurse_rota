@@ -3,7 +3,18 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useEffect, useMemo, useState } from "react";
-import { Plus, Check, X, PlaneTakeoff, ArrowLeftRight, Loader2, Lock, Pencil, Search } from "lucide-react";
+import {
+  Plus,
+  Check,
+  X,
+  PlaneTakeoff,
+  ArrowLeftRight,
+  Loader2,
+  Lock,
+  Pencil,
+  Search,
+  Undo2,
+} from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
@@ -26,11 +37,12 @@ type LeaveRow = {
   type: string;
   from_date: string;
   to_date: string;
-  status: "Pending" | "Approved" | "Rejected";
+  status: "Pending" | "Approved" | "Rejected" | "Expired" | "Reverted";
   reason: string | null;
   review_note: string | null;
   reviewed_by_name: string | null;
   reviewed_at: string | null;
+  revert_reason: string | null;
   created_at: string;
 };
 
@@ -107,20 +119,23 @@ const statusStyle: Record<string, string> = {
   Pending: "bg-warning/20 text-warning-foreground",
   Approved: "bg-success/15 text-success",
   Rejected: "bg-destructive/15 text-destructive",
+  Reverted: "bg-violet-100 text-violet-700",
 };
 
 // A "Rejected" row with no reviewer was auto-declined by the deadline cron
 // (jobs/auto-decline-requests.js never sets reviewed_by) rather than actively
 // rejected by a person — show that distinctly so it doesn't read as someone
-// having reviewed and turned it down.
+// having reviewed and turned it down. "Expired" (auto-generate-rota.js, when
+// generation reaches a request nobody decided on) is the same "system closed
+// this out, not a person" situation, so it gets the same treatment.
 function statusDisplay(l: LeaveRow): { label: string; className: string } {
-  if (l.status === "Rejected" && !l.reviewed_by_name) {
+  if ((l.status === "Rejected" && !l.reviewed_by_name) || l.status === "Expired") {
     return { label: "Time Elapsed", className: "bg-muted text-muted-foreground" };
   }
   return { label: l.status, className: statusStyle[l.status] };
 }
 
-type StatusFilter = "All" | "Pending" | "Approved" | "Rejected";
+type StatusFilter = "All" | "Pending" | "Approved" | "Rejected" | "Reverted";
 type ActiveTab = "leave" | "switches";
 
 type WorkflowStatus = {
@@ -579,6 +594,7 @@ function LeavePage() {
     Pending: activeRows.filter((r) => r.status === "Pending").length,
     Approved: activeRows.filter((r) => r.status === "Approved").length,
     Rejected: activeRows.filter((r) => r.status === "Rejected").length,
+    Reverted: activeRows.filter((r) => r.status === "Reverted").length,
   };
 
   const visibleRows = (statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter))
@@ -692,9 +708,13 @@ function LeavePage() {
         </button>
       </div>
 
-      {/* Status filter cards */}
-      <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-6">
-        {(["Pending", "Approved", "Rejected"] as const).map((s) => (
+      {/* Status filter cards — Reverted only shown once at least one exists, so the
+          common case (nobody's ever reverted anything) stays a clean 3-card row. */}
+      <div className={`grid gap-3 sm:gap-4 mb-6 ${counts.Reverted > 0 ? "grid-cols-4" : "grid-cols-3"}`}>
+        {(counts.Reverted > 0
+          ? (["Pending", "Approved", "Rejected", "Reverted"] as const)
+          : (["Pending", "Approved", "Rejected"] as const)
+        ).map((s) => (
           <button
             key={s}
             type="button"
@@ -818,12 +838,16 @@ function LeaveTable({
   showFacility?: boolean;
 }) {
   const { nurseId, user, isAdmin } = useAuth();
+  const qc = useQueryClient();
   const [reviewing, setReviewing] = useState<{
     row: LeaveRow;
     status: "Approved" | "Rejected";
   } | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [editing, setEditing] = useState<LeaveRow | null>(null);
+  const [reverting, setReverting] = useState<LeaveRow | null>(null);
+  const [revertReason, setRevertReason] = useState("");
+  const [revertBusy, setRevertBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const { pageItems: pagedRows, totalPages } = usePagination(rows, pageSize, page);
@@ -833,6 +857,27 @@ function LeaveTable({
     onReview(reviewing.row, reviewing.status, reviewNote);
     setReviewing(null);
     setReviewNote("");
+  }
+
+  async function submitRevert() {
+    if (!reverting || !revertReason.trim()) return;
+    setRevertBusy(true);
+    try {
+      await api.post(`/leave-requests/${reverting.id}/revert`, { reason: revertReason.trim() });
+      toast.success("Leave reverted — original shift assignment restored");
+      logAudit(
+        `Reverted approved leave for ${reverting.nurse_name}: ${revertReason.trim()}`,
+        reverting.from_date,
+      );
+      qc.invalidateQueries({ queryKey: ["leave"] });
+      qc.invalidateQueries({ queryKey: ["assignments"] });
+      setReverting(null);
+      setRevertReason("");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to revert leave");
+    } finally {
+      setRevertBusy(false);
+    }
   }
 
   return (
@@ -926,6 +971,14 @@ function LeaveTable({
                             {l.review_note}
                           </p>
                         )}
+                        {l.status === "Reverted" && l.revert_reason && (
+                          <p
+                            className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-50"
+                            title={l.revert_reason}
+                          >
+                            Reverted: {l.revert_reason}
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {l.reviewed_by_name ?? "—"}
@@ -935,42 +988,58 @@ function LeaveTable({
                       </td>
                       {showApproverCols && (
                         <td className="px-4 py-3">
-                          {!rowApprovable ? (
-                            <p className="text-xs text-muted-foreground text-right italic">
-                              {blockedLabel}
-                            </p>
-                          ) : l.nurse_id && l.nurse_id === nurseId ? (
-                            <p className="text-xs text-muted-foreground text-right italic">
-                              Own request
-                            </p>
-                          ) : (
-                            <div className="flex gap-1 justify-end">
+                          <div className="flex gap-1 justify-end items-center">
+                            {l.status === "Approved" && isAdmin && (
                               <button
                                 type="button"
-                                aria-label="Approve leave request"
+                                aria-label="Revert approved leave"
+                                title="Revert — restore original shift assignment"
                                 onClick={() => {
-                                  setReviewing({ row: l, status: "Approved" });
-                                  setReviewNote("");
+                                  setReverting(l);
+                                  setRevertReason("");
                                 }}
-                                disabled={l.status !== "Pending"}
-                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-violet-100 text-violet-700"
                               >
-                                <Check className="h-4 w-4" />
+                                <Undo2 className="h-4 w-4" />
                               </button>
-                              <button
-                                type="button"
-                                aria-label="Reject leave request"
-                                onClick={() => {
-                                  setReviewing({ row: l, status: "Rejected" });
-                                  setReviewNote("");
-                                }}
-                                disabled={l.status !== "Pending"}
-                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                              >
-                                <X className="h-4 w-4" />
-                              </button>
-                            </div>
-                          )}
+                            )}
+                            {!rowApprovable ? (
+                              <p className="text-xs text-muted-foreground text-right italic">
+                                {blockedLabel}
+                              </p>
+                            ) : l.nurse_id && l.nurse_id === nurseId ? (
+                              <p className="text-xs text-muted-foreground text-right italic">
+                                Own request
+                              </p>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  aria-label="Approve leave request"
+                                  onClick={() => {
+                                    setReviewing({ row: l, status: "Approved" });
+                                    setReviewNote("");
+                                  }}
+                                  disabled={l.status !== "Pending"}
+                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                                >
+                                  <Check className="h-4 w-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  aria-label="Reject leave request"
+                                  onClick={() => {
+                                    setReviewing({ row: l, status: "Rejected" });
+                                    setReviewNote("");
+                                  }}
+                                  disabled={l.status !== "Pending"}
+                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </td>
                       )}
                     </tr>
@@ -1062,6 +1131,42 @@ function LeaveTable({
         </Modal>
       )}
       {editing && <EditLeaveModal row={editing} onClose={() => setEditing(null)} />}
+      {reverting && (
+        <Modal title="Revert approved leave" onClose={() => setReverting(null)}>
+          <p className="text-sm text-muted-foreground mb-4">
+            This restores <strong>{reverting.nurse_name}</strong>&apos;s original shift assignment
+            for {fmtDateLeave(reverting.from_date)}
+            {reverting.to_date !== reverting.from_date ? ` – ${fmtDateLeave(reverting.to_date)}` : ""}{" "}
+            and removes any hours already credited for this leave. This is logged on the audit log
+            and can't be undone from here.
+          </p>
+          <textarea
+            autoFocus
+            value={revertReason}
+            onChange={(e) => setRevertReason(e.target.value)}
+            rows={3}
+            placeholder="Reason for reverting…"
+            className="w-full px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+          />
+          <div className="flex justify-end gap-2 mt-4">
+            <button
+              type="button"
+              onClick={() => setReverting(null)}
+              className="h-9 px-4 rounded-md border bg-card text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!revertReason.trim() || revertBusy}
+              onClick={submitRevert}
+              className="h-9 px-4 rounded-md text-sm font-medium disabled:opacity-40 bg-violet-600 text-white hover:bg-violet-700"
+            >
+              {revertBusy ? "Reverting…" : "Confirm revert"}
+            </button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
