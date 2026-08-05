@@ -14,6 +14,12 @@ function fmtDateRange(from, to) {
   return from === to ? fmt(from) : `${fmt(from)} → ${fmt(to)}`;
 }
 
+function addDaysYmd(dateStr, n) {
+  const d = new Date(String(dateStr).slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // Map a nurse role string to the facility-wide group slug used in notification keys.
 // Mirrors the isMatron / isGlobalHead / isPorterType / isInternType helpers on the frontend.
 function facilityWideGroupSlug(role) {
@@ -678,24 +684,36 @@ router.patch(
   }),
 );
 
-// Undo an already-Approved leave request: restores the nurse's original shift
-// assignments (from pre_leave_shift, captured at approval time), removes any
-// hours already credited for it (whether from the approval-time top-up or the
-// auto-end-shifts cron crediting a date that's since arrived) and claws back
+// Undo an already-Approved leave request, in full or in part: restores the
+// nurse's original shift assignments (from pre_leave_shift, captured at
+// approval time) for the given sub-range, removes any hours already credited
+// for just that sub-range (whether from the approval-time top-up or the
+// auto-end-shifts cron crediting a date that's since arrived), and claws back
 // the reversed hours from hours_this_month. Admin-only — this undoes a
 // decision that already took effect, not a normal step in the review flow.
-// Kept as a distinct 'Reverted' status (see migration 029) rather than
-// rewriting back to 'Pending' or 'Rejected', so the history stays honest.
+//
+// from_date/to_date in the body are optional and default to the full request
+// range (a full revert). A partial revert must be a PREFIX or SUFFIX of the
+// approved range — e.g. staff took the first 5 of a 10-day leave and wants to
+// come back early, so only the trailing 5 days get reverted while the first 5
+// stay leave-credited exactly as they are. A hole in the middle isn't
+// supported (from_date/to_date can only describe one contiguous remaining
+// range) — reject rather than silently mis-handling it.
+//
+// A full revert sets status = 'Reverted' (see migration 029) instead of
+// rewriting back to 'Pending'/'Rejected', so the history stays honest. A
+// partial revert leaves status = 'Approved' (the request is still partly in
+// effect) and shrinks from_date/to_date to the portion that's still leave.
 router.post(
   "/:id/revert",
   requireRole("admin"),
   wrap(async (req, res) => {
-    const { reason } = req.body;
+    const { reason, from_date, to_date } = req.body;
     if (!reason || !reason.trim())
       return res.status(400).json({ error: "A reason is required to revert an approved leave" });
 
     const client = await pool.connect();
-    let leave, restoredCount, hoursToReverse;
+    let leave, restoredCount, hoursToReverse, isFullRevert, newFromDate, newToDate, revertFrom, revertTo;
     try {
       await client.query("BEGIN");
 
@@ -719,6 +737,28 @@ router.post(
           .json({ error: "Shift switches can't be reverted from here — reject and re-request instead" });
       }
 
+      const leaveFrom = leave.from_date.toString().slice(0, 10);
+      const leaveTo = leave.to_date.toString().slice(0, 10);
+      revertFrom = from_date ? String(from_date).slice(0, 10) : leaveFrom;
+      revertTo = to_date ? String(to_date).slice(0, 10) : leaveTo;
+
+      if (revertFrom > revertTo || revertFrom < leaveFrom || revertTo > leaveTo) {
+        await client.query("ROLLBACK");
+        return res
+          .status(400)
+          .json({ error: `Revert range must fall within the approved leave (${leaveFrom} to ${leaveTo})` });
+      }
+      isFullRevert = revertFrom === leaveFrom && revertTo === leaveTo;
+      const isPrefix = revertFrom === leaveFrom; // reverting the start, leave stays for the tail
+      const isSuffix = revertTo === leaveTo; // reverting the tail, leave stays for the start
+      if (!isFullRevert && !isPrefix && !isSuffix) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({
+          error:
+            "A partial revert must start from the beginning or end of the approved leave — reverting a gap in the middle isn't supported",
+        });
+      }
+
       const { rows: restoredRows } = await client.query(
         `UPDATE shift_assignments
             SET shift = pre_leave_shift, pre_leave_shift = NULL, updated_at = NOW()
@@ -727,27 +767,44 @@ router.post(
             AND shift = 'LEAVE'
             AND pre_leave_shift IS NOT NULL
           RETURNING shift_date`,
-        [leave.nurse_id, leave.from_date, leave.to_date],
+        [leave.nurse_id, revertFrom, revertTo],
       );
       restoredCount = restoredRows.length;
 
       const { rows: removedLogs } = await client.query(
         `DELETE FROM shift_logs
           WHERE leave_request_id = $1 AND is_leave = true
+            AND shift_date BETWEEN $2 AND $3
           RETURNING hours_logged`,
-        [leave.id],
+        [leave.id, revertFrom, revertTo],
       );
       hoursToReverse = removedLogs.reduce((s, r) => s + Number(r.hours_logged || 0), 0);
 
-      await client.query(
-        `UPDATE leave_requests
-            SET status = 'Reverted',
-                revert_reason = $2,
-                reverted_by = $3,
-                reverted_at = NOW()
-          WHERE id = $1`,
-        [leave.id, reason.trim(), req.user.userId],
-      );
+      // Full revert: close the request out as 'Reverted', dates untouched (they
+      // already describe exactly what was reverted). Partial revert: stays
+      // 'Approved', but shrunk to whichever portion is still actually leave —
+      // reverting a prefix moves from_date forward past the reverted days;
+      // reverting a suffix moves to_date back before them.
+      if (isFullRevert) {
+        newFromDate = leaveFrom;
+        newToDate = leaveTo;
+        await client.query(
+          `UPDATE leave_requests
+              SET status = 'Reverted', revert_reason = $2, reverted_by = $3, reverted_at = NOW()
+            WHERE id = $1`,
+          [leave.id, reason.trim(), req.user.userId],
+        );
+      } else {
+        newFromDate = isPrefix ? addDaysYmd(revertTo, 1) : leaveFrom;
+        newToDate = isPrefix ? leaveTo : addDaysYmd(revertFrom, -1);
+        await client.query(
+          `UPDATE leave_requests
+              SET from_date = $2, to_date = $3,
+                  revert_reason = $4, reverted_by = $5, reverted_at = NOW()
+            WHERE id = $1`,
+          [leave.id, newFromDate, newToDate, reason.trim(), req.user.userId],
+        );
+      }
 
       await client.query("COMMIT");
     } catch (err) {
@@ -772,12 +829,13 @@ router.post(
       .query(
         "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role, target) VALUES ($1,$2,$3,$4,$5)",
         [
-          "Leave request reverted",
+          isFullRevert ? "Leave request reverted" : "Leave request partially reverted",
           req.user.userId,
           req.user.full_name || "Admin",
           req.user.roles?.[0] ?? null,
-          `${leave.nurse_name} · ${leave.type} · ${fmtDateRange(leave.from_date, leave.to_date)} · ` +
-            `${restoredCount} shift(s) restored${hoursToReverse > 0 ? `, ${hoursToReverse}h reversed` : ""} · ` +
+          `${leave.nurse_name} · ${leave.type} · reverted ${fmtDateRange(revertFrom, revertTo)}` +
+            (isFullRevert ? "" : ` (of approved ${fmtDateRange(leave.from_date, leave.to_date)}; remaining leave now ${fmtDateRange(newFromDate, newToDate)})`) +
+            ` · ${restoredCount} shift(s) restored${hoursToReverse > 0 ? `, ${hoursToReverse}h reversed` : ""} · ` +
             `Reason: ${reason.trim()}`,
         ],
       )
@@ -814,19 +872,30 @@ router.post(
       for (const { email } of recipients) {
         sendMail({
           to: email,
-          subject: `Approved ${typeLabel} reverted — ${leave.nurse_name}`,
-          title: "Approved leave reverted",
-          bodyHtml:
-            `<p>${leave.nurse_name}'s approved ${typeLabel} for ${fmtDateRange(leave.from_date, leave.to_date)} ` +
-            `has been reverted — the original shift assignment has been restored.</p>` +
-            `<p><strong>Reason:</strong> ${reason.trim()}</p>`,
+          subject: `Approved ${typeLabel} ${isFullRevert ? "reverted" : "partially reverted"} — ${leave.nurse_name}`,
+          title: isFullRevert ? "Approved leave reverted" : "Approved leave partially reverted",
+          bodyHtml: isFullRevert
+            ? `<p>${leave.nurse_name}'s approved ${typeLabel} for ${fmtDateRange(revertFrom, revertTo)} ` +
+              `has been reverted — the original shift assignment has been restored.</p>` +
+              `<p><strong>Reason:</strong> ${reason.trim()}</p>`
+            : `<p>${leave.nurse_name}'s approved ${typeLabel} has been shortened — ${fmtDateRange(revertFrom, revertTo)} ` +
+              `has been reverted to the original shift assignment, and the remaining leave now covers ` +
+              `${fmtDateRange(newFromDate, newToDate)}.</p>` +
+              `<p><strong>Reason:</strong> ${reason.trim()}</p>`,
           ctaText: "Open Leave & Requests",
           ctaUrl: portalUrl("/leave"),
         }).catch(() => {});
       }
     }
 
-    res.json({ ...leave, status: "Reverted", restored_count: restoredCount, hours_reversed: hoursToReverse });
+    res.json({
+      ...leave,
+      status: isFullRevert ? "Reverted" : "Approved",
+      from_date: newFromDate,
+      to_date: newToDate,
+      restored_count: restoredCount,
+      hours_reversed: hoursToReverse,
+    });
   }),
 );
 

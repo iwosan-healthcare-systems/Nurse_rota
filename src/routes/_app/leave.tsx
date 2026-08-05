@@ -155,6 +155,12 @@ function fmtDateLeave(d: string) {
   });
 }
 
+function addDaysLeaveYmd(dateStr: string, n: number) {
+  const d = new Date(dateStr.slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 // Local calendar date, not UTC — new Date().toISOString().slice(0,10) reads the UTC date,
 // which lags the real local date by one day during the ~00:00–01:00 WAT window (UTC+1).
 function todayYmd() {
@@ -847,6 +853,7 @@ function LeaveTable({
   const [editing, setEditing] = useState<LeaveRow | null>(null);
   const [reverting, setReverting] = useState<LeaveRow | null>(null);
   const [revertReason, setRevertReason] = useState("");
+  const [revertRange, setRevertRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
   const [revertBusy, setRevertBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -859,14 +866,39 @@ function LeaveTable({
     setReviewNote("");
   }
 
+  // A partial revert must touch the start or end of the approved range — a
+  // gap reverted in the middle can't be represented by a single from/to pair
+  // (mirrors the backend's own check, so the button disables before the round
+  // trip instead of just surfacing the server's rejection after the fact).
+  const revertIsFullRange =
+    !!reverting &&
+    revertRange.from === reverting.from_date.slice(0, 10) &&
+    revertRange.to === reverting.to_date.slice(0, 10);
+  const revertIsValidRange =
+    !!reverting &&
+    !!revertRange.from &&
+    !!revertRange.to &&
+    revertRange.from <= revertRange.to &&
+    (revertIsFullRange ||
+      revertRange.from === reverting.from_date.slice(0, 10) ||
+      revertRange.to === reverting.to_date.slice(0, 10));
+
   async function submitRevert() {
-    if (!reverting || !revertReason.trim()) return;
+    if (!reverting || !revertReason.trim() || !revertIsValidRange) return;
     setRevertBusy(true);
     try {
-      await api.post(`/leave-requests/${reverting.id}/revert`, { reason: revertReason.trim() });
-      toast.success("Leave reverted — original shift assignment restored");
+      await api.post(`/leave-requests/${reverting.id}/revert`, {
+        reason: revertReason.trim(),
+        from_date: revertRange.from,
+        to_date: revertRange.to,
+      });
+      toast.success(
+        revertIsFullRange
+          ? "Leave reverted — original shift assignment restored"
+          : "Leave partially reverted — those days are restored to the original shift assignment",
+      );
       logAudit(
-        `Reverted approved leave for ${reverting.nurse_name}: ${revertReason.trim()}`,
+        `${revertIsFullRange ? "Reverted" : "Partially reverted"} approved leave for ${reverting.nurse_name} (${revertRange.from} – ${revertRange.to}): ${revertReason.trim()}`,
         reverting.from_date,
       );
       qc.invalidateQueries({ queryKey: ["leave"] });
@@ -997,6 +1029,10 @@ function LeaveTable({
                                 onClick={() => {
                                   setReverting(l);
                                   setRevertReason("");
+                                  setRevertRange({
+                                    from: l.from_date.slice(0, 10),
+                                    to: l.to_date.slice(0, 10),
+                                  });
                                 }}
                                 className="h-8 w-8 grid place-items-center rounded-md hover:bg-violet-100 text-violet-700"
                               >
@@ -1134,12 +1170,63 @@ function LeaveTable({
       {reverting && (
         <Modal title="Revert approved leave" onClose={() => setReverting(null)}>
           <p className="text-sm text-muted-foreground mb-4">
-            This restores <strong>{reverting.nurse_name}</strong>&apos;s original shift assignment
-            for {fmtDateLeave(reverting.from_date)}
-            {reverting.to_date !== reverting.from_date ? ` – ${fmtDateLeave(reverting.to_date)}` : ""}{" "}
-            and removes any hours already credited for this leave. This is logged on the audit log
-            and can't be undone from here.
+            Restores <strong>{reverting.nurse_name}</strong>&apos;s original shift assignment for
+            the selected date{reverting.from_date !== reverting.to_date ? "s" : ""} and removes any
+            hours already credited for them. This is logged on the audit log and can&apos;t be
+            undone from here.
           </p>
+
+          {reverting.from_date.slice(0, 10) !== reverting.to_date.slice(0, 10) && (
+            <div className="mb-4">
+              <label className="text-sm font-medium block mb-1.5">
+                Days to revert{" "}
+                <span className="text-muted-foreground font-normal">
+                  (approved {fmtDateLeave(reverting.from_date)} – {fmtDateLeave(reverting.to_date)})
+                </span>
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={revertRange.from}
+                  min={reverting.from_date.slice(0, 10)}
+                  max={reverting.to_date.slice(0, 10)}
+                  onChange={(e) => setRevertRange((r) => ({ ...r, from: e.target.value }))}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                />
+                <span className="text-sm text-muted-foreground">–</span>
+                <input
+                  type="date"
+                  value={revertRange.to}
+                  min={reverting.from_date.slice(0, 10)}
+                  max={reverting.to_date.slice(0, 10)}
+                  onChange={(e) => setRevertRange((r) => ({ ...r, to: e.target.value }))}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                />
+              </div>
+              {!revertIsValidRange ? (
+                <p className="text-xs text-destructive mt-1.5">
+                  Must start from the beginning or end of the approved leave — reverting a gap in
+                  the middle isn't supported.
+                </p>
+              ) : !revertIsFullRange ? (
+                <p className="text-xs text-muted-foreground mt-1.5">
+                  The rest of the leave ({fmtDateLeave(
+                    revertRange.from === reverting.from_date.slice(0, 10)
+                      ? addDaysLeaveYmd(revertRange.to, 1)
+                      : reverting.from_date,
+                  )}{" "}
+                  –{" "}
+                  {fmtDateLeave(
+                    revertRange.from === reverting.from_date.slice(0, 10)
+                      ? reverting.to_date
+                      : addDaysLeaveYmd(revertRange.from, -1),
+                  )}
+                  ) stays approved and leave-credited exactly as it is.
+                </p>
+              ) : null}
+            </div>
+          )}
+
           <textarea
             autoFocus
             value={revertReason}
@@ -1158,11 +1245,11 @@ function LeaveTable({
             </button>
             <button
               type="button"
-              disabled={!revertReason.trim() || revertBusy}
+              disabled={!revertReason.trim() || !revertIsValidRange || revertBusy}
               onClick={submitRevert}
               className="h-9 px-4 rounded-md text-sm font-medium disabled:opacity-40 bg-violet-600 text-white hover:bg-violet-700"
             >
-              {revertBusy ? "Reverting…" : "Confirm revert"}
+              {revertBusy ? "Reverting…" : revertIsFullRange ? "Confirm revert" : "Confirm partial revert"}
             </button>
           </div>
         </Modal>
