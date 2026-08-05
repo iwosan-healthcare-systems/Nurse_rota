@@ -330,8 +330,17 @@ router.post(
         params,
       );
 
+      // HR is copied on every leave/switch request — not the approver, but
+      // kept in the loop for visibility, per explicit request.
+      const { rows: hrProfiles } = await pool.query(
+        `SELECT DISTINCT p.id, p.email FROM profiles p
+           JOIN user_roles ur ON ur.user_id = p.id AND ur.role = 'hr_admin'
+          WHERE p.is_active = true`,
+      );
+      const recipients = new Map([...approvers, ...hrProfiles].map((r) => [r.id, r]));
+
       const typeLabel = type === "Swap" ? "shift switch" : `${type.toLowerCase()} leave`;
-      for (const { email } of approvers) {
+      for (const { email } of recipients.values()) {
         sendMail({
           to: email,
           subject: `New ${typeLabel} request — ${created.nurse_name}`,
@@ -631,6 +640,14 @@ router.patch(
             );
             if (nurseProfileRows[0]?.profile_id) recipientIds.add(nurseProfileRows[0].profile_id);
           }
+          // HR is copied on the outcome too, for the same visibility reason
+          // as the new-request email above.
+          const { rows: hrProfileRows } = await pool.query(
+            `SELECT p.id FROM profiles p
+               JOIN user_roles ur ON ur.user_id = p.id AND ur.role = 'hr_admin'
+              WHERE p.is_active = true`,
+          );
+          for (const { id } of hrProfileRows) recipientIds.add(id);
           if (!recipientIds.size) return;
           const { rows: recipients } = await pool.query(
             "SELECT email FROM profiles WHERE id = ANY($1)",

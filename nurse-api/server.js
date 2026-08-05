@@ -70,6 +70,12 @@ const { startAutoExpireLocumJob } = require('./jobs/auto-expire-locum-requests')
 const { startAutoGenerateJob } = require('./jobs/auto-generate-rota');
 const { startAutoSubmitJob } = require('./jobs/auto-submit-draft');
 const { startAutoPublishJob } = require('./jobs/auto-publish-rota');
+const { startShiftStartReminderJob } = require('./jobs/auto-shift-start-reminder');
+const { startShiftMissedReminderJob } = require('./jobs/auto-shift-missed-reminder');
+const { startLeaveApprovalReminderJob } = require('./jobs/auto-leave-approval-reminder');
+const { startLocumApprovalReminderJob } = require('./jobs/auto-locum-approval-reminder');
+const { startRotaEditApprovalReminderJob } = require('./jobs/auto-rota-edit-approval-reminder');
+const { startRotaApprovalReminderJob } = require('./jobs/auto-rota-approval-reminder');
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
@@ -80,4 +86,10 @@ app.listen(PORT, () => {
   startAutoGenerateJob();
   startAutoSubmitJob();
   startAutoPublishJob();
+  startShiftStartReminderJob();
+  startShiftMissedReminderJob();
+  startLeaveApprovalReminderJob();
+  startLocumApprovalReminderJob();
+  startRotaEditApprovalReminderJob();
+  startRotaApprovalReminderJob();
 });

@@ -64,6 +64,12 @@ function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function addDaysToYmd(dateStr: string, n: number) {
+  const d = new Date(dateStr.slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + n);
+  return ymd(d);
+}
+
 /** Hours implied by a published shift_assignments cell (9h M/MWC, 15h N/NC, 0h OFF).
  *  A LEAVE cell is credited using pre_leave_shift — the shift it covered before being
  *  flipped to LEAVE — so approved leave still counts toward the period total. Mirrors
@@ -277,9 +283,10 @@ function NurseDashboard() {
   // field. Same period-boundary approach as shift.tsx: the earliest published
   // assignment within the trailing 27-day window marks the period start, then the
   // full 28-day block is fetched from there.
-  const { data: periodAssignments = [] } = useQuery<
-    { shift: string; pre_leave_shift: string | null }[]
-  >({
+  const { data: periodData } = useQuery<{
+    periodEnd: string;
+    rows: { shift: string; pre_leave_shift: string | null }[];
+  }>({
     queryKey: ["my-period-assignments-dash", nurseId],
     enabled: !!nurseId,
     queryFn: async () => {
@@ -292,16 +299,21 @@ function NurseDashboard() {
         >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
         .catch(() => []);
       const periodStart = winRow[0]?.shift_date ?? lb;
-      const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
-      periodEndDate.setDate(periodEndDate.getDate() + 27);
-      const periodEnd = ymd(periodEndDate);
-      return api
+      const periodEnd = addDaysToYmd(periodStart, 27);
+      const rows = await api
         .get<
           { shift: string; pre_leave_shift: string | null }[]
         >(`/shift-assignments?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&status=published`)
         .catch(() => []);
+      return { periodEnd, rows };
     },
   });
+  const periodAssignments = periodData?.rows ?? [];
+  // Her own next rota period start date — used both to tell the "ward is
+  // changing" banner when it takes effect, and as the date it should stop
+  // showing (see wardChanging below, which naturally goes false once today's
+  // assignment rolls into that new period).
+  const nextPeriodStart = periodData ? addDaysToYmd(periodData.periodEnd, 1) : null;
 
   const { data: myLeave = [] } = useQuery<LeaveRequest[]>({
     queryKey: ["my-leave", nurseId],
@@ -324,6 +336,31 @@ function NurseDashboard() {
     : null;
 
   const effectiveAssignment = locumAssignment ?? todayAssignment;
+
+  // The ward shown as "her ward" must reflect the CURRENT rota period's actual
+  // assignment, not the live nurses.ward value — an admin may already have
+  // updated nurses.ward in preparation for the NEXT period's generation, and
+  // that must not retroactively change what she sees while still working the
+  // period she's actually on. todayAssignment.ward is snapshotted per-row at
+  // generation time (unaffected by later nurses.ward edits), same as her real
+  // shifts already are — deliberately NOT effectiveAssignment here, since that
+  // folds in one-off locum cover, which is a different ward for today only.
+  const currentPeriodWard = todayAssignment?.ward ?? nurseRecord?.ward ?? null;
+
+  // A pending ward change for next period: nurses.ward (the live field, already
+  // updated for next period's generation) differs from what she's actually on
+  // right now. This banner needs no separate dismiss/expiry logic — the moment
+  // "today" rolls into the next period, todayAssignment picks up that period's
+  // (new-ward) row and this naturally goes false on its own, same as
+  // currentPeriodWard above transitions itself.
+  const currentWardToken = !isFacilityWideRole(nurseRecord?.role)
+    ? (todayAssignment?.ward?.split("|")[0] ?? null)
+    : null;
+  const nextWardToken = !isFacilityWideRole(nurseRecord?.role)
+    ? (nurseRecord?.ward?.split("|")[0] ?? null)
+    : null;
+  const wardChanging =
+    !!currentWardToken && !!nextWardToken && currentWardToken !== nextWardToken;
 
   // Map of upcoming locum dates (next 7 days) → locum info, for "Next 7 days" bank badge
   const upcomingLocumMap = new Map<string, { shift: "M" | "N"; ward: string; facility: string }>(
@@ -404,12 +441,26 @@ function NurseDashboard() {
   return (
     <div className="space-y-6">
       <ManagementAlerts />
+      {wardChanging && nextPeriodStart && (
+        <div className="flex items-start gap-3 rounded-lg border border-sky-300 bg-sky-50 dark:bg-sky-950/20 dark:border-sky-700 px-4 py-3 text-sm text-sky-800 dark:text-sky-300">
+          <ArrowLeftRight className="h-4 w-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Your ward is changing</p>
+            <p className="mt-0.5 text-sky-700 dark:text-sky-400">
+              <strong>{currentWardToken}</strong> → <strong>{nextWardToken}</strong>. Your shifts
+              will be generated in <strong>{nextWardToken}</strong> starting{" "}
+              <strong>{fmtD(nextPeriodStart)}</strong>. This takes effect automatically — no
+              action needed.
+            </p>
+          </div>
+        </div>
+      )}
       <PageHeader
         title={`Welcome, ${fullName?.split(" ")[0] ?? "Nurse"}`}
         subtitle={[
           nurseRecord?.role,
           nurseFacility,
-          !isFacilityWideRole(nurseRecord?.role) && nurseRecord?.ward?.split("|")[0],
+          !isFacilityWideRole(nurseRecord?.role) && currentPeriodWard?.split("|")[0],
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -429,7 +480,7 @@ function NurseDashboard() {
           <p className="mt-2 text-lg font-semibold">
             {isFacilityWideRole(nurseRecord?.role)
               ? "Facility-wide"
-              : (nurseRecord?.ward?.split("|")[0] ?? "Not assigned")}
+              : (currentPeriodWard?.split("|")[0] ?? "Not assigned")}
           </p>
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">

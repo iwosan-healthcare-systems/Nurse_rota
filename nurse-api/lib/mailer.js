@@ -122,6 +122,8 @@ async function sendMail({ to, subject, title, bodyHtml, ctaText, ctaUrl }) {
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       console.error(`[mailer] send failed (${res.status}) to ${to}: ${body}`);
+    } else {
+      console.log(`[mailer] sent "${subject}" to ${to}`);
     }
   } catch (err) {
     console.error(`[mailer] send error to ${to}:`, err.message);

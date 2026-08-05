@@ -1,5 +1,62 @@
 const cron = require("node-cron");
 const pool = require("../db");
+const { sendMail, portalUrl } = require("../lib/mailer");
+
+const SHIFT_TYPE_LABELS = { M: "Morning", N: "Night" };
+
+function fmtShiftDate(shiftDate) {
+  return new Date(shiftDate).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+  });
+}
+
+// Both missed-shift INSERTs below only ever RETURNING nurse_id/shift_date —
+// resolve name+email for a batch of nurse_ids in one query, same
+// profile_id-then-name-match COALESCE chain used throughout the app.
+async function emailMissedShiftNurses(rows, label) {
+  if (!rows.length) return;
+  const nurseIds = [...new Set(rows.map((r) => r.nurse_id))];
+  const { rows: people } = await pool
+    .query(
+      `SELECT n.id AS nurse_id, n.name, p.email
+       FROM nurses n
+       JOIN profiles p ON p.id = COALESCE(
+         n.profile_id,
+         (SELECT id FROM profiles WHERE LOWER(full_name) = LOWER(n.name) LIMIT 1)
+       )
+       WHERE n.id = ANY($1)`,
+      [nurseIds],
+    )
+    .catch(() => ({ rows: [] }));
+  const byId = Object.fromEntries(people.map((p) => [p.nurse_id, p]));
+
+  let sentCount = 0;
+  for (const row of rows) {
+    const person = byId[row.nurse_id];
+    if (!person?.email) continue;
+    const shiftLabel = SHIFT_TYPE_LABELS[row.shift_type] ?? row.shift_type;
+    sendMail({
+      to: person.email,
+      subject: `Missed shift recorded — ${fmtShiftDate(row.shift_date)}`,
+      title: "Missed shift recorded",
+      bodyHtml: `<p>Hi ${person.name ?? "there"},</p><p>Your <strong>${shiftLabel}</strong> shift on ${fmtShiftDate(row.shift_date)} has been recorded as missed — no sign-in was received before the shift ended, so no hours were logged.</p><p>If this isn't correct, please contact your supervisor.</p>`,
+      ctaText: "Open Shift Page",
+      ctaUrl: portalUrl("/shift"),
+    }).catch(() => {});
+    sentCount++;
+  }
+
+  if (sentCount > 0) {
+    await pool
+      .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
+        "Missed shift emails sent",
+        `${sentCount} ${label} email(s)`,
+      ])
+      .catch((err) => console.error("[auto-end] missed-shift email audit log failed:", err.message));
+  }
+}
 
 // Arbitrary fixed key for this job's mutex. The API runs as multiple PM2 instances
 // behind one port (see db.js), and node-cron's "*/5 * * * *" fires in every
@@ -116,10 +173,14 @@ async function runAutoEndOverdueShifts() {
           WHERE sl.nurse_id = sa.nurse_id
             AND sl.shift_date = sa.shift_date
         )
+      RETURNING nurse_id, shift_date, shift_type
     `);
     if (missed.rowCount > 0) {
       console.log(
         `[auto-end] ${new Date().toISOString()} — recorded ${missed.rowCount} missed shift(s)`,
+      );
+      await emailMissedShiftNurses(missed.rows, "missed shift").catch((err) =>
+        console.error("[auto-end] missed-shift email batch failed:", err.message),
       );
     }
 
@@ -177,10 +238,14 @@ async function runAutoEndOverdueShifts() {
           WHERE sl.nurse_id = lr.accepted_by_nurse_id
             AND sl.shift_date = lr.shift_date
         )
+      RETURNING nurse_id, shift_date, shift_type
     `);
     if (missedLocum.rowCount > 0) {
       console.log(
         `[auto-end] ${new Date().toISOString()} — recorded ${missedLocum.rowCount} missed locum shift(s)`,
+      );
+      await emailMissedShiftNurses(missedLocum.rows, "missed locum shift").catch((err) =>
+        console.error("[auto-end] missed-locum-shift email batch failed:", err.message),
       );
     }
 
