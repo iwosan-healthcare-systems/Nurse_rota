@@ -80,16 +80,32 @@ const { startRotaApprovalReminderJob } = require('./jobs/auto-rota-approval-remi
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Nurse API running on port ${PORT}`);
-  startAutoEndJob();
-  startAutoDeclineJob();
-  startAutoExpireLocumJob();
-  startAutoGenerateJob();
-  startAutoSubmitJob();
-  startAutoPublishJob();
-  startShiftStartReminderJob();
-  startShiftMissedReminderJob();
-  startLeaveApprovalReminderJob();
-  startLocumApprovalReminderJob();
-  startRotaEditApprovalReminderJob();
-  startRotaApprovalReminderJob();
+
+  // In PM2 cluster mode (production runs 4 workers), every worker process
+  // would otherwise register every cron job, and node-cron fires all of them
+  // in every worker at the same wall-clock tick. The pg advisory lock in each
+  // job already ensures only one worker's invocation actually does the work,
+  // but all N workers still open a Postgres connection just to check the
+  // lock — 12 jobs x 4 workers = 48 near-simultaneous connection attempts
+  // every 5 minutes (and again at every deploy restart), which is what
+  // exhausted Postgres's max_connections. Registering cron only on the first
+  // worker (NODE_APP_INSTANCE, set by PM2 in both cluster and fork mode,
+  // always starting at '0') cuts that to 12. The advisory locks stay in place
+  // as a safety net (e.g. a moment where two "instance 0"s briefly overlap
+  // during a rolling deploy), just no longer the only thing preventing a
+  // connection-count blowup.
+  if (!process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === '0') {
+    startAutoEndJob();
+    startAutoDeclineJob();
+    startAutoExpireLocumJob();
+    startAutoGenerateJob();
+    startAutoSubmitJob();
+    startAutoPublishJob();
+    startShiftStartReminderJob();
+    startShiftMissedReminderJob();
+    startLeaveApprovalReminderJob();
+    startLocumApprovalReminderJob();
+    startRotaEditApprovalReminderJob();
+    startRotaApprovalReminderJob();
+  }
 });
