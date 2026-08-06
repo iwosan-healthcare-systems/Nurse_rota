@@ -413,19 +413,25 @@ function safeNextPositionFromLastShift(
 }
 
 /**
- * For each nurse in group, look at their last 4-5 shifts from prev and detect
+ * For each nurse in group, look at their last 2-5 shifts from prev and detect
  * their cycle position. Returns a map of nurse_id → next cycle index to use
  * as the starting position for the new period.
  *
- * Three tiers, most precise first:
- *   1. Exact 5-day match (disambiguates which OFF block a trailing OFF run belongs to).
- *   2. Exact 4-day match.
- *   3. Safe single-day anchor on the nurse's actual most recent assigned shift
+ * Tiers, most precise first:
+ *   1. Trailing-window match, tried at length 5 down to 2 (stopping at the
+ *      first that matches): a 5-day window is the most precise — it
+ *      disambiguates which OFF block a trailing OFF run belongs to
+ *      (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M) — but if it
+ *      doesn't match the pure cycle at all (LEAVE/MWC/NC in the window, or a
+ *      history irregularity such as a block baked in shorter than 4 days by
+ *      an earlier bug run), shorter, more recent trailing windows are tried
+ *      instead of giving up outright — a clean 2-4 day tail can still land
+ *      an exact, unambiguous match even when the older days can't be used.
+ *   2. Safe single-day anchor on the nurse's actual most recent assigned shift
  *      (safeNextPositionFromLastShift) — less precise (may not land on the
- *      exact right day within the OFF block) but still edit-proof: a manual
- *      edit/swap/locum cover anywhere in days -5..-2 can never cause an unsafe
- *      M-after-N or N-after-M, because it's anchored on day -1's real value,
- *      not on whether the whole window fits the idealized cycle.
+ *      exact right day within the OFF block) but still edit-proof: guarantees
+ *      no unsafe M-after-N or N-after-M even when every windowed match above
+ *      failed, since it's anchored on day -1's real value alone.
  * Only a nurse with no history at all, or whose last real shift was itself
  * OFF/LEAVE (not enough information in one day), falls through to the
  * mathematical phase formula in the caller.
@@ -451,25 +457,21 @@ function buildPhaseOverrides(
 
     let nextPos: number | null = null;
 
-    if (rows.length >= 4) {
-      // Prefer 5-day look-back: the shift preceding 4 OFFs disambiguates which OFF
-      // block it is (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M).
-      // If day-5 contains a non-base shift, fall back to 4 days — only MMMM and
-      // NNNN are unambiguous there, but those are the common period-end cases.
-      let recent: ShiftCode[] | null = null;
-      if (sorted.length >= 5) {
-        const five = sorted.slice(-5).map((r) => r.shift);
-        if (!five.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
-          recent = five;
-        }
-      }
-      if (recent === null) {
-        const four = sorted.slice(-4).map((r) => r.shift);
-        if (!four.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
-          recent = four;
-        }
-      }
-      if (recent !== null) nextPos = detectCyclePhase(recent, cycle);
+    // Prefer the longest trailing window first (5 days disambiguates which
+    // OFF block a trailing OFF run belongs to — M→OOOO = 1st OFF → next N;
+    // N→OOOO = 2nd OFF → next M), then retry with progressively shorter
+    // windows (down to 2 days) if the longer one fails to match at all.
+    // A longer window can fail not just from LEAVE/MWC/NC contamination but
+    // from a shift-history irregularity earlier in the window — e.g. a block
+    // baked in shorter than the standard 4 days by an earlier bug, or an
+    // isolated manual edit/swap — in which case a shorter, more recent
+    // trailing subsequence can still match cleanly and should be used rather
+    // than giving up and losing the block-position precision entirely.
+    const maxWindow = Math.min(5, sorted.length);
+    for (let windowLen = maxWindow; windowLen >= 2 && nextPos === null; windowLen--) {
+      const tail = sorted.slice(-windowLen).map((r) => r.shift);
+      if (tail.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) continue;
+      nextPos = detectCyclePhase(tail, cycle);
     }
 
     if (nextPos === null) {
