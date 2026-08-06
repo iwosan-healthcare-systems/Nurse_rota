@@ -187,10 +187,11 @@ router.post(
       await client.query("BEGIN");
       for (const row of rows) {
         await client.query(
-          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role)
-         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1))
+          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift)
+         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7)
          ON CONFLICT (nurse_id, shift_date)
-         DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status, updated_at = NOW()`,
+         DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
+           pre_leave_shift = EXCLUDED.pre_leave_shift, updated_at = NOW()`,
           [
             row.nurse_id,
             row.shift,
@@ -198,6 +199,7 @@ router.post(
             row.ward || null,
             row.status || "draft",
             row.created_by || null,
+            row.pre_leave_shift || null,
           ],
         );
       }

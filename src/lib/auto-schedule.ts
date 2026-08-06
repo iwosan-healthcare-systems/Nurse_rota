@@ -57,6 +57,10 @@ export interface DraftAssignment {
   ward: string | null;
   shift_date: string;
   shift: ShiftCode;
+  // Set only when `shift` is "LEAVE": the shift the rotation would otherwise have
+  // put the nurse on, so leave-credited hours can be reconstructed later without
+  // waiting for a runtime approval-time flip (see leave-requests.js).
+  pre_leave_shift?: ShiftCode | null;
 }
 
 export interface SafetyViolation {
@@ -538,13 +542,14 @@ function scheduleGroup(
       const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
       const startPos =
         phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
+      const baseShift = cycle[(startPos + d) % len];
+      const onLeave = inLeave(leave, nurse.id, dateStr);
       out.push({
         nurse_id: nurse.id,
         ward: wardName,
         shift_date: dateStr,
-        shift: inLeave(leave, nurse.id, dateStr)
-          ? "LEAVE"
-          : cycle[(startPos + d) % len],
+        shift: onLeave ? "LEAVE" : baseShift,
+        ...(onLeave ? { pre_leave_shift: baseShift } : {}),
       });
     }
   }
@@ -883,10 +888,7 @@ function scheduleCoverageNurses(
     const dateStr = ymd(date);
 
     for (let i = 0; i < N; i++) {
-      if (inLeave(leave, group[i].id, dateStr)) {
-        out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift: "LEAVE" });
-        continue;
-      }
+      const onLeave = inLeave(leave, group[i].id, dateStr);
 
       // Coverage Nurse - Day: matron-style fixed weekly pattern (Mon-Fri M,
       // Sat/Sun OFF) — NOT the rotating 4-on-4-off NURSE_CYCLE regular
@@ -920,7 +922,13 @@ function scheduleCoverageNurses(
         } else {
           shift = "M"; // ordinary Tue-Thu
         }
-        out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+        out.push({
+          nurse_id: group[i].id,
+          ward: null,
+          shift_date: dateStr,
+          shift: onLeave ? "LEAVE" : shift,
+          ...(onLeave ? { pre_leave_shift: shift } : {}),
+        });
         continue;
       }
 
@@ -990,7 +998,13 @@ function scheduleCoverageNurses(
             : NURSE_CYCLE[(nurseEffectiveBase(i) + d) % CL];
       }
 
-      out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+      out.push({
+        nurse_id: group[i].id,
+        ward: null,
+        shift_date: dateStr,
+        shift: onLeave ? "LEAVE" : shift,
+        ...(onLeave ? { pre_leave_shift: shift } : {}),
+      });
     }
   }
 }
@@ -1034,11 +1048,14 @@ export function generateSchedule(opts: {
     const dateStr = ymd(date);
     const isWeekday = date.getDay() >= 1 && date.getDay() <= 5;
     for (const matron of matrons) {
+      const baseShift: ShiftCode = isWeekday ? "M" : "OFF";
+      const onLeave = inLeave(leave, matron.id, dateStr);
       out.push({
         nurse_id: matron.id,
         ward: null,
         shift_date: dateStr,
-        shift: inLeave(leave, matron.id, dateStr) ? "LEAVE" : isWeekday ? "M" : "OFF",
+        shift: onLeave ? "LEAVE" : baseShift,
+        ...(onLeave ? { pre_leave_shift: baseShift } : {}),
       });
     }
   }
@@ -1164,6 +1181,11 @@ export function generateSchedule(opts: {
     // Morning-only wards use 4M→4OFF cycle for all ward nurses so they never
     // get night shifts scheduled.  Full-cycle wards use the standard 4M→4OFF→4N→4OFF.
     const wardCycle = isMorningOnlyWard(ward) ? DAY_ONLY_CYCLE : NURSE_CYCLE;
+    // NAs get their own cycle decision: min_night_na === 0 means this ward never
+    // needs an NA at night, independent of whether ward nurses still cover nights
+    // (e.g. Operation Theatre can staff nurses overnight while NAs stay day-only).
+    // Falls back to wardCycle so a fully morning-only ward still applies there too.
+    const naCycle = ward.min_night_na === 0 ? DAY_ONLY_CYCLE : wardCycle;
 
     scheduleGroup(
       supervisors,
@@ -1201,7 +1223,7 @@ export function generateSchedule(opts: {
     );
     scheduleGroup(
       naRegular,
-      wardCycle,
+      naCycle,
       days,
       opts.startDate,
       leave,

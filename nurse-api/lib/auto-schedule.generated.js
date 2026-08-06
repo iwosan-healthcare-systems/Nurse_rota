@@ -454,13 +454,14 @@ function scheduleGroup(group, cycle, days, startDate, leave, wardName, out, phas
         for (const nurse of byId) {
             const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
             const startPos = phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
+            const baseShift = cycle[(startPos + d) % len];
+            const onLeave = inLeave(leave, nurse.id, dateStr);
             out.push({
                 nurse_id: nurse.id,
                 ward: wardName,
                 shift_date: dateStr,
-                shift: inLeave(leave, nurse.id, dateStr)
-                    ? "LEAVE"
-                    : cycle[(startPos + d) % len],
+                shift: onLeave ? "LEAVE" : baseShift,
+                ...(onLeave ? { pre_leave_shift: baseShift } : {}),
             });
         }
     }
@@ -752,10 +753,7 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
         date.setDate(date.getDate() + d);
         const dateStr = ymd(date);
         for (let i = 0; i < N; i++) {
-            if (inLeave(leave, group[i].id, dateStr)) {
-                out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift: "LEAVE" });
-                continue;
-            }
+            const onLeave = inLeave(leave, group[i].id, dateStr);
             // Coverage Nurse - Day: matron-style fixed weekly pattern (Mon-Fri M,
             // Sat/Sun OFF) — NOT the rotating 4-on-4-off NURSE_CYCLE regular
             // (night-based) Coverage Nurses use. The only thing they share with the
@@ -792,7 +790,13 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                 else {
                     shift = "M"; // ordinary Tue-Thu
                 }
-                out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+                out.push({
+                    nurse_id: group[i].id,
+                    ward: null,
+                    shift_date: dateStr,
+                    shift: onLeave ? "LEAVE" : shift,
+                    ...(onLeave ? { pre_leave_shift: shift } : {}),
+                });
                 continue;
             }
             // Find the most recently started NC block at or before day d.
@@ -865,7 +869,13 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                         ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
                         : NURSE_CYCLE[(nurseEffectiveBase(i) + d) % CL];
             }
-            out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+            out.push({
+                nurse_id: group[i].id,
+                ward: null,
+                shift_date: dateStr,
+                shift: onLeave ? "LEAVE" : shift,
+                ...(onLeave ? { pre_leave_shift: shift } : {}),
+            });
         }
     }
 }
@@ -890,11 +900,14 @@ function generateSchedule(opts) {
         const dateStr = ymd(date);
         const isWeekday = date.getDay() >= 1 && date.getDay() <= 5;
         for (const matron of matrons) {
+            const baseShift = isWeekday ? "M" : "OFF";
+            const onLeave = inLeave(leave, matron.id, dateStr);
             out.push({
                 nurse_id: matron.id,
                 ward: null,
                 shift_date: dateStr,
-                shift: inLeave(leave, matron.id, dateStr) ? "LEAVE" : isWeekday ? "M" : "OFF",
+                shift: onLeave ? "LEAVE" : baseShift,
+                ...(onLeave ? { pre_leave_shift: baseShift } : {}),
             });
         }
     }
@@ -976,11 +989,16 @@ function generateSchedule(opts) {
         // Morning-only wards use 4M→4OFF cycle for all ward nurses so they never
         // get night shifts scheduled.  Full-cycle wards use the standard 4M→4OFF→4N→4OFF.
         const wardCycle = isMorningOnlyWard(ward) ? DAY_ONLY_CYCLE : NURSE_CYCLE;
+        // NAs get their own cycle decision: min_night_na === 0 means this ward never
+        // needs an NA at night, independent of whether ward nurses still cover nights
+        // (e.g. Operation Theatre can staff nurses overnight while NAs stay day-only).
+        // Falls back to wardCycle so a fully morning-only ward still applies there too.
+        const naCycle = ward.min_night_na === 0 ? DAY_ONLY_CYCLE : wardCycle;
         scheduleGroup(supervisors, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + supervisorSeed, prev);
         // Surgical Nurse - Day: always morning-only (4M→4OFF), even in a full-cycle ward.
         scheduleGroup(surgicalDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + surgicalDaySeed, prev);
         scheduleGroup(regulars, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + regularSeed, prev);
-        scheduleGroup(naRegular, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + naRegularSeed, prev);
+        scheduleGroup(naRegular, naCycle, days, opts.startDate, leave, ward.name, out, periodOffset + naRegularSeed, prev);
         scheduleGroup(naDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + naDaySeed, prev);
         // Only validate safety rules for wards that have staff in this run.
         // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
