@@ -585,9 +585,33 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
     // Fallback: if all candidates already have NC, allow a second assignment so
     // every NC slot is covered — the nurse doing two NC blocks is the least-recently
     // used candidate to spread the extra load fairly.
+    //
+    // Slot keys are each candidate's OWN natural N-block start day, so two nurses
+    // only ever land on the exact same slot when their stagger positions
+    // genuinely coincide — the dedup above already handles that case. But two
+    // DIFFERENT slots close together (e.g. 6 and 8) still produce 4-day blocks
+    // that overlap on the calendar even though their slot keys differ. That gap
+    // let two coverage nurses end up on NC the same night once prev-detected
+    // phase overrides (buildPhaseOverrides, used for nurseEffectiveBase above)
+    // nudged a nurse's natural block a few days off true stagger-alignment.
+    // occupiedDays tracks which day-offsets are already covered by an earlier
+    // (chronologically first) NC block and skips assigning any slot that would
+    // overlap it — the affected nurse(s) simply keep their plain "N" for that
+    // block instead of the "NC" lead designation; the night is still staffed
+    // either way, so leaving the slot unassigned is strictly safer than doubling
+    // up two nurses on the same NC block.
     const ncStartDays = new Map(); // nurseIdx → all NC start days
     const ncAssigned = new Set();
+    const occupiedDays = new Set();
+    const overlapsOccupied = (start) => {
+        for (let k = start; k < start + 4; k++)
+            if (occupiedDays.has(k))
+                return true;
+        return false;
+    };
     for (const slot of [...slotCandidates.keys()].sort((a, b) => a - b)) {
+        if (overlapsOccupied(slot))
+            continue;
         const candidates = slotCandidates.get(slot);
         let covered = false;
         for (let attempt = 0; attempt < candidates.length; attempt++) {
@@ -607,7 +631,11 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
             if (!ncStartDays.has(candidate))
                 ncStartDays.set(candidate, []);
             ncStartDays.get(candidate).push(slot);
+            covered = true;
         }
+        if (covered)
+            for (let k = slot; k < slot + 4; k++)
+                occupiedDays.add(k);
     }
     // ── MWC pre-pass ──────────────────────────────────────────────────────────
     // mwcByDate         : dateStr (Sat or Sun) → nurseIdx on MWC duty

@@ -157,6 +157,18 @@ router.post(
     if (to_date < from_date) {
       return res.status(400).json({ error: "End date cannot be before the start date" });
     }
+    // Sick/Emergency exist for near-immediate need, not advance planning —
+    // capped to starting within 3 days of today regardless of whether the
+    // normal leave window is open or closed (Annual/etc. is the right type
+    // for anything planned further out).
+    if (type === "Sick" || type === "Emergency") {
+      const maxFromDate = addDaysYmd(today, 3);
+      if (from_date > maxFromDate) {
+        return res.status(400).json({
+          error: `${type} leave can only be requested for within 3 days of today.`,
+        });
+      }
+    }
 
     // Block leave requests for dates where the nurse's rota is currently under review.
     if (type !== "Swap" && nurse_id) {

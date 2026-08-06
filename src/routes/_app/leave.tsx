@@ -1681,6 +1681,12 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       toast.error("End date cannot be before the start date");
       return;
     }
+    if (effectiveType === "Sick" || effectiveType === "Emergency") {
+      if (from > addDaysLeaveYmd(today, 3)) {
+        toast.error(`${effectiveType} leave can only be requested for within 3 days of today.`);
+        return;
+      }
+    }
     if (datesInApprovalRota) {
       toast.error("The rota for this period is under review. Leave requests are blocked until it is published.");
       return;
@@ -1810,6 +1816,11 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               required
               type="date"
               min={today}
+              max={
+                effectiveType === "Sick" || effectiveType === "Emergency"
+                  ? addDaysLeaveYmd(today, 3)
+                  : undefined
+              }
               value={from}
               onChange={(e) => {
                 const v = e.target.value;
