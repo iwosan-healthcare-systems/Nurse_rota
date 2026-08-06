@@ -277,6 +277,14 @@ function isNurseOrIntern(role) {
 function isMorningOnlyWard(ward) {
     return ward.min_night_nurses === 0 && ward.min_night_na === 0;
 }
+// Oncology and Dialysis (Ikoyi) run outpatient-style hours: morning shift,
+// weekdays only — never scheduled on Saturday/Sunday at all, unlike the
+// rotating 4M→4OFF DAY_ONLY_CYCLE used by other morning-only wards, whose
+// M-block can land on a weekend depending on a nurse's stagger phase.
+const FIXED_WEEKDAY_WARDS = new Set(["oncology", "dialysis"]);
+function isFixedWeekdayWard(ward) {
+    return FIXED_WEEKDAY_WARDS.has(ward.name.trim().toLowerCase());
+}
 function stableGroupOffset(group) {
     if (group.length === 0)
         return 0;
@@ -436,7 +444,12 @@ function buildPhaseOverrides(group, prev, cycle) {
  * never changes between periods, guaranteeing that the nurse's cycle position
  * at the start of period P+1 is exactly one day after where it ended in P.
  */
-function scheduleGroup(group, cycle, days, startDate, leave, wardName, out, phase = 0, prev = []) {
+function scheduleGroup(group, cycle, days, startDate, leave, wardName, out, phase = 0, prev = [], 
+// Oncology/Dialysis: ignore `cycle` entirely and use the real calendar day
+// of week instead — Mon-Fri M, Sat-Sun OFF, always, regardless of a nurse's
+// stagger phase. Unlike DAY_ONLY_CYCLE (an 8-day repeating block that can
+// drift onto weekends depending on phase), this is pinned to actual weekdays.
+fixedWeekday = false) {
     const N = group.length;
     if (N === 0)
         return;
@@ -472,7 +485,12 @@ function scheduleGroup(group, cycle, days, startDate, leave, wardName, out, phas
         for (const nurse of byId) {
             const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
             const startPos = phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
-            const baseShift = cycle[(startPos + d) % len];
+            const dow = date.getDay(); // 0 = Sun .. 6 = Sat
+            const baseShift = fixedWeekday
+                ? dow >= 1 && dow <= 5
+                    ? "M"
+                    : "OFF"
+                : cycle[(startPos + d) % len];
             const onLeave = inLeave(leave, nurse.id, dateStr);
             out.push({
                 nurse_id: nurse.id,
@@ -1117,12 +1135,22 @@ function generateSchedule(opts) {
         // (e.g. Operation Theatre can staff nurses overnight while NAs stay day-only).
         // Falls back to wardCycle so a fully morning-only ward still applies there too.
         const naCycle = ward.min_night_na === 0 ? DAY_ONLY_CYCLE : wardCycle;
-        scheduleGroup(supervisors, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + supervisorSeed, prev);
-        // Surgical Nurse - Day: always morning-only (4M→4OFF), even in a full-cycle ward.
-        scheduleGroup(surgicalDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + surgicalDaySeed, prev);
-        scheduleGroup(regulars, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + regularSeed, prev);
-        scheduleGroup(naRegular, naCycle, days, opts.startDate, leave, ward.name, out, periodOffset + naRegularSeed, prev);
-        scheduleGroup(naDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + naDaySeed, prev);
+        // Oncology/Dialysis: every role in the ward is weekday-mornings-only —
+        // overrides whatever cycle would otherwise apply, cycle param below is
+        // ignored by scheduleGroup when this is true.
+        const fixedWeekday = isFixedWeekdayWard(ward);
+        scheduleGroup(supervisors, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + supervisorSeed, prev, fixedWeekday);
+        // Surgical Nurse - Day: always the fixed calendar Mon-Fri M / Sat-Sun OFF
+        // pattern (same as Matrons), regardless of which ward they're in — a role
+        // guarantee, not something that should depend on whether THIS ward
+        // happens to also be a fixedWeekday ward (Oncology/Dialysis). `true` is
+        // hardcoded here rather than reusing the ward-level `fixedWeekday`
+        // variable for that reason. The `cycle` argument (DAY_ONLY_CYCLE) is
+        // inert when fixedWeekday is true — scheduleGroup ignores it entirely.
+        scheduleGroup(surgicalDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + surgicalDaySeed, prev, true);
+        scheduleGroup(regulars, wardCycle, days, opts.startDate, leave, ward.name, out, periodOffset + regularSeed, prev, fixedWeekday);
+        scheduleGroup(naRegular, naCycle, days, opts.startDate, leave, ward.name, out, periodOffset + naRegularSeed, prev, fixedWeekday);
+        scheduleGroup(naDay, DAY_ONLY_CYCLE, days, opts.startDate, leave, ward.name, out, periodOffset + naDaySeed, prev, fixedWeekday);
         // Only validate safety rules for wards that have staff in this run.
         // If wardNurses is empty (e.g. generating only for IP Ward, so ER has
         // no nurses here), we skip enforcement — it would always report violations
