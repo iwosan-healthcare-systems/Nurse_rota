@@ -87,6 +87,58 @@ function wrapHtml({ title, bodyHtml, ctaText, ctaUrl }) {
 </html>`;
 }
 
+// ── Concurrency + retry guard for Microsoft Graph's per-mailbox throttling ──
+// Graph enforces a small concurrent-request limit per sending mailbox (the
+// "ApplicationThrottled" / MailboxConcurrency 429). Bulk notifications — a
+// rota published to a whole facility, a leave-credit run, a shift-switch
+// blast — fire many sendMail() calls back-to-back from unrelated call sites
+// across the app, all sharing this one sender mailbox. This queue caps how
+// many are actually in flight against Graph at once, and retries a 429 with
+// backoff (honouring Retry-After when Graph sends one) instead of silently
+// dropping the email, which is what was happening before.
+const MAX_CONCURRENT_SENDS = 2;
+const MAX_RETRIES = 4;
+let activeSends = 0;
+const sendQueue = [];
+
+function runNextQueued() {
+  if (activeSends >= MAX_CONCURRENT_SENDS || sendQueue.length === 0) return;
+  activeSends++;
+  const { task, resolve } = sendQueue.shift();
+  task().finally(() => {
+    activeSends--;
+    resolve();
+    runNextQueued();
+  });
+}
+
+function enqueueSend(task) {
+  return new Promise((resolve) => {
+    sendQueue.push({ task, resolve });
+    runNextQueued();
+  });
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// Retries a 429 up to MAX_RETRIES times, honouring the Retry-After header
+// when Graph provides one, otherwise falling back to exponential backoff.
+async function fetchWithRetry(url, options, to) {
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    const res = await fetch(url, options);
+    if (res.status !== 429 || attempt === MAX_RETRIES) return res;
+    const retryAfterHeader = res.headers.get("retry-after");
+    const waitMs = retryAfterHeader ? Number(retryAfterHeader) * 1000 : 1000 * 2 ** attempt;
+    console.warn(
+      `[mailer] 429 to ${to} — retrying in ${waitMs}ms (attempt ${attempt + 1}/${MAX_RETRIES})`,
+    );
+    await sleep(waitMs);
+  }
+  return undefined; // unreachable — loop always returns
+}
+
 // Low-level send — deliberately never throws or rejects with an error the
 // caller has to handle; logs and returns instead, so nothing in the app's
 // real approve/decline/submit flow can ever fail because email did.
@@ -96,38 +148,41 @@ async function sendMail({ to, subject, title, bodyHtml, ctaText, ctaUrl }) {
     console.log(`[mailer] (not configured) would send "${subject}" to ${to}`);
     return;
   }
-  try {
-    const token = await getAccessToken();
-    const html = wrapHtml({
-      title: title ?? subject,
-      bodyHtml,
-      ctaText,
-      ctaUrl: ctaUrl ?? PORTAL_BASE_URL,
-    });
-    const res = await fetch(
-      `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(SENDER_EMAIL)}/sendMail`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: {
-            subject,
-            body: { contentType: "HTML", content: html },
-            toRecipients: [{ emailAddress: { address: to } }],
-          },
-          saveToSentItems: false,
-        }),
-      },
-    );
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      console.error(`[mailer] send failed (${res.status}) to ${to}: ${body}`);
-    } else {
-      console.log(`[mailer] sent "${subject}" to ${to}`);
+  await enqueueSend(async () => {
+    try {
+      const token = await getAccessToken();
+      const html = wrapHtml({
+        title: title ?? subject,
+        bodyHtml,
+        ctaText,
+        ctaUrl: ctaUrl ?? PORTAL_BASE_URL,
+      });
+      const res = await fetchWithRetry(
+        `https://graph.microsoft.com/v1.0/users/${encodeURIComponent(SENDER_EMAIL)}/sendMail`,
+        {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            message: {
+              subject,
+              body: { contentType: "HTML", content: html },
+              toRecipients: [{ emailAddress: { address: to } }],
+            },
+            saveToSentItems: false,
+          }),
+        },
+        to,
+      );
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        console.error(`[mailer] send failed (${res.status}) to ${to}: ${body}`);
+      } else {
+        console.log(`[mailer] sent "${subject}" to ${to}`);
+      }
+    } catch (err) {
+      console.error(`[mailer] send error to ${to}:`, err.message);
     }
-  } catch (err) {
-    console.error(`[mailer] send error to ${to}:`, err.message);
-  }
+  });
 }
 
 // Builds a full portal link from a path, e.g. portalUrl("/approvals").
