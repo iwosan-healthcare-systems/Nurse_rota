@@ -317,11 +317,52 @@ function detectCyclePhase(recent, cycle) {
     return found;
 }
 /**
- * For each nurse in group, look at their last 4 shifts from prev and detect
+ * A single day's actual shift is enough to guarantee the rest-safety
+ * property (no M the day immediately after N, or N immediately after M)
+ * even when the full lookback window can't be pattern-matched — e.g. a
+ * manual edit, swap, or locum cover on one of the other lookback days broke
+ * the exact multi-day match in detectCyclePhase. Anchors on whatever the
+ * nurse's most recent REAL assigned shift actually is (reflecting any edits,
+ * since it's read straight from shift_assignments) and returns the cycle
+ * position for "the day right after that shift-family's block ends" — always
+ * a rest day, so always safe to resume on. OFF/LEAVE alone doesn't carry
+ * this guarantee (a single OFF day doesn't say which block it follows), so
+ * this only fires for an unambiguous M-family or N-family last shift.
+ */
+function safeNextPositionFromLastShift(lastShift, cycle) {
+    const len = cycle.length;
+    const isM = lastShift === "M" || lastShift === "MWC";
+    const isN = lastShift === "N" || lastShift === "NC";
+    if (!isM && !isN)
+        return null;
+    for (let i = 0; i < len; i++) {
+        const curIsFamily = isM ? cycle[i] === "M" : cycle[i] === "N";
+        if (!curIsFamily)
+            continue;
+        const nextIdx = (i + 1) % len;
+        const nextIsFamily = isM ? cycle[nextIdx] === "M" : cycle[nextIdx] === "N";
+        if (!nextIsFamily)
+            return nextIdx; // end of the block — safe rest day to resume on
+    }
+    return null; // this cycle has no block of that shift family at all (e.g. DAY_ONLY_CYCLE + N)
+}
+/**
+ * For each nurse in group, look at their last 4-5 shifts from prev and detect
  * their cycle position. Returns a map of nurse_id → next cycle index to use
- * as the starting position for the new period. Nurses whose last block is
- * ambiguous or contains non-base shifts (LEAVE/MWC/NC) are omitted — the
- * caller falls back to the mathematical phase for them.
+ * as the starting position for the new period.
+ *
+ * Three tiers, most precise first:
+ *   1. Exact 5-day match (disambiguates which OFF block a trailing OFF run belongs to).
+ *   2. Exact 4-day match.
+ *   3. Safe single-day anchor on the nurse's actual most recent assigned shift
+ *      (safeNextPositionFromLastShift) — less precise (may not land on the
+ *      exact right day within the OFF block) but still edit-proof: a manual
+ *      edit/swap/locum cover anywhere in days -5..-2 can never cause an unsafe
+ *      M-after-N or N-after-M, because it's anchored on day -1's real value,
+ *      not on whether the whole window fits the idealized cycle.
+ * Only a nurse with no history at all, or whose last real shift was itself
+ * OFF/LEAVE (not enough information in one day), falls through to the
+ * mathematical phase formula in the caller.
  */
 function buildPhaseOverrides(group, prev, cycle) {
     const out = new Map();
@@ -335,27 +376,35 @@ function buildPhaseOverrides(group, prev, cycle) {
     }
     for (const nurse of group) {
         const rows = byNurse.get(nurse.id);
-        if (!rows || rows.length < 4)
+        if (!rows || rows.length === 0)
             continue;
         const sorted = [...rows].sort((a, b) => a.shift_date.localeCompare(b.shift_date));
-        // Prefer 5-day look-back: the shift preceding 4 OFFs disambiguates which OFF
-        // block it is (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M).
-        // If day-5 contains a non-base shift, fall back to 4 days — only MMMM and
-        // NNNN are unambiguous there, but those are the common period-end cases.
-        let recent = null;
-        if (sorted.length >= 5) {
-            const five = sorted.slice(-5).map((r) => r.shift);
-            if (!five.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
-                recent = five;
+        let nextPos = null;
+        if (rows.length >= 4) {
+            // Prefer 5-day look-back: the shift preceding 4 OFFs disambiguates which OFF
+            // block it is (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M).
+            // If day-5 contains a non-base shift, fall back to 4 days — only MMMM and
+            // NNNN are unambiguous there, but those are the common period-end cases.
+            let recent = null;
+            if (sorted.length >= 5) {
+                const five = sorted.slice(-5).map((r) => r.shift);
+                if (!five.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
+                    recent = five;
+                }
             }
+            if (recent === null) {
+                const four = sorted.slice(-4).map((r) => r.shift);
+                if (!four.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) {
+                    recent = four;
+                }
+            }
+            if (recent !== null)
+                nextPos = detectCyclePhase(recent, cycle);
         }
-        if (recent === null) {
-            const four = sorted.slice(-4).map((r) => r.shift);
-            if (four.some((s) => s === "LEAVE" || s === "MWC" || s === "NC"))
-                continue;
-            recent = four;
+        if (nextPos === null) {
+            const lastShift = sorted[sorted.length - 1].shift;
+            nextPos = safeNextPositionFromLastShift(lastShift, cycle);
         }
-        const nextPos = detectCyclePhase(recent, cycle);
         if (nextPos !== null)
             out.set(nurse.id, nextPos);
     }

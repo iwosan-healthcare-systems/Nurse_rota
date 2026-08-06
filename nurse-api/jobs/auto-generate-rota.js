@@ -172,13 +172,27 @@ async function generateUnit({
   // Pattern-continuity lookback stays facility-wide (matches the manual
   // Generate button's behavior) even though genStart is now unit-specific —
   // only the reference date moved per-unit, not the scope of history used.
+  //
+  // ORDER BY ... ASC LIMIT 1 is deliberate, not a typo: this needs the
+  // EARLIEST shift_date on or before dayBefore — the facility's true
+  // scheduling epoch (day 0 of periodOffset) — matching what rota.tsx's
+  // manual Generate button gets from GET /shift-assignments?to=...&limit=1
+  // (that route's default sort is ascending, see routes/shift-assignments.js).
+  // This previously used DESC, which returns the LATEST date instead — in
+  // normal operation that's just "yesterday", collapsing periodOffset to a
+  // constant 1 on every run regardless of how many periods have actually
+  // elapsed. That silently broke the mathematical fallback phase formula in
+  // auto-schedule.ts (scheduleGroup/scheduleCoverageNurses), which is only
+  // reached when a nurse's recent shift history can't be pattern-matched —
+  // producing exactly the intermittent "N shift immediately followed by M"
+  // rest-safety violations this was fixed for.
   let periodOffset = 0;
   let previousAssignments = [];
   const dayBefore = addDays(genStart, -1);
   const { rows: epochRows } = await pool.query(
     `SELECT shift_date FROM shift_assignments
       WHERE nurse_id = ANY($1) AND shift_date <= $2
-      ORDER BY shift_date DESC LIMIT 1`,
+      ORDER BY shift_date ASC LIMIT 1`,
     [facilityIds, dayBefore],
   );
   if (epochRows[0]) {

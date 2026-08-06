@@ -104,6 +104,7 @@ type Assignment = {
   shift_date: string;
   shift: ShiftCode;
   status: string;
+  pre_leave_shift?: ShiftCode | null;
 };
 
 type GenForm = {
@@ -549,17 +550,26 @@ function RotaPage() {
     return s;
   }, [locumFilled]);
 
-  // Total scheduled hours per nurse for the current period.
+  // Scheduled hours per nurse for the current period, split into worked vs
+  // leave-credited so the UI can show both the actual hours the nurse is to
+  // work and the total including the hours leave replaced — not just a
+  // merged figure.
   const nurseScheduledHours = useMemo(() => {
-    const m = new Map<string, number>();
+    const shiftHours = (shift: ShiftCode | null | undefined) =>
+      shift === "M" || shift === "MWC"
+        ? SHIFT_TIMES.M.hours
+        : shift === "N" || shift === "NC"
+          ? SHIFT_TIMES.N.hours
+          : 0;
+    const m = new Map<string, { worked: number; leave: number }>();
     assignments.forEach((a) => {
-      const h =
-        a.shift === "M" || a.shift === "MWC"
-          ? SHIFT_TIMES.M.hours
-          : a.shift === "N" || a.shift === "NC"
-            ? SHIFT_TIMES.N.hours
-            : 0;
-      if (h) m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + h);
+      const entry = m.get(a.nurse_id) ?? { worked: 0, leave: 0 };
+      if (a.shift === "LEAVE") {
+        entry.leave += shiftHours(a.pre_leave_shift);
+      } else {
+        entry.worked += shiftHours(a.shift);
+      }
+      m.set(a.nurse_id, entry);
     });
     return m;
   }, [assignments]);
@@ -2820,15 +2830,33 @@ function RotaPage() {
                           })()}
                         </td>
                         <td className="px-2 py-2 text-center text-xs font-medium tabular-nums">
-                          <span
-                            className={cn(
-                              extraShiftIds.has(n.id)
-                                ? "text-orange-600 dark:text-orange-400"
-                                : "text-muted-foreground",
-                            )}
-                          >
-                            {nurseScheduledHours.get(n.id) ?? 0}h
-                          </span>
+                          {(() => {
+                            const { worked = 0, leave = 0 } = nurseScheduledHours.get(n.id) ?? {};
+                            const total = worked + leave;
+                            return (
+                              <>
+                                <span
+                                  className={cn(
+                                    extraShiftIds.has(n.id)
+                                      ? "text-orange-600 dark:text-orange-400"
+                                      : "text-muted-foreground",
+                                  )}
+                                  title={
+                                    leave > 0
+                                      ? `${worked}h to work + ${leave}h leave-credited = ${total}h total`
+                                      : `${total}h to work`
+                                  }
+                                >
+                                  {total}h
+                                </span>
+                                {leave > 0 && (
+                                  <div className="text-[10px] font-normal text-rose-600 dark:text-rose-400">
+                                    {worked}h + {leave}h leave
+                                  </div>
+                                )}
+                              </>
+                            );
+                          })()}
                         </td>
                         {days.map((dt) => {
                           const dateStr = ymd(dt);
