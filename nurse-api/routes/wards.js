@@ -59,6 +59,7 @@ router.patch(
       "min_morning_na",
       "min_night_nurses",
       "min_night_na",
+      "locum_eligible",
     ];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });

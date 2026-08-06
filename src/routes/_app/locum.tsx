@@ -20,6 +20,7 @@ import {
   CalendarDays,
   Stethoscope,
   ChevronRight,
+  Settings,
 } from "lucide-react";
 import { useAuth, NURSE_TIER_ROLES } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
@@ -32,9 +33,6 @@ import { FacilityChips } from "@/components/FacilityChips";
 export const Route = createFileRoute("/_app/locum")({
   component: LocumPage,
 });
-
-// Wards eligible for locum across all facilities
-const LOCUM_WARDS = ["ICU", "NICU", "SCBU", "HDU", "ICU & CathLab", "IP Ward"];
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -157,6 +155,7 @@ function LocumPage() {
     canSendLocumInvites,
     canViewLocumHours,
     canViewLocumRequests,
+    canManageWards,
   } = useAuth();
   const qc = useQueryClient();
 
@@ -262,8 +261,14 @@ function LocumPage() {
   const { data: wards = [] } = useQuery({
     queryKey: ["wards-simple"],
     staleTime: 5 * 60 * 1000,
-    queryFn: () => api.get<{ name: string; facility: string | null }[]>("/wards"),
+    queryFn: () =>
+      api.get<{ id: string; name: string; facility: string | null; locum_eligible: boolean }[]>(
+        "/wards",
+      ),
   });
+
+  const eligibleWards = wards.filter((w) => w.locum_eligible);
+  const [showManageWards, setShowManageWards] = useState(false);
 
   // ── Action handlers ───────────────────────────────────────────────────────────
 
@@ -608,7 +613,7 @@ function LocumPage() {
 
       <div className="flex items-center gap-2 flex-wrap text-xs text-muted-foreground">
         <span className="font-medium text-foreground">Eligible wards:</span>
-        {LOCUM_WARDS.map((w) => (
+        {[...new Set(eligibleWards.map((w) => w.name))].map((w) => (
           <span
             key={w}
             className="px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 font-medium"
@@ -616,6 +621,17 @@ function LocumPage() {
             {w}
           </span>
         ))}
+        {!eligibleWards.length && <span className="italic">None configured</span>}
+        {canManageWards && (
+          <button
+            type="button"
+            onClick={() => setShowManageWards(true)}
+            className="inline-flex items-center gap-1 ml-1 text-primary hover:underline font-medium"
+          >
+            <Settings className="h-3 w-3" />
+            Manage
+          </button>
+        )}
       </div>
 
       {/* Facility chip strip */}
@@ -689,12 +705,13 @@ function LocumPage() {
       {showCreate && (
         <CreateRequestModal
           lockedFacility={locumFacility}
-          wards={wards.filter(
-            (w) => LOCUM_WARDS.includes(w.name) && (!locumFacility || w.facility === locumFacility),
-          )}
+          wards={eligibleWards.filter((w) => !locumFacility || w.facility === locumFacility)}
           onClose={() => setShowCreate(false)}
           onSubmit={handleCreate}
         />
+      )}
+      {showManageWards && (
+        <ManageEligibleWardsModal wards={wards} onClose={() => setShowManageWards(false)} />
       )}
       {reviewReq && reviewAction && (
         <ReviewModal
@@ -1568,6 +1585,80 @@ function CreateRequestModal({
           </button>
         </div>
       </form>
+    </Modal>
+  );
+}
+
+// ── Manage eligible wards modal (admin/CNO) ───────────────────────────────────
+
+function ManageEligibleWardsModal({
+  wards,
+  onClose,
+}: {
+  wards: { id: string; name: string; facility: string | null; locum_eligible: boolean }[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  const facilities = [...new Set(wards.map((w) => w.facility ?? "Unassigned"))].sort();
+
+  async function toggle(w: { id: string; locum_eligible: boolean; name: string }) {
+    setSavingId(w.id);
+    try {
+      await api.patch(`/wards/${w.id}`, { locum_eligible: !w.locum_eligible });
+      await qc.invalidateQueries({ queryKey: ["wards-simple"] });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : `Failed to update ${w.name}.`);
+    } finally {
+      setSavingId(null);
+    }
+  }
+
+  return (
+    <Modal title="Manage Eligible Wards" onClose={onClose}>
+      <p className="text-sm text-muted-foreground mb-4">
+        Toggle which wards can be selected when a matron raises a new locum shift request. Changes
+        apply immediately.
+      </p>
+      <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+        {facilities.map((f) => (
+          <div key={f}>
+            <p className="text-xs font-semibold text-muted-foreground uppercase mb-1.5">{f}</p>
+            <div className="space-y-1">
+              {wards
+                .filter((w) => (w.facility ?? "Unassigned") === f)
+                .map((w) => (
+                  <label
+                    key={w.id}
+                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-md border hover:bg-muted/50 cursor-pointer"
+                  >
+                    <span className="text-sm">{w.name}</span>
+                    <input
+                      type="checkbox"
+                      checked={w.locum_eligible}
+                      disabled={savingId === w.id}
+                      onChange={() => toggle(w)}
+                      className="h-4 w-4 accent-primary disabled:opacity-50"
+                    />
+                  </label>
+                ))}
+            </div>
+          </div>
+        ))}
+        {!wards.length && (
+          <p className="text-sm text-muted-foreground italic">No wards found.</p>
+        )}
+      </div>
+      <div className="flex justify-end pt-4">
+        <button
+          type="button"
+          onClick={onClose}
+          className="h-10 px-4 rounded-md border text-sm font-medium hover:bg-muted"
+        >
+          Done
+        </button>
+      </div>
     </Modal>
   );
 }
