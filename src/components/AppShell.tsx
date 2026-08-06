@@ -380,6 +380,13 @@ function extractUuid(key: string): string | null {
 // FW_GROUP_LABELS defined separately in rota.tsx/approvals.tsx/index.tsx —
 // kept as its own small copy here, matching this codebase's existing
 // convention for small cross-file constants.
+// Cap how many individual rota-lifecycle lines the bell renders at once — one
+// notif_key gets written per facility x ward/role-group x event, so a single
+// T-19/T-17/T-14 run across the whole system can pile up dozens for an admin.
+// The panel itself also scrolls (see the dropdown's max-h-[75vh]) as a
+// backstop, but this keeps the common case short without needing to scroll.
+const ROTA_LIFECYCLE_VISIBLE_CAP = 6;
+
 const FW_UNIT_LABELS: Record<string, string> = {
   matron: "Matron",
   head: "Coverage Nurses",
@@ -938,7 +945,7 @@ function RotaReminderBell({
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-12 z-50 w-80 max-w-[calc(100vw-1rem)] rounded-xl border bg-card shadow-lg p-4 space-y-3">
+          <div className="absolute right-0 top-12 z-50 w-80 max-w-[calc(100vw-1rem)] max-h-[75vh] overflow-y-auto rounded-xl border bg-card shadow-lg p-4 space-y-3">
             <div className="flex items-center justify-between">
               <p className="text-sm font-semibold">Notifications</p>
               <button
@@ -1079,7 +1086,7 @@ function RotaReminderBell({
                         </button>
                       </div>
                       <div className="text-xs space-y-1.5">
-                        {rotaLifecycleKeys.map((key) => {
+                        {rotaLifecycleKeys.slice(0, ROTA_LIFECYCLE_VISIBLE_CAP).map((key) => {
                           if (key.startsWith("rota_edit_pending_")) {
                             const d = editAccessDetails.find((r) => r.id === extractUuid(key));
                             const unit =
@@ -1123,7 +1130,9 @@ function RotaReminderBell({
                         })}
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        Open Rota or Approvals for details.
+                        {rotaLifecycleKeys.length > ROTA_LIFECYCLE_VISIBLE_CAP
+                          ? `+${rotaLifecycleKeys.length - ROTA_LIFECYCLE_VISIBLE_CAP} more — open the Rota page for the current status.`
+                          : "Open the Rota page for the current status."}
                       </p>
                     </div>
                   ) : kind === "locum_filled" ? (

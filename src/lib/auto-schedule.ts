@@ -835,6 +835,42 @@ function scheduleCoverageNurses(
         continue;
       }
 
+      // Coverage Nurse - Day: matron-style fixed weekly pattern (Mon-Fri M,
+      // Sat/Sun OFF) — NOT the rotating 4-on-4-off NURSE_CYCLE regular
+      // (night-based) Coverage Nurses use. The only thing they share with the
+      // rotation is the MWC weekend-duty pool: mwcByDate is computed once above
+      // over the whole group (day nurses included — they're never excluded from
+      // it, since that exclusion is purely NC-conflict-based and they never have
+      // an NC block), so when it's their turn they get MWC that Sat/Sun — padded
+      // with the Friday before and Monday after also OFF (Fri OFF, Sat MWC, Sun
+      // MWC, Mon OFF), then normal M Tue-Fri resumes. Skips the regular
+      // machinery's forced-off/forced-M/resume-day logic entirely — that varies
+      // by night-cycle phase, which doesn't apply here; the day-nurse pattern
+      // around MWC is the same fixed 4-day shape every time.
+      if (isCoverageNurseDayType(group[i].role)) {
+        const dow = date.getDay(); // 0 = Sun .. 6 = Sat
+        let shift: ShiftCode;
+        if (mwcByDate.get(dateStr) === i) {
+          shift = "MWC";
+        } else if (dow === 5) {
+          // Friday: OFF if tomorrow (Saturday) starts this nurse's MWC block.
+          const sat = new Date(date);
+          sat.setDate(sat.getDate() + 1);
+          shift = mwcByDate.get(ymd(sat)) === i ? "OFF" : "M";
+        } else if (dow === 1) {
+          // Monday: OFF if yesterday (Sunday) was this nurse's MWC block.
+          const sun = new Date(date);
+          sun.setDate(sun.getDate() - 1);
+          shift = mwcByDate.get(ymd(sun)) === i ? "OFF" : "M";
+        } else if (dow === 0 || dow === 6) {
+          shift = "OFF"; // ordinary (non-MWC) weekend
+        } else {
+          shift = "M"; // ordinary Tue-Thu
+        }
+        out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
+        continue;
+      }
+
       // Find the most recently started NC block at or before day d.
       // A nurse may have multiple NC blocks if all candidates were exhausted for a slot.
       const nurseNcStarts = ncStartDays.get(i) ?? [];
@@ -900,15 +936,6 @@ function scheduleCoverageNurses(
             ? NURSE_CYCLE[(d - mwcResumeAt + mwcCycleOffset) % CL]
             : NURSE_CYCLE[(nurseEffectiveBase(i) + d) % CL];
       }
-
-      // Coverage Nurse - Day: fully shares the group's phase/MWC-rotation math
-      // above (so MWC duty and its surrounding forced-off days land exactly
-      // the same way as for full-cycle coverage nurses), but never works a
-      // night — whatever position the cycle would resolve to "N" resolves to
-      // "M" instead (their 2nd would-be N-block becomes a 2nd M-block, so
-      // total on/off ratio is unchanged, just no nights). They're already
-      // excluded from NC assignment above, so "NC" can't reach here for them.
-      if (shift === "N" && isCoverageNurseDayType(group[i].role)) shift = "M";
 
       out.push({ nurse_id: group[i].id, ward: null, shift_date: dateStr, shift });
     }
