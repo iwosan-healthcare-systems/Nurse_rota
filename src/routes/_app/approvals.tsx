@@ -352,8 +352,32 @@ function ApprovalsPage() {
   const [declineEditReason, setDeclineEditReason] = useState("");
   const [editReqPage, setEditReqPage] = useState(1);
   const [editReqPageSize, setEditReqPageSize] = useState(20);
+
+  // Edit-access tab filters — status, facility, and rota period.
+  const [editReqStatusFilter, setEditReqStatusFilter] = useState<
+    "all" | "Pending" | "Approved" | "Declined"
+  >("all");
+  const [editReqFacilityFilter, setEditReqFacilityFilter] = useState("");
+  const [editReqPeriodFilter, setEditReqPeriodFilter] = useState("");
+
+  const editReqPeriods = useMemo(
+    () => [...new Set(allEditRequests.map((r) => r.period_start))].sort((a, b) => b.localeCompare(a)),
+    [allEditRequests],
+  );
+
+  const filteredEditRequests = useMemo(
+    () =>
+      allEditRequests.filter(
+        (r) =>
+          (editReqStatusFilter === "all" || r.status === editReqStatusFilter) &&
+          (!editReqFacilityFilter || r.facility === editReqFacilityFilter) &&
+          (!editReqPeriodFilter || r.period_start === editReqPeriodFilter),
+      ),
+    [allEditRequests, editReqStatusFilter, editReqFacilityFilter, editReqPeriodFilter],
+  );
+
   const { pageItems: editReqPageItems, totalPages: editReqTotalPages } = usePagination(
-    allEditRequests,
+    filteredEditRequests,
     editReqPageSize,
     editReqPage,
   );
@@ -1221,15 +1245,68 @@ td.sm{text-align:left;color:#444;min-width:55px}
             />
           ) : (
             <>
-              <div className="px-4 py-3 border-b bg-muted/30">
-                <p className="text-sm font-semibold">
-                  Rota edit-access requests ({allEditRequests.length})
-                </p>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Full history of head-nurse requests to edit an auto-generated draft. Declining a
-                  Pending request auto-submits their draft as-is.
-                </p>
+              <div className="px-4 py-3 border-b bg-muted/30 space-y-3">
+                <div>
+                  <p className="text-sm font-semibold">
+                    Rota edit-access requests ({filteredEditRequests.length}
+                    {filteredEditRequests.length !== allEditRequests.length &&
+                      ` of ${allEditRequests.length}`}
+                    )
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Full history of head-nurse requests to edit an auto-generated draft. Declining a
+                    Pending request auto-submits their draft as-is.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <FacilityChips
+                    value={editReqFacilityFilter}
+                    onChange={(f) => {
+                      setEditReqFacilityFilter(f);
+                      setEditReqPage(1);
+                    }}
+                    showAll
+                    className="mr-2"
+                  />
+                  <select
+                    aria-label="Filter by status"
+                    value={editReqStatusFilter}
+                    onChange={(e) => {
+                      setEditReqStatusFilter(e.target.value as typeof editReqStatusFilter);
+                      setEditReqPage(1);
+                    }}
+                    className="h-9 px-3 rounded-md border bg-card text-sm"
+                  >
+                    <option value="all">All statuses</option>
+                    <option value="Pending">Pending</option>
+                    <option value="Approved">Approved</option>
+                    <option value="Declined">Declined</option>
+                  </select>
+                  <select
+                    aria-label="Filter by rota period"
+                    value={editReqPeriodFilter}
+                    onChange={(e) => {
+                      setEditReqPeriodFilter(e.target.value);
+                      setEditReqPage(1);
+                    }}
+                    className="h-9 px-3 rounded-md border bg-card text-sm"
+                  >
+                    <option value="">All periods</option>
+                    {editReqPeriods.map((p) => (
+                      <option key={p} value={p}>
+                        Period {fmtDate(p)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
+              {filteredEditRequests.length === 0 ? (
+                <EmptyState
+                  icon={<ClipboardList className="h-6 w-6" />}
+                  title="No requests match these filters"
+                  description="Try a different status, facility, or rota period."
+                />
+              ) : (
               <div className="divide-y">
                 {editReqPageItems.map((req) => (
                   <div
@@ -1289,17 +1366,20 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   </div>
                 ))}
               </div>
-              <Pagination
-                page={editReqPage}
-                totalPages={editReqTotalPages}
-                pageSize={editReqPageSize}
-                totalItems={allEditRequests.length}
-                onPage={setEditReqPage}
-                onPageSize={(s) => {
-                  setEditReqPageSize(s);
-                  setEditReqPage(1);
-                }}
-              />
+              )}
+              {filteredEditRequests.length > 0 && (
+                <Pagination
+                  page={editReqPage}
+                  totalPages={editReqTotalPages}
+                  pageSize={editReqPageSize}
+                  totalItems={filteredEditRequests.length}
+                  onPage={setEditReqPage}
+                  onPageSize={(s) => {
+                    setEditReqPageSize(s);
+                    setEditReqPage(1);
+                  }}
+                />
+              )}
             </>
           )}
         </div>
