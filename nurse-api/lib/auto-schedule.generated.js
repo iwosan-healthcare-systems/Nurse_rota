@@ -576,21 +576,22 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
     }
     // The main loop always forces 4 OFF days immediately AFTER an NC block
     // (inPostNcOff, below), so the trailing rest buffer is already guaranteed
-    // regardless of the candidate's personal cycle. Nothing equivalent protects
-    // the 4 days BEFORE a block starts — those still render from the nurse's
-    // own personal M/OFF/N/OFF cycle right up until inNcBlock takes over, so a
-    // candidate whose personal cycle has them on real M or N duty in that
-    // lead-in would go straight from that duty into NC with no rest at all.
-    function personalCycleBlocksNcLeadIn(i, blockStart) {
+    // regardless of the assigned nurse's personal cycle. Nothing equivalent
+    // protects the 4 days BEFORE a block starts — those still render from the
+    // nurse's own personal M/OFF/N/OFF cycle right up until inNcBlock takes
+    // over, so whoever the round-robin picks could otherwise go straight from
+    // real M/N duty into NC with no rest between them.
+    function personalCycleConflictDays(i, blockStart) {
+        const conflicts = [];
         for (let k = blockStart - 4; k < blockStart; k++) {
             if (k < 0)
                 continue; // falls before this period's day 0 — nothing here to check against
             const pos = (((nurseEffectiveBase(i) + k) % CL) + CL) % CL;
             const s = NURSE_CYCLE[pos];
             if (s === "M" || s === "N")
-                return true;
+                conflicts.push(k);
         }
-        return false;
+        return conflicts;
     }
     // ── Continuous NC round-robin ────────────────────────────────────────────
     // NC coverage must never have a gap: the moment one nurse's 4-day block
@@ -607,12 +608,26 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
     // than resetting to the same starting nurse every period. A nurse on leave
     // for any day within a block is skipped in favour of the next eligible
     // nurse in rotation, so leave doesn't leave the block empty.
+    //
+    // Selection is leave-only, unchanged — it must NOT also skip a candidate
+    // for a personal-cycle rest conflict: the fixed block grid rarely lines up
+    // with any given nurse's own staggered cycle phase, so filtering on that
+    // would eliminate most candidates most blocks and collapse the "fair"
+    // rotation onto whichever one nurse's phase happens to clear every block
+    // this period (this is exactly what happened before this fix — one nurse
+    // ended up with NC every single block all period while the other three
+    // barely got picked at all). Instead, whoever IS picked has their own
+    // conflicting lead-in days force-recorded into ncPersonalOff below, which
+    // the main loop overrides to OFF — the rotation stays fair; the rest
+    // requirement is satisfied by adjusting the chosen nurse's days, not by
+    // choosing a different nurse.
     const eligibleForNc = [];
     for (let i = 0; i < N; i++) {
         if (!isCoverageNurseDayType(group[i].role))
             eligibleForNc.push(i);
     }
     const ncStartDays = new Map(); // nurseIdx → all NC start days
+    const ncPersonalOff = new Map(); // nurseIdx → day-offsets forced OFF for NC rest
     if (eligibleForNc.length > 0) {
         const ncBlockCount = Math.floor(days / 4);
         let rotPtr = (periodsElapsed * ncBlockCount + seed) % eligibleForNc.length;
@@ -625,31 +640,12 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                 blockDates.push(ymd(d));
             }
             let chosen = -1;
-            // Pass 1: prefer a candidate who is both leave-free AND whose own
-            // personal M/N cycle isn't sitting in the 4-day rest this block needs
-            // right before it starts — taking NC would otherwise mean going
-            // straight from real M/N duty into NC with no rest between them.
             for (let attempt = 0; attempt < eligibleForNc.length; attempt++) {
                 const candidateIdx = eligibleForNc[(rotPtr + attempt) % eligibleForNc.length];
-                if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt)) &&
-                    !personalCycleBlocksNcLeadIn(candidateIdx, blockStart)) {
+                if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt))) {
                     chosen = candidateIdx;
                     rotPtr += attempt + 1;
                     break;
-                }
-            }
-            // Pass 2: if every eligible nurse has a rest-buffer conflict this
-            // block (a small pool where cycles happen to align badly), fall back
-            // to leave-only eligibility rather than leave the block uncovered —
-            // continuous 7-day coverage is the harder requirement to drop.
-            if (chosen === -1) {
-                for (let attempt = 0; attempt < eligibleForNc.length; attempt++) {
-                    const candidateIdx = eligibleForNc[(rotPtr + attempt) % eligibleForNc.length];
-                    if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt))) {
-                        chosen = candidateIdx;
-                        rotPtr += attempt + 1;
-                        break;
-                    }
                 }
             }
             if (chosen === -1)
@@ -657,6 +653,14 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
             if (!ncStartDays.has(chosen))
                 ncStartDays.set(chosen, []);
             ncStartDays.get(chosen).push(blockStart);
+            const conflicts = personalCycleConflictDays(chosen, blockStart);
+            if (conflicts.length > 0) {
+                if (!ncPersonalOff.has(chosen))
+                    ncPersonalOff.set(chosen, new Set());
+                const set = ncPersonalOff.get(chosen);
+                for (const k of conflicts)
+                    set.add(k);
+            }
         }
     }
     // ── MWC pre-pass ──────────────────────────────────────────────────────────
@@ -897,6 +901,15 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                 // before (cycle positions 4-7) and after (cycle positions 12-15) are
                 // already in place — no separate pre-NC OFF injection needed.
                 shift = "NC";
+            }
+            else if (ncPersonalOff.get(i)?.has(d)) {
+                // This nurse's own personal M/OFF/N/OFF cycle would otherwise have
+                // put them on real M or N duty here, immediately before an NC block
+                // the fair round-robin assigned them (see ncPersonalOff above) — the
+                // block itself is not moved (that would break the fixed, gapless
+                // coverage grid), so the rest requirement is met by overriding just
+                // these lead-in days to OFF instead.
+                shift = "OFF";
             }
             else if (mwcByDate.get(dateStr) === i) {
                 shift = "MWC";
