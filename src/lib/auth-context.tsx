@@ -87,6 +87,7 @@ interface AuthCtx {
   canGrantRotaEditAccess: boolean;
   canApproveLeave: boolean;
   canApproveMatronLeave: boolean;
+  canViewAllLeaveRequests: boolean;
   canRequestLeave: boolean;
   canRequestShiftSwitch: boolean;
   canApproveShiftSwitch: boolean;
@@ -351,6 +352,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "hr_admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),
     canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
+    // View-only visibility into ALL leave/shift-switch requests, separate from
+    // the power to approve them — lets support-tier roles (hr_admin,
+    // service_support) see everything without being able to action it.
+    canViewAllLeaveRequests: cap("view_all_leave_requests", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+      "service_support",
+    ]),
     canRequestLeave: cap("request_leave", [
       "admin",
       "chief_matron",

@@ -16,6 +16,7 @@ import {
   ClipboardList,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
+import { Modal } from "./staff";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -347,6 +348,8 @@ function ApprovalsPage() {
   });
   const pendingEditRequestCount = allEditRequests.filter((r) => r.status === "Pending").length;
   const [decidingEditRequest, setDecidingEditRequest] = useState<string | null>(null);
+  const [decliningEditReq, setDecliningEditReq] = useState<EditRequest | null>(null);
+  const [declineEditReason, setDeclineEditReason] = useState("");
   const [editReqPage, setEditReqPage] = useState(1);
   const [editReqPageSize, setEditReqPageSize] = useState(20);
   const { pageItems: editReqPageItems, totalPages: editReqTotalPages } = usePagination(
@@ -355,12 +358,16 @@ function ApprovalsPage() {
     editReqPage,
   );
 
-  async function decideEditRequest(req: EditRequest, status: "Approved" | "Declined") {
+  async function decideEditRequest(
+    req: EditRequest,
+    status: "Approved" | "Declined",
+    reviewNote?: string,
+  ) {
     setDecidingEditRequest(req.id);
     try {
       const result = await api.patch<{ autoSubmit?: { submitted: boolean; reason?: string } }>(
         `/rota-edit-requests/${req.id}`,
-        { status },
+        { status, review_note: reviewNote ?? null },
       );
       if (status === "Approved") {
         toast.success(`Edit access granted to ${req.requested_by_name ?? "the head nurse"}`);
@@ -1261,7 +1268,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
                         <button
                           type="button"
                           disabled={decidingEditRequest === req.id}
-                          onClick={() => decideEditRequest(req, "Declined")}
+                          onClick={() => {
+                            setDeclineEditReason("");
+                            setDecliningEditReq(req);
+                          }}
                           className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
                         >
                           Decline
@@ -1293,6 +1303,68 @@ td.sm{text-align:left;color:#444;min-width:55px}
             </>
           )}
         </div>
+      )}
+      {decliningEditReq && (
+        <Modal
+          title="Decline Edit-Access Request"
+          onClose={() => setDecliningEditReq(null)}
+        >
+          <form
+            className="space-y-4"
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (!declineEditReason.trim()) {
+                toast.error("Please provide a reason for declining.");
+                return;
+              }
+              await decideEditRequest(decliningEditReq, "Declined", declineEditReason.trim());
+              setDecliningEditReq(null);
+            }}
+          >
+            <div className="rounded-md bg-muted/40 p-3 text-sm">
+              <p className="font-medium">
+                {decliningEditReq.requested_by_name ?? "Head nurse"} · {decliningEditReq.facility} ·{" "}
+                {decliningEditReq.ward ??
+                  FW_LABELS[(decliningEditReq.role_group as FacilityWideGroup) ?? "head"]}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">{decliningEditReq.reason}</p>
+            </div>
+            <div>
+              <label htmlFor="decline-edit-reason" className="text-sm font-medium">
+                Reason for declining
+              </label>
+              <textarea
+                id="decline-edit-reason"
+                required
+                rows={3}
+                value={declineEditReason}
+                onChange={(e) => setDeclineEditReason(e.target.value)}
+                placeholder="e.g. the draft is already correct — no changes are needed before submitting"
+                className="w-full mt-1.5 px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring resize-none"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                The draft will be auto-submitted for review as-is once declined. This note is
+                sent to {decliningEditReq.requested_by_name ?? "the requester"} so they know why.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => setDecliningEditReq(null)}
+                className="h-9 px-4 rounded-md border bg-card text-sm hover:bg-muted"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={decidingEditRequest === decliningEditReq.id}
+                className="h-9 px-4 rounded-md bg-destructive text-destructive-foreground text-sm font-medium disabled:opacity-50"
+              >
+                Decline Request
+              </button>
+            </div>
+          </form>
+        </Modal>
       )}
     </div>
   );

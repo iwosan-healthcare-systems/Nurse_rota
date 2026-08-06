@@ -176,9 +176,10 @@ router.post(
       res.status(201).json(created);
     } catch (err) {
       if (err.code === "23505") {
-        return res
-          .status(409)
-          .json({ error: "You already have a live edit-access request for this ward/period." });
+        return res.status(409).json({
+          error:
+            "This ward already has a live edit-access request for this period — only one request is allowed at a time, whether it's yours or another head nurse's.",
+        });
       }
       throw err;
     }
@@ -192,6 +193,11 @@ router.patch(
     const { status, review_note } = req.body;
     if (!["Approved", "Declined"].includes(status)) {
       return res.status(400).json({ error: "status must be 'Approved' or 'Declined'" });
+    }
+    // Declining auto-submits the as-is draft — the requester needs to know
+    // why, so a reason is required here too, not just enforced client-side.
+    if (status === "Declined" && !review_note?.trim()) {
+      return res.status(400).json({ error: "A reason is required when declining." });
     }
 
     const { rows } = await pool.query(

@@ -174,6 +174,7 @@ function LeavePage() {
     nurseId,
     canApproveLeave,
     canApproveMatronLeave,
+    canViewAllLeaveRequests,
     canRequestLeave,
     canRequestShiftSwitch,
     canApproveShiftSwitch,
@@ -214,8 +215,10 @@ function LeavePage() {
     [nurses],
   );
 
-  // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope.
-  const canSeeAll = canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave;
+  // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope —
+  // as does a pure view-only role (e.g. hr_admin, service_support) via canViewAllLeaveRequests.
+  const canSeeAll =
+    canApproveLeave || canApproveShiftSwitch || canApproveMatronLeave || canViewAllLeaveRequests;
 
   // Per-row approval info: determines both whether the user can approve AND what label to show.
   // nurse_role comes directly from the API (LEFT JOIN nurses), so it's always current.
