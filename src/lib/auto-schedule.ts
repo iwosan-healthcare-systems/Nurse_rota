@@ -706,6 +706,23 @@ function scheduleCoverageNurses(
     return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
   }
 
+  // The main loop always forces 4 OFF days immediately AFTER an NC block
+  // (inPostNcOff, below), so the trailing rest buffer is already guaranteed
+  // regardless of the candidate's personal cycle. Nothing equivalent protects
+  // the 4 days BEFORE a block starts — those still render from the nurse's
+  // own personal M/OFF/N/OFF cycle right up until inNcBlock takes over, so a
+  // candidate whose personal cycle has them on real M or N duty in that
+  // lead-in would go straight from that duty into NC with no rest at all.
+  function personalCycleBlocksNcLeadIn(i: number, blockStart: number): boolean {
+    for (let k = blockStart - 4; k < blockStart; k++) {
+      if (k < 0) continue; // falls before this period's day 0 — nothing here to check against
+      const pos = (((nurseEffectiveBase(i) + k) % CL) + CL) % CL;
+      const s = NURSE_CYCLE[pos];
+      if (s === "M" || s === "N") return true;
+    }
+    return false;
+  }
+
   // ── Continuous NC round-robin ────────────────────────────────────────────
   // NC coverage must never have a gap: the moment one nurse's 4-day block
   // ends, the next nurse's block starts immediately — night coverage is a
@@ -738,12 +755,33 @@ function scheduleCoverageNurses(
         blockDates.push(ymd(d));
       }
       let chosen = -1;
+      // Pass 1: prefer a candidate who is both leave-free AND whose own
+      // personal M/N cycle isn't sitting in the 4-day rest this block needs
+      // right before it starts — taking NC would otherwise mean going
+      // straight from real M/N duty into NC with no rest between them.
       for (let attempt = 0; attempt < eligibleForNc.length; attempt++) {
         const candidateIdx = eligibleForNc[(rotPtr + attempt) % eligibleForNc.length];
-        if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt))) {
+        if (
+          !blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt)) &&
+          !personalCycleBlocksNcLeadIn(candidateIdx, blockStart)
+        ) {
           chosen = candidateIdx;
           rotPtr += attempt + 1;
           break;
+        }
+      }
+      // Pass 2: if every eligible nurse has a rest-buffer conflict this
+      // block (a small pool where cycles happen to align badly), fall back
+      // to leave-only eligibility rather than leave the block uncovered —
+      // continuous 7-day coverage is the harder requirement to drop.
+      if (chosen === -1) {
+        for (let attempt = 0; attempt < eligibleForNc.length; attempt++) {
+          const candidateIdx = eligibleForNc[(rotPtr + attempt) % eligibleForNc.length];
+          if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt))) {
+            chosen = candidateIdx;
+            rotPtr += attempt + 1;
+            break;
+          }
         }
       }
       if (chosen === -1) continue; // every eligible nurse is on leave this block
@@ -893,6 +931,33 @@ function scheduleCoverageNurses(
         mwcForcedM.get(mStr)!.add(mwcNurse);
       }
     }
+  }
+
+  // ── NC-vs-MWC rest-buffer guard ────────────────────────────────────────────
+  // personalCycleBlocksNcLeadIn (above) already keeps the round-robin from
+  // picking a candidate whose own M/OFF/N/OFF cycle occupies its block's
+  // lead-in — but that check runs before the MWC pre-pass exists yet, so it
+  // can't see MWC's forced-M/MWC-duty days, which are decided afterwards and
+  // can independently land on the same lead-in window. Catch that narrower
+  // case here: if MWC ended up forcing real duty onto an already-chosen NC
+  // block's lead-in days, drop that NC start entirely rather than let the
+  // block start with no rest before it — the nurse just continues on their
+  // default cycle for that stretch instead, which is always rest-safe.
+  for (const [nurseIdx, starts] of [...ncStartDays.entries()]) {
+    const validStarts = starts.filter((start) => {
+      for (let k = start - 4; k < start; k++) {
+        if (k < 0) continue; // lead-in falls before this period — nothing to conflict with
+        const kDate = new Date(startDate);
+        kDate.setDate(kDate.getDate() + k);
+        const kStr = ymd(kDate);
+        if (mwcForcedM.get(kStr)?.has(nurseIdx)) return false;
+        if (mwcByDate.get(kStr) === nurseIdx) return false;
+      }
+      return true;
+    });
+    if (validStarts.length === starts.length) continue;
+    if (validStarts.length > 0) ncStartDays.set(nurseIdx, validStarts);
+    else ncStartDays.delete(nurseIdx);
   }
 
   // ── Main scheduling loop ──────────────────────────────────────────────────
