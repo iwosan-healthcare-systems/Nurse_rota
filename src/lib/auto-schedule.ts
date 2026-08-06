@@ -706,24 +706,6 @@ function scheduleCoverageNurses(
     return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
   }
 
-  // The main loop always forces 4 OFF days immediately AFTER an NC block
-  // (inPostNcOff, below), so the trailing rest buffer is already guaranteed
-  // regardless of the assigned nurse's personal cycle. Nothing equivalent
-  // protects the 4 days BEFORE a block starts — those still render from the
-  // nurse's own personal M/OFF/N/OFF cycle right up until inNcBlock takes
-  // over, so whoever the round-robin picks could otherwise go straight from
-  // real M/N duty into NC with no rest between them.
-  function personalCycleConflictDays(i: number, blockStart: number): number[] {
-    const conflicts: number[] = [];
-    for (let k = blockStart - 4; k < blockStart; k++) {
-      if (k < 0) continue; // falls before this period's day 0 — nothing here to check against
-      const pos = (((nurseEffectiveBase(i) + k) % CL) + CL) % CL;
-      const s = NURSE_CYCLE[pos];
-      if (s === "M" || s === "N") conflicts.push(k);
-    }
-    return conflicts;
-  }
-
   // ── Continuous NC round-robin ────────────────────────────────────────────
   // NC coverage must never have a gap: the moment one nurse's 4-day block
   // ends, the next nurse's block starts immediately — night coverage is a
@@ -758,6 +740,48 @@ function scheduleCoverageNurses(
   }
   const ncStartDays = new Map<number, number[]>(); // nurseIdx → all NC start days
   const ncPersonalOff = new Map<number, Set<number>>(); // nurseIdx → day-offsets forced OFF for NC rest
+
+  // What would nurse i actually be rendered as on day d, given everything
+  // decided about them so far (their own base cycle, any earlier NC block
+  // this same period, and any lead-in days already forced OFF for a PRIOR
+  // block)? Blocks are assigned in chronological order below, so by the time
+  // this is called for block b, every earlier block's ncStartDays/
+  // ncPersonalOff entries for this nurse are already recorded — mirrors the
+  // main loop's own inNcBlock/inPostNcOff/afterNcOff logic exactly, since a
+  // nurse who gets a SECOND NC block this period has their lead-in days
+  // governed by the resumed-cycle-after-their-first-block math, not their
+  // original base phase; checking only the base phase (as an earlier version
+  // of this fix did) missed that case entirely.
+  function predictedShift(i: number, d: number): ShiftCode {
+    if (ncPersonalOff.get(i)?.has(d)) return "OFF";
+    const nurseNcStarts = ncStartDays.get(i) ?? [];
+    const pastNcStarts = nurseNcStarts.filter((s) => s <= d);
+    const relevantNcStart = pastNcStarts.length > 0 ? Math.max(...pastNcStarts) : undefined;
+    const inNc = relevantNcStart !== undefined && d < relevantNcStart + 4;
+    const inPostOff = relevantNcStart !== undefined && !inNc && d < relevantNcStart + 8;
+    if (inNc) return "NC";
+    if (inPostOff) return "OFF";
+    // afterNcOff case — d >= relevantNcStart + 8 is guaranteed here (inNc/inPostOff already ruled out), so the offset below is never negative.
+    if (relevantNcStart !== undefined) return NURSE_CYCLE[(d - (relevantNcStart + 8)) % CL];
+    const pos = (((nurseEffectiveBase(i) + d) % CL) + CL) % CL;
+    return NURSE_CYCLE[pos];
+  }
+
+  // The main loop always forces 4 OFF days immediately AFTER an NC block
+  // (inPostNcOff, below), so the trailing rest buffer is already guaranteed.
+  // Nothing equivalent protects the 4 days BEFORE a block starts, so whoever
+  // the round-robin picks could otherwise go straight from real M/N duty
+  // into NC with no rest between them.
+  function personalCycleConflictDays(i: number, blockStart: number): number[] {
+    const conflicts: number[] = [];
+    for (let k = blockStart - 4; k < blockStart; k++) {
+      if (k < 0) continue; // falls before this period's day 0 — nothing here to check against
+      const s = predictedShift(i, k);
+      if (s === "M" || s === "N") conflicts.push(k);
+    }
+    return conflicts;
+  }
+
   if (eligibleForNc.length > 0) {
     const ncBlockCount = Math.floor(days / 4);
     let rotPtr = (periodsElapsed * ncBlockCount + seed) % eligibleForNc.length;
