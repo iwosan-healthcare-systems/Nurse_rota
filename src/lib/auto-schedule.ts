@@ -353,11 +353,26 @@ function stableGroupOffset(group: NurseInput[]): number {
 
 type PriorAssignment = { nurse_id: string; shift_date: string; shift: ShiftCode };
 
+// NC is a coverage nurse's equivalent of a regular N shift — it always lands
+// at the nurse's natural N-block cycle position (see scheduleCoverageNurses's
+// "NC always lands at the nurse's natural N-block position" comment) — and
+// MWC is the equivalent of M. Treating them as their base-cycle counterpart
+// for phase-matching purposes (rather than excluding them entirely) lets a
+// coverage nurse's actual last NC block be recognized as "the N-family block
+// just ended, resume M next" instead of collapsing to an ambiguous run of
+// bare OFF days once NC/MWC themselves scroll out of the lookback window.
+// Only LEAVE genuinely carries no cycle information and stays excluded.
+function normalizeForCycleMatch(s: ShiftCode): ShiftCode {
+  if (s === "NC") return "N";
+  if (s === "MWC") return "M";
+  return s;
+}
+
 /**
  * Given a nurse's last N actual shifts (chronological), find the unambiguous
  * next position in the cycle. Returns null when the sequence doesn't match
- * exactly one position in the cycle (i.e. ambiguous or contains edits like
- * LEAVE / MWC / NC that don't belong to the base cycle).
+ * exactly one position in the cycle (i.e. ambiguous, or contains a LEAVE day
+ * that doesn't belong to the base cycle at all).
  */
 function detectCyclePhase(recent: ShiftCode[], cycle: readonly ShiftCode[]): number | null {
   const n = recent.length;
@@ -367,7 +382,7 @@ function detectCyclePhase(recent: ShiftCode[], cycle: readonly ShiftCode[]): num
   for (let start = 0; start < len; start++) {
     let ok = true;
     for (let i = 0; i < n; i++) {
-      if (recent[i] !== cycle[(start + i) % len]) {
+      if (normalizeForCycleMatch(recent[i]) !== cycle[(start + i) % len]) {
         ok = false;
         break;
       }
@@ -422,7 +437,7 @@ function safeNextPositionFromLastShift(
  *      first that matches): a 5-day window is the most precise — it
  *      disambiguates which OFF block a trailing OFF run belongs to
  *      (M→OOOO = 1st OFF → next N; N→OOOO = 2nd OFF → next M) — but if it
- *      doesn't match the pure cycle at all (LEAVE/MWC/NC in the window, or a
+ *      doesn't match the pure cycle at all (a LEAVE day in the window, or a
  *      history irregularity such as a block baked in shorter than 4 days by
  *      an earlier bug run), shorter, more recent trailing windows are tried
  *      instead of giving up outright — a clean 2-4 day tail can still land
@@ -461,16 +476,16 @@ function buildPhaseOverrides(
     // OFF block a trailing OFF run belongs to — M→OOOO = 1st OFF → next N;
     // N→OOOO = 2nd OFF → next M), then retry with progressively shorter
     // windows (down to 2 days) if the longer one fails to match at all.
-    // A longer window can fail not just from LEAVE/MWC/NC contamination but
-    // from a shift-history irregularity earlier in the window — e.g. a block
-    // baked in shorter than the standard 4 days by an earlier bug, or an
-    // isolated manual edit/swap — in which case a shorter, more recent
-    // trailing subsequence can still match cleanly and should be used rather
-    // than giving up and losing the block-position precision entirely.
+    // A longer window can fail not just from a LEAVE day but from a
+    // shift-history irregularity earlier in the window — e.g. a block baked
+    // in shorter than the standard 4 days by an earlier bug, or an isolated
+    // manual edit/swap — in which case a shorter, more recent trailing
+    // subsequence can still match cleanly and should be used rather than
+    // giving up and losing the block-position precision entirely.
     const maxWindow = Math.min(5, sorted.length);
     for (let windowLen = maxWindow; windowLen >= 2 && nextPos === null; windowLen--) {
       const tail = sorted.slice(-windowLen).map((r) => r.shift);
-      if (tail.some((s) => s === "LEAVE" || s === "MWC" || s === "NC")) continue;
+      if (tail.some((s) => s === "LEAVE")) continue;
       nextPos = detectCyclePhase(tail, cycle);
     }
 
@@ -631,10 +646,10 @@ export interface ScheduleResult {
  *
  * Per-period pattern for each nurse (priority order, highest first):
  *   1. LEAVE       — approved leave overrides everything
- *   2. NC block    — 4 consecutive NC shifts; PHASE-ALIGNED so NC always lands at the
- *                    nurse's natural N-block position → the 4 OFFs before and after NC
- *                    are already guaranteed by the cycle (M,M,M,M,OFF,OFF,OFF,OFF,
- *                    NC,NC,NC,NC,OFF,OFF,OFF,OFF → resume M)
+ *   2. NC block    — 4 consecutive NC shifts; laid down as a CONTINUOUS, gapless
+ *                    round-robin across the whole period (block 0-3, 4-7, 8-11, …),
+ *                    cycling through eligible nurses — every night is covered by
+ *                    exactly one nurse's NC block, never zero, never two at once.
  *   3. MWC         — Sat+Sun for the rotating MWC duty nurse
  *   4. Fri/Mon/Tue/Wed — 4 forced OFFs for the MWC nurse (OFF,MWC,MWC,OFF,OFF,OFF)
  *   5. Post-NC     — 4 forced OFF days immediately after the NC block
@@ -691,76 +706,50 @@ function scheduleCoverageNurses(
     return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
   }
 
-  // First day d ∈ [0, CL) in this period where nurse i's N block begins.
-  // Solves: (effectiveBase + d) % CL = 8 → d = (8 − effectiveBase + CL) % CL
-  function nBlockStartDay(i: number): number {
-    return (8 - nurseEffectiveBase(i) + CL) % CL;
-  }
-
-  // ── Phase-aligned NC assignment ──────────────────────────────────────────
-  // For each NC slot (a day where some nurse's N block starts), collect candidate nurses.
-  // Each nurse contributes their first N-block start day and, if it fits within the
-  // period, a second occurrence 16 days later.
-  const slotCandidates = new Map<number, number[]>();
-  for (let i = 0; i < N; i++) {
-    if (isCoverageNurseDayType(group[i].role)) continue; // day-only nurses never do night coverage
-    const first = nBlockStartDay(i);
-    for (const slot of [first, first + CL]) {
-      if (slot + 3 >= days) continue; // NC block must finish within the period
-      if (!slotCandidates.has(slot)) slotCandidates.set(slot, []);
-      slotCandidates.get(slot)!.push(i);
-    }
-  }
-
-  // Assign ONE nurse per NC slot, rotating each period.
-  // First pass: prefer nurses with no NC block yet this period (dedup).
-  // Fallback: if all candidates already have NC, allow a second assignment so
-  // every NC slot is covered — the nurse doing two NC blocks is the least-recently
-  // used candidate to spread the extra load fairly.
+  // ── Continuous NC round-robin ────────────────────────────────────────────
+  // NC coverage must never have a gap: the moment one nurse's 4-day block
+  // ends, the next nurse's block starts immediately — night coverage is a
+  // 7-days-a-week duty, not something tied to each nurse's own natural N-block
+  // position. Blocks are laid down back-to-back from day 0 of the period
+  // (0-3, 4-7, 8-11, …), so they're non-overlapping and gapless by
+  // construction, and stay continuous across period boundaries too since
+  // period P+1 starts the calendar day right after period P ends.
   //
-  // Slot keys are each candidate's OWN natural N-block start day, so two nurses
-  // only ever land on the exact same slot when their stagger positions
-  // genuinely coincide — the dedup above already handles that case. But two
-  // DIFFERENT slots close together (e.g. 6 and 8) still produce 4-day blocks
-  // that overlap on the calendar even though their slot keys differ. That gap
-  // let two coverage nurses end up on NC the same night once prev-detected
-  // phase overrides (buildPhaseOverrides, used for nurseEffectiveBase above)
-  // nudged a nurse's natural block a few days off true stagger-alignment.
-  // occupiedDays tracks which day-offsets are already covered by an earlier
-  // (chronologically first) NC block and skips assigning any slot that would
-  // overlap it — the affected nurse(s) simply keep their plain "N" for that
-  // block instead of the "NC" lead designation; the night is still staffed
-  // either way, so leaving the slot unassigned is strictly safer than doubling
-  // up two nurses on the same NC block.
+  // Cycles fairly through the pool of NC-eligible (non-Day-type) coverage
+  // nurses, continuing the rotation pointer from where the previous period's
+  // math would have left off (periodsElapsed * block count + seed) rather
+  // than resetting to the same starting nurse every period. A nurse on leave
+  // for any day within a block is skipped in favour of the next eligible
+  // nurse in rotation, so leave doesn't leave the block empty.
+  const eligibleForNc: number[] = [];
+  for (let i = 0; i < N; i++) {
+    if (!isCoverageNurseDayType(group[i].role)) eligibleForNc.push(i);
+  }
   const ncStartDays = new Map<number, number[]>(); // nurseIdx → all NC start days
-  const ncAssigned = new Set<number>();
-  const occupiedDays = new Set<number>();
-  const overlapsOccupied = (start: number) => {
-    for (let k = start; k < start + 4; k++) if (occupiedDays.has(k)) return true;
-    return false;
-  };
-  for (const slot of [...slotCandidates.keys()].sort((a, b) => a - b)) {
-    if (overlapsOccupied(slot)) continue;
-    const candidates = slotCandidates.get(slot)!;
-    let covered = false;
-    for (let attempt = 0; attempt < candidates.length; attempt++) {
-      const candidate = candidates[(periodsElapsed + seed + attempt) % candidates.length];
-      if (!ncAssigned.has(candidate)) {
-        if (!ncStartDays.has(candidate)) ncStartDays.set(candidate, []);
-        ncStartDays.get(candidate)!.push(slot);
-        ncAssigned.add(candidate);
-        covered = true;
-        break;
+  if (eligibleForNc.length > 0) {
+    const ncBlockCount = Math.floor(days / 4);
+    let rotPtr = (periodsElapsed * ncBlockCount + seed) % eligibleForNc.length;
+    for (let b = 0; b < ncBlockCount; b++) {
+      const blockStart = b * 4;
+      const blockDates: string[] = [];
+      for (let k = 0; k < 4; k++) {
+        const d = new Date(startDate);
+        d.setDate(d.getDate() + blockStart + k);
+        blockDates.push(ymd(d));
       }
+      let chosen = -1;
+      for (let attempt = 0; attempt < eligibleForNc.length; attempt++) {
+        const candidateIdx = eligibleForNc[(rotPtr + attempt) % eligibleForNc.length];
+        if (!blockDates.some((dt) => inLeave(leave, group[candidateIdx].id, dt))) {
+          chosen = candidateIdx;
+          rotPtr += attempt + 1;
+          break;
+        }
+      }
+      if (chosen === -1) continue; // every eligible nurse is on leave this block
+      if (!ncStartDays.has(chosen)) ncStartDays.set(chosen, []);
+      ncStartDays.get(chosen)!.push(blockStart);
     }
-    // All candidates already have NC — allow a second block so the slot isn't empty.
-    if (!covered && candidates.length > 0) {
-      const candidate = candidates[(periodsElapsed + seed) % candidates.length];
-      if (!ncStartDays.has(candidate)) ncStartDays.set(candidate, []);
-      ncStartDays.get(candidate)!.push(slot);
-      covered = true;
-    }
-    if (covered) for (let k = slot; k < slot + 4; k++) occupiedDays.add(k);
   }
 
   // ── MWC pre-pass ──────────────────────────────────────────────────────────
