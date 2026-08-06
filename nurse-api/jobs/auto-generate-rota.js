@@ -301,11 +301,12 @@ async function generateUnit({
   const rows = assignments.filter((a) => !publishedKeys.has(`${a.nurse_id}|${a.shift_date}`));
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status)
-       VALUES ($1, $2, $3, $4, 'draft')
+      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, pre_leave_shift)
+       VALUES ($1, $2, $3, $4, 'draft', $5)
        ON CONFLICT (nurse_id, shift_date)
-       DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = 'draft', updated_at = NOW()`,
-      [row.nurse_id, row.shift, row.shift_date, row.ward],
+       DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = 'draft',
+         pre_leave_shift = EXCLUDED.pre_leave_shift, updated_at = NOW()`,
+      [row.nurse_id, row.shift, row.shift_date, row.ward, row.pre_leave_shift || null],
     );
   }
 
