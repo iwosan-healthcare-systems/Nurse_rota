@@ -28,7 +28,19 @@ import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
 import { xlsWorkbook, xlsAddJsonSheet, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
 import { useAuth } from "@/lib/auth-context";
-import { isGlobalHead, isMatron, isPorterType, isInternType, isNADayType } from "@/lib/auto-schedule";
+import {
+  isGlobalHead,
+  isMatron,
+  isPorterType,
+  isInternType,
+  isNADayType,
+  enforceMinima,
+  summariseViolations,
+  type WardInput,
+  type NurseInput,
+  type DraftAssignment,
+  type SafetyViolation,
+} from "@/lib/auto-schedule";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
@@ -427,7 +439,10 @@ function ReportsContent() {
   });
   const { data: wards = [] } = useQuery({
     queryKey: ["wards"],
-    queryFn: () => api.get<{ id: string; name: string; facility: string | null }[]>("/wards"),
+    // Widened to WardInput's full shape (the API already returns every
+    // column via SELECT * — this was just narrowly typed before) so
+    // enforceMinima can be run against these for the archive exports below.
+    queryFn: () => api.get<WardInput[]>("/wards"),
   });
   const { data: leave = [] } = useQuery({
     queryKey: ["leave"],
@@ -1317,7 +1332,9 @@ ${staffToPrint
     const wardParam =
       win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
     let allAssignments = facilityNurseIds.length
-      ? await api.get<{ nurse_id: string; shift_date: string; shift: string; nurse_role: string | null }[]>(
+      ? await api.get<
+          { nurse_id: string; shift_date: string; shift: string; ward: string | null; nurse_role: string | null }[]
+        >(
           `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published${wardParam}`,
         )
       : [];
@@ -1334,17 +1351,53 @@ ${staffToPrint
     );
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = nurses.filter((n) => activeIds.has(n.id));
-    return { activeNurses, assignMap };
+
+    // Ward minimum-staffing violations — recomputed fresh from what was
+    // actually published (not anything persisted from generation time, since
+    // nothing stores that; this is deliberately "does this published
+    // schedule, as it actually stands, meet the ward's current minimums" —
+    // the answer someone exporting it later actually wants). Only meaningful
+    // for a real ward — facility-wide role groups (matron, coverage nurse,
+    // etc.) have no per-ward min_* to check against.
+    let violations: SafetyViolation[] = [];
+    if (win.ward !== null) {
+      const wardConfig = wards.find((w) => w.name === win.ward && w.facility === win.facility);
+      if (wardConfig) {
+        const draftLike: DraftAssignment[] = allAssignments.map((a) => ({
+          nurse_id: a.nurse_id,
+          ward: a.ward,
+          shift_date: a.shift_date.slice(0, 10),
+          shift: a.shift as DraftAssignment["shift"],
+        }));
+        const wardNurses: NurseInput[] = activeNurses;
+        const days = dateRange(win.startDate, win.endDate).length;
+        const startDate = new Date(win.startDate.slice(0, 10) + "T00:00:00");
+        violations = enforceMinima(draftLike, wardNurses, wardConfig, days, startDate).violations;
+      }
+    }
+
+    return { activeNurses, assignMap, violations };
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap } = await fetchScheduleData(win);
+      const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
+      const violationsHtml =
+        violations.length > 0
+          ? `<h2 style="font-size:9pt;color:#b91c1c;margin:10px 0 4px;">Safety Violations — ward minimums not fully met</h2>
+<table style="margin-bottom:8px;"><thead><tr><th>Shift</th><th>Role</th><th>Required</th><th>Actual</th><th>Shortfall</th></tr></thead>
+<tbody>${summariseViolations(violations)
+              .map(
+                (v) =>
+                  `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td>${v.actual}</td><td>${v.required - v.actual}</td></tr>`,
+              )
+              .join("")}</tbody></table>`
+          : "";
       const shiftBg: Record<string, string> = {
         M: "#fef3c7",
         N: "#e0e7ff",
@@ -1398,6 +1451,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 <span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
 <span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
 </div>
+${violationsHtml}
 <script>window.onload=()=>{window.print()}</script>
 </body></html>`;
       openPrintWindow(html);
@@ -1412,7 +1466,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap } = await fetchScheduleData(win);
+      const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
@@ -1434,6 +1488,26 @@ td.sm{text-align:left;color:#444;min-width:55px}
       ]);
       const wb = xlsWorkbook();
       xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [22, 18, 14, ...dates.map(() => 5)]);
+      if (violations.length > 0) {
+        const summary = summariseViolations(violations);
+        xlsAddAoaSheet(
+          wb,
+          [
+            [`Safety Violations — ${win.ward}${facilityLabel}`],
+            [],
+            ["Shift", "Role", "Required", "Actual", "Shortfall"],
+            ...summary.map((v) => [
+              v.shift === "M" ? "Morning" : "Night",
+              v.role === "na" ? "Nursing Assistant" : "Nurse",
+              v.required,
+              v.actual,
+              v.required - v.actual,
+            ]),
+          ],
+          "Safety Violations",
+          [12, 20, 10, 10, 10],
+        );
+      }
       const slug = win.ward ? `-${win.ward.replace(/\s+/g, "-").toLowerCase()}` : "-coverage";
       await xlsDownload(wb, `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`);
     } catch {
@@ -1450,9 +1524,9 @@ td.sm{text-align:left;color:#444;min-width:55px}
     try {
       const allData = await Promise.all(
         periodWins.map(async (win) => {
-          const { activeNurses, assignMap } = await fetchScheduleData(win);
+          const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
           const label = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
-          return { label, activeNurses, assignMap };
+          return { label, activeNurses, assignMap, violations };
         }),
       );
       const endDate = scheduleEndDate(periodStart);
@@ -1472,7 +1546,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
       const facility = periodWins[0]?.facility ?? "";
       const sections = allData
         .filter(({ activeNurses }) => activeNurses.length > 0)
-        .map(({ label, activeNurses, assignMap }) => {
+        .map(({ label, activeNurses, assignMap, violations }) => {
           const bodyRows = activeNurses
             .map((n) => {
               const cells = dates
@@ -1484,7 +1558,17 @@ td.sm{text-align:left;color:#444;min-width:55px}
               return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
             })
             .join("");
-          return `<h2>${label}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>`;
+          const violationRows =
+            violations.length > 0
+              ? `<table style="margin-bottom:10px;"><thead><tr><th style="color:#b91c1c;" colspan="5">Safety Violations — ${escHtml(label)}</th></tr><tr><th>Shift</th><th>Role</th><th>Required</th><th>Actual</th><th>Shortfall</th></tr></thead>
+<tbody>${summariseViolations(violations)
+                  .map(
+                    (v) =>
+                      `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td>${v.actual}</td><td>${v.required - v.actual}</td></tr>`,
+                  )
+                  .join("")}</tbody></table>`
+              : "";
+          return `<h2>${label}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>${violationRows}`;
         })
         .join("<br/>");
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">

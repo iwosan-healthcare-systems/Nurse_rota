@@ -33,11 +33,11 @@ import {
   isMatron,
   isPorterType,
   SHIFT_TIMES,
+  summariseViolations,
   type ShiftCode,
   type NurseInput,
   type WardInput,
   type LeaveInput,
-  type SafetyViolation,
   type ExtraShift,
 } from "@/lib/auto-schedule";
 import { toast } from "sonner";
@@ -130,30 +130,6 @@ type GenForm = {
 };
 
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
-
-// Collapse per-day violations into a per-ward/shift/role worst-case summary.
-function summariseViolations(violations: SafetyViolation[]) {
-  const map = new Map<
-    string,
-    { ward: string; shift: "M" | "N"; role: string; required: number; actual: number }
-  >();
-  for (const v of violations) {
-    const key = `${v.ward}|${v.shift}|${v.role}`;
-    const existing = map.get(key);
-    if (!existing || v.actual < existing.actual) {
-      map.set(key, {
-        ward: v.ward,
-        shift: v.shift,
-        role: v.role,
-        required: v.required,
-        actual: v.actual,
-      });
-    }
-  }
-  return [...map.values()].sort(
-    (a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift),
-  );
-}
 
 function RotaPage() {
   const {

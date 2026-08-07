@@ -382,7 +382,8 @@ function isFixedWeekdayWard(ward: WardInput): boolean {
 function isSingleNightSlotWard(ward: WardInput): boolean {
   return (
     (ward.facility ?? "").trim().toLowerCase() === "ikoyi" &&
-    ward.name.trim().toLowerCase() === "gopd"
+    ward.name.trim().toLowerCase() === "gopd" &&
+    ward.min_night_nurses === 1
   );
 }
 
@@ -636,11 +637,19 @@ function scheduleGroup(
  * whole group — instead of scheduleGroup's normal per-nurse staggered
  * cycle (which doesn't cap how many nurses can independently land on N the
  * same night). Everyone's own days OTHER than their rotation turn follow
- * the plain 4M-4OFF DAY_ONLY_CYCLE. Mirrors scheduleCoverageNurses' NC
- * round-robin mechanism (including its rest-safety guard: whoever the
- * rotation picks has their own conflicting lead-in days forced to OFF
- * rather than the rotation skipping them, which would break fairness the
- * same way it did there — see that function's own comment for the story).
+ * the plain 4M-4OFF DAY_ONLY_CYCLE.
+ *
+ * Rest safety is asymmetric here, unlike the general 4M-4OFF-4N-4OFF cycle
+ * elsewhere: an M shift (08:00-17:00) immediately followed by an N shift
+ * the very next calendar day (17:00-08:00) already has a full 24-hour gap
+ * between them — genuinely safe, not merely "policy," so the rotation is
+ * allowed to start a nurse's night block right after their last M day with
+ * no forced OFF buffer first (avoids the "unnecessary OFF duty" the general
+ * 4-day-lead-in guard used elsewhere would otherwise impose here). The
+ * reverse is not safe: N ending at 08:00 immediately followed by an M shift
+ * starting at 08:00 the same day is a zero-hour gap. That direction keeps
+ * the mandatory 4-day rest after every night block (inPostOff below) —
+ * never relaxed, never skipped.
  */
 function scheduleSingleNightSlotWard(
   group: NurseInput[],
@@ -682,39 +691,26 @@ function scheduleSingleNightSlotWard(
   }
 
   // What would nurse i actually render as on day d, given every night block
-  // decided so far this period (own base M/OFF cycle, unless a night block —
-  // or the forced rest before one — is already in effect)? Same recipe as
-  // scheduleCoverageNurses' predictedShift, adapted to the 2-state (N vs
-  // M/OFF) world here instead of N/NC/MWC.
+  // decided so far this period? A night block always safely resumes the
+  // very next day after a nurse's last M day (see the function comment
+  // above) — no lead-in guard needed, unlike scheduleCoverageNurses' NC
+  // rotation, which is more conservative on purpose for that separate pool.
   const nightStartDays = new Map<number, number[]>(); // nurseIdx → all night-block start days
-  const nightPersonalOff = new Map<number, Set<number>>(); // nurseIdx → day-offsets forced OFF for rest
 
   function predictedShift(i: number, d: number): ShiftCode {
-    if (nightPersonalOff.get(i)?.has(d)) return "OFF";
     const starts = nightStartDays.get(i) ?? [];
     const past = starts.filter((s) => s <= d);
     const relevantStart = past.length > 0 ? Math.max(...past) : undefined;
     const inNight = relevantStart !== undefined && d < relevantStart + 4;
     const inPostOff = relevantStart !== undefined && !inNight && d < relevantStart + 8;
     if (inNight) return "N";
-    if (inPostOff) return "OFF";
+    if (inPostOff) return "OFF"; // mandatory rest before ever resuming M — see function comment
     if (relevantStart !== undefined) return DAY_ONLY_CYCLE[(d - (relevantStart + 8)) % DL];
     return DAY_ONLY_CYCLE[(((nurseEffectiveBase(i) + d) % DL) + DL) % DL];
   }
 
-  function personalCycleConflictDays(i: number, blockStart: number): number[] {
-    const conflicts: number[] = [];
-    for (let k = blockStart - 4; k < blockStart; k++) {
-      if (k < 0) continue;
-      if (predictedShift(i, k) === "M") conflicts.push(k);
-    }
-    return conflicts;
-  }
-
-  // Continuous round-robin — see scheduleCoverageNurses for why selection
-  // must stay leave-only (never also skip on a rest conflict, which would
-  // collapse the "fair" rotation onto whichever nurse's phase happens to
-  // clear every block).
+  // Continuous round-robin — leave-only selection, same as
+  // scheduleCoverageNurses' NC rotation, so the pool rotates fairly.
   if (N > 0) {
     const blockCount = Math.floor(days / 4);
     let rotPtr = (periodsElapsed * blockCount + seed) % N;
@@ -739,13 +735,6 @@ function scheduleSingleNightSlotWard(
 
       if (!nightStartDays.has(chosen)) nightStartDays.set(chosen, []);
       nightStartDays.get(chosen)!.push(blockStart);
-
-      const conflicts = personalCycleConflictDays(chosen, blockStart);
-      if (conflicts.length > 0) {
-        if (!nightPersonalOff.has(chosen)) nightPersonalOff.set(chosen, new Set());
-        const set = nightPersonalOff.get(chosen)!;
-        for (const k of conflicts) set.add(k);
-      }
     }
   }
 
@@ -774,7 +763,7 @@ function scheduleSingleNightSlotWard(
  * Check ward minimum staffing for every day in the window and report violations.
  * Does not modify any assignments — report only.
  */
-function enforceMinima(
+export function enforceMinima(
   out: DraftAssignment[],
   wardNurses: NurseInput[],
   ward: WardInput,
@@ -817,6 +806,35 @@ function enforceMinima(
   }
 
   return { violations, extraPromos: new Map() };
+}
+
+// Collapse per-day violations into a per-ward/shift/role worst-case summary
+// — enforceMinima reports one violation per day a minimum isn't met, which
+// for a whole 28-day period is far too granular to show anyone directly.
+// Shared between the frontend (manual Generate's toast) and the backend
+// (auto-generate-rota.js's email + audit log) so both report the exact same
+// numbers from the exact same logic, not two independently-written summaries.
+export function summariseViolations(violations: SafetyViolation[]) {
+  const map = new Map<
+    string,
+    { ward: string; shift: "M" | "N"; role: string; required: number; actual: number }
+  >();
+  for (const v of violations) {
+    const key = `${v.ward}|${v.shift}|${v.role}`;
+    const existing = map.get(key);
+    if (!existing || v.actual < existing.actual) {
+      map.set(key, {
+        ward: v.ward,
+        shift: v.shift,
+        role: v.role,
+        required: v.required,
+        actual: v.actual,
+      });
+    }
+  }
+  return [...map.values()].sort(
+    (a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift),
+  );
 }
 
 export function nextInternWard(currentWard: string | null, wardNames: string[]): string | null {
