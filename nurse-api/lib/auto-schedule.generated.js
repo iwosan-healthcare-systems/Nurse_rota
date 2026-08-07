@@ -541,14 +541,22 @@ fixedWeekday = false) {
  * Rest safety is asymmetric here, unlike the general 4M-4OFF-4N-4OFF cycle
  * elsewhere: an M shift (08:00-17:00) immediately followed by an N shift
  * the very next calendar day (17:00-08:00) already has a full 24-hour gap
- * between them — genuinely safe, not merely "policy," so the rotation is
- * allowed to start a nurse's night block right after their last M day with
- * no forced OFF buffer first (avoids the "unnecessary OFF duty" the general
- * 4-day-lead-in guard used elsewhere would otherwise impose here). The
- * reverse is not safe: N ending at 08:00 immediately followed by an M shift
- * starting at 08:00 the same day is a zero-hour gap. That direction keeps
- * the mandatory 4-day rest after every night block (inPostOff below) —
- * never relaxed, never skipped.
+ * between them — genuinely safe, not merely "policy" — so a night block is
+ * allowed to start right after a nurse's last M day with no rest buffer
+ * imposed by default. But that gap being individually safe doesn't mean an
+ * unbroken run of M-then-N is comfortable at any length: a nurse who was
+ * already deep into their 4-day M block when their rotation turn lands
+ * would otherwise work a straight 7-8 consecutive days (trailing M days +
+ * the 4-day N block) with no rest at all in between. So the lead-in is
+ * conditional, not blanket: only when the combined stretch would reach 7+
+ * consecutive working days does it force 2 OFF days immediately before the
+ * block starts, breaking the run — a short nurse-was-only-1-2-days-into-M
+ * case needs no intervention at all.
+ *
+ * The reverse direction is never safe regardless of run length: N ending at
+ * 08:00 immediately followed by an M shift starting at 08:00 the same day
+ * is a zero-hour gap. That keeps the mandatory 4-day rest after every night
+ * block (inPostOff below) — never relaxed, never conditional.
  */
 function scheduleSingleNightSlotWard(group, days, startDate, leave, wardName, out, periodOffset, prev) {
     const sorted = [...group].sort((a, b) => a.id.localeCompare(b.id));
@@ -577,12 +585,13 @@ function scheduleSingleNightSlotWard(group, days, startDate, leave, wardName, ou
             (((periodOffset + (nurseBlock.get(sorted[i].id) ?? 0) * 4) % DL) + DL) % DL);
     }
     // What would nurse i actually render as on day d, given every night block
-    // decided so far this period? A night block always safely resumes the
-    // very next day after a nurse's last M day (see the function comment
-    // above) — no lead-in guard needed, unlike scheduleCoverageNurses' NC
-    // rotation, which is more conservative on purpose for that separate pool.
+    // (and any run-breaking rest forced before one) decided so far this
+    // period?
     const nightStartDays = new Map(); // nurseIdx → all night-block start days
+    const runBreakOff = new Map(); // nurseIdx → day-offsets forced OFF to break a long run
     function predictedShift(i, d) {
+        if (runBreakOff.get(i)?.has(d))
+            return "OFF";
         const starts = nightStartDays.get(i) ?? [];
         const past = starts.filter((s) => s <= d);
         const relevantStart = past.length > 0 ? Math.max(...past) : undefined;
@@ -595,6 +604,20 @@ function scheduleSingleNightSlotWard(group, days, startDate, leave, wardName, ou
         if (relevantStart !== undefined)
             return DAY_ONLY_CYCLE[(d - (relevantStart + 8)) % DL];
         return DAY_ONLY_CYCLE[(((nurseEffectiveBase(i) + d) % DL) + DL) % DL];
+    }
+    // How many consecutive M days immediately precede blockStart? Only asked
+    // right before assigning a block, so it only ever sees real personal-cycle
+    // M days (or a run already broken by an earlier iteration) — never an
+    // in-progress night block, which can't be adjacent to a not-yet-decided
+    // future one.
+    function trailingMDays(i, blockStart) {
+        let count = 0;
+        for (let k = blockStart - 1; k >= 0 && count < 4; k--) {
+            if (predictedShift(i, k) !== "M")
+                break;
+            count++;
+        }
+        return count;
     }
     // Continuous round-robin — leave-only selection, same as
     // scheduleCoverageNurses' NC rotation, so the pool rotates fairly.
@@ -620,6 +643,20 @@ function scheduleSingleNightSlotWard(group, days, startDate, leave, wardName, ou
             }
             if (chosen === -1)
                 continue; // everyone on leave this block
+            // Would this block's 4 N days plus whatever M days already lead
+            // straight into it add up to a 7+ day consecutive working run? Only
+            // then force 2 OFF days right before the block — otherwise leave the
+            // natural M→N transition alone (see function comment).
+            const trailingM = trailingMDays(chosen, blockStart);
+            if (trailingM + 4 >= 7) {
+                if (!runBreakOff.has(chosen))
+                    runBreakOff.set(chosen, new Set());
+                const set = runBreakOff.get(chosen);
+                for (let k = blockStart - 2; k < blockStart; k++) {
+                    if (k >= 0)
+                        set.add(k);
+                }
+            }
             if (!nightStartDays.has(chosen))
                 nightStartDays.set(chosen, []);
             nightStartDays.get(chosen).push(blockStart);
