@@ -230,6 +230,15 @@ function inLeave(leave, nurseId, dateStr) {
         l.from_date <= dateStr &&
         l.to_date >= dateStr);
 }
+// Companion to inLeave() — the specific leave type covering this nurse/date,
+// or null. Only ever called after inLeave() has already confirmed a match,
+// so the ?? null fallback is defensive, not expected to actually trigger.
+function leaveTypeFor(leave, nurseId, dateStr) {
+    return (leave.find((l) => l.nurse_id === nurseId &&
+        l.status === "Approved" &&
+        l.from_date <= dateStr &&
+        l.to_date >= dateStr)?.type ?? null);
+}
 function isNAType(role) {
     return /nurs(?:e|ing)\s*assistant/i.test(role);
 }
@@ -497,7 +506,9 @@ fixedWeekday = false) {
                 ward: wardName,
                 shift_date: dateStr,
                 shift: onLeave ? "LEAVE" : baseShift,
-                ...(onLeave ? { pre_leave_shift: baseShift } : {}),
+                ...(onLeave
+                    ? { pre_leave_shift: baseShift, leave_type: leaveTypeFor(leave, nurse.id, dateStr) }
+                    : {}),
             });
         }
     }
@@ -927,7 +938,9 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                     ward: null,
                     shift_date: dateStr,
                     shift: onLeave ? "LEAVE" : shift,
-                    ...(onLeave ? { pre_leave_shift: shift } : {}),
+                    ...(onLeave
+                        ? { pre_leave_shift: shift, leave_type: leaveTypeFor(leave, group[i].id, dateStr) }
+                        : {}),
                 });
                 continue;
             }
@@ -1015,7 +1028,9 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
                 ward: null,
                 shift_date: dateStr,
                 shift: onLeave ? "LEAVE" : shift,
-                ...(onLeave ? { pre_leave_shift: shift } : {}),
+                ...(onLeave
+                    ? { pre_leave_shift: shift, leave_type: leaveTypeFor(leave, group[i].id, dateStr) }
+                    : {}),
             });
         }
     }
@@ -1048,7 +1063,9 @@ function generateSchedule(opts) {
                 ward: null,
                 shift_date: dateStr,
                 shift: onLeave ? "LEAVE" : baseShift,
-                ...(onLeave ? { pre_leave_shift: baseShift } : {}),
+                ...(onLeave
+                    ? { pre_leave_shift: baseShift, leave_type: leaveTypeFor(leave, matron.id, dateStr) }
+                    : {}),
             });
         }
     }
@@ -1174,11 +1191,13 @@ function generateSchedule(opts) {
         for (const nurse of nurses) {
             if (scheduled.has(nurse.id))
                 continue;
+            const onLeave = inLeave(leave, nurse.id, dateStr);
             out.push({
                 nurse_id: nurse.id,
                 ward: nurse.ward,
                 shift_date: dateStr,
-                shift: inLeave(leave, nurse.id, dateStr) ? "LEAVE" : "OFF",
+                shift: onLeave ? "LEAVE" : "OFF",
+                ...(onLeave ? { leave_type: leaveTypeFor(leave, nurse.id, dateStr) } : {}),
             });
         }
     }

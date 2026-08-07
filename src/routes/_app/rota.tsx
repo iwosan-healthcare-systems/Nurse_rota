@@ -79,6 +79,21 @@ const shiftStyles: Record<ShiftCode, string> = {
   MWC: "bg-cyan-100 text-cyan-900 border-cyan-200",
 };
 
+// Short cell labels for each leave type — cells are tiny (10px font), so
+// full names like "Compassionate Leave" don't fit. Falls back to the
+// generic "LEAVE" for any type not listed here (or when leave_type is
+// missing, e.g. a cell flipped before this tracking existed).
+const LEAVE_TYPE_ABBR: Record<string, string> = {
+  Sick: "SICK",
+  Annual: "ANN",
+  Emergency: "EMRG",
+  Maternity: "MAT",
+  "Public Holiday": "PH",
+  "Study Leave": "STUDY",
+  "Compassionate Leave": "COMP",
+  "Leave of Absence": "LOA",
+};
+
 function parseWards(ward: string | null): string[] {
   if (!ward) return [];
   return ward.split("|").filter(Boolean);
@@ -105,6 +120,7 @@ type Assignment = {
   shift: ShiftCode;
   status: string;
   pre_leave_shift?: ShiftCode | null;
+  leave_type?: string | null;
 };
 
 type GenForm = {
@@ -2958,7 +2974,7 @@ function RotaPage() {
                                       ? "Published — this schedule is locked"
                                       : "Submitted for approval — return to draft to edit"
                                     : cell?.shift === "LEAVE"
-                                      ? "Approved leave — regenerate the rota to update"
+                                      ? `Approved ${cell.leave_type ?? ""} leave — regenerate the rota to update`
                                       : isLocum
                                         ? "Accepted locum shift — cannot be manually edited"
                                         : canEdit
@@ -2966,7 +2982,13 @@ function RotaPage() {
                                           : "View only"
                                 }
                               >
-                                {cell ? (isLocum ? "LO" : cell.shift) : "—"}
+                                {cell
+                                  ? isLocum
+                                    ? "LO"
+                                    : cell.shift === "LEAVE"
+                                      ? (cell.leave_type && LEAVE_TYPE_ABBR[cell.leave_type]) || "LEAVE"
+                                      : cell.shift
+                                  : "—"}
                               </button>
                             </td>
                           );

@@ -2,6 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { wouldExceedEntitlement } = require("../lib/leave-entitlements");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 function fmtDateRange(from, to) {
@@ -166,6 +167,23 @@ router.post(
       if (from_date > maxFromDate) {
         return res.status(400).json({
           error: `${type} leave can only be requested for within 3 days of today.`,
+        });
+      }
+    }
+
+    // Entitlement cap (Annual 21/yr, Study/Compassionate 5/yr, Maternity 12wk/yr,
+    // Sick 12/month) — hard block once exhausted, admin can still override.
+    // Pending + Approved both count as "used" so several simultaneous
+    // requests can't jointly exceed the cap before any is individually
+    // decided. Untracked types (Swap, Emergency, Public Holiday, Leave of
+    // Absence) always return null and are never blocked here.
+    const requesterRoles = req.user?.roles || [];
+    if (nurse_id && !requesterRoles.includes("admin")) {
+      const overage = await wouldExceedEntitlement(nurse_id, type, from_date, to_date);
+      if (overage) {
+        return res.status(422).json({
+          error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} day(s) allowed ${overage.period === "month" ? "this month" : "this year"} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
+          code: "LEAVE_ENTITLEMENT_EXCEEDED",
         });
       }
     }
@@ -457,12 +475,13 @@ router.patch(
         const { rows: flippedRows } = await client.query(
           `UPDATE shift_assignments
               SET pre_leave_shift = shift,
-                  shift = 'LEAVE'
+                  shift = 'LEAVE',
+                  leave_type = $4
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
               AND shift != 'LEAVE'
             RETURNING shift_date, pre_leave_shift`,
-          [leave.nurse_id, leave.from_date, leave.to_date],
+          [leave.nurse_id, leave.from_date, leave.to_date, leave.type],
         );
         const preShiftByDate = new Map(
           flippedRows.map((r) => [r.shift_date.toString().slice(0, 10), r.pre_leave_shift]),

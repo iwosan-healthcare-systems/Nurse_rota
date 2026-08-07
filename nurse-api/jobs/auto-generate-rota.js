@@ -208,7 +208,7 @@ async function generateUnit({
   }
 
   const { rows: leave } = await pool.query(
-    `SELECT nurse_id, from_date::text, to_date::text, status FROM leave_requests
+    `SELECT nurse_id, from_date::text, to_date::text, status, type FROM leave_requests
       WHERE nurse_id = ANY($1) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2`,
     [unitIds, genStart, genEnd],
   );
@@ -301,12 +301,12 @@ async function generateUnit({
   const rows = assignments.filter((a) => !publishedKeys.has(`${a.nurse_id}|${a.shift_date}`));
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, pre_leave_shift)
-       VALUES ($1, $2, $3, $4, 'draft', $5)
+      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, pre_leave_shift, leave_type)
+       VALUES ($1, $2, $3, $4, 'draft', $5, $6)
        ON CONFLICT (nurse_id, shift_date)
        DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = 'draft',
-         pre_leave_shift = EXCLUDED.pre_leave_shift, updated_at = NOW()`,
-      [row.nurse_id, row.shift, row.shift_date, row.ward, row.pre_leave_shift || null],
+         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
+      [row.nurse_id, row.shift, row.shift_date, row.ward, row.pre_leave_shift || null, row.leave_type || null],
     );
   }
 

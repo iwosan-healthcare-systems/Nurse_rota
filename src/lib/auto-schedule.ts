@@ -50,6 +50,7 @@ export interface LeaveInput {
   from_date: string;
   to_date: string;
   status: string;
+  type?: string;
 }
 
 export interface DraftAssignment {
@@ -61,6 +62,10 @@ export interface DraftAssignment {
   // put the nurse on, so leave-credited hours can be reconstructed later without
   // waiting for a runtime approval-time flip (see leave-requests.js).
   pre_leave_shift?: ShiftCode | null;
+  // Set only when `shift` is "LEAVE": which leave type (Sick, Annual, Study
+  // Leave, etc.) produced it, so the rota grid can show the specific type
+  // instead of a generic "LEAVE" pill without a runtime join.
+  leave_type?: string | null;
 }
 
 export interface SafetyViolation {
@@ -274,6 +279,21 @@ function inLeave(leave: LeaveInput[], nurseId: string, dateStr: string) {
       l.status === "Approved" &&
       l.from_date <= dateStr &&
       l.to_date >= dateStr,
+  );
+}
+
+// Companion to inLeave() — the specific leave type covering this nurse/date,
+// or null. Only ever called after inLeave() has already confirmed a match,
+// so the ?? null fallback is defensive, not expected to actually trigger.
+function leaveTypeFor(leave: LeaveInput[], nurseId: string, dateStr: string): string | null {
+  return (
+    leave.find(
+      (l) =>
+        l.nurse_id === nurseId &&
+        l.status === "Approved" &&
+        l.from_date <= dateStr &&
+        l.to_date >= dateStr,
+    )?.type ?? null
   );
 }
 
@@ -585,7 +605,9 @@ function scheduleGroup(
         ward: wardName,
         shift_date: dateStr,
         shift: onLeave ? "LEAVE" : baseShift,
-        ...(onLeave ? { pre_leave_shift: baseShift } : {}),
+        ...(onLeave
+          ? { pre_leave_shift: baseShift, leave_type: leaveTypeFor(leave, nurse.id, dateStr) }
+          : {}),
       });
     }
   }
@@ -1050,7 +1072,9 @@ function scheduleCoverageNurses(
           ward: null,
           shift_date: dateStr,
           shift: onLeave ? "LEAVE" : shift,
-          ...(onLeave ? { pre_leave_shift: shift } : {}),
+          ...(onLeave
+            ? { pre_leave_shift: shift, leave_type: leaveTypeFor(leave, group[i].id, dateStr) }
+            : {}),
         });
         continue;
       }
@@ -1134,7 +1158,9 @@ function scheduleCoverageNurses(
         ward: null,
         shift_date: dateStr,
         shift: onLeave ? "LEAVE" : shift,
-        ...(onLeave ? { pre_leave_shift: shift } : {}),
+        ...(onLeave
+          ? { pre_leave_shift: shift, leave_type: leaveTypeFor(leave, group[i].id, dateStr) }
+          : {}),
       });
     }
   }
@@ -1186,7 +1212,9 @@ export function generateSchedule(opts: {
         ward: null,
         shift_date: dateStr,
         shift: onLeave ? "LEAVE" : baseShift,
-        ...(onLeave ? { pre_leave_shift: baseShift } : {}),
+        ...(onLeave
+          ? { pre_leave_shift: baseShift, leave_type: leaveTypeFor(leave, matron.id, dateStr) }
+          : {}),
       });
     }
   }
@@ -1418,11 +1446,13 @@ export function generateSchedule(opts: {
     const dateStr = ymd(date);
     for (const nurse of nurses) {
       if (scheduled.has(nurse.id)) continue;
+      const onLeave = inLeave(leave, nurse.id, dateStr);
       out.push({
         nurse_id: nurse.id,
         ward: nurse.ward,
         shift_date: dateStr,
-        shift: inLeave(leave, nurse.id, dateStr) ? "LEAVE" : "OFF",
+        shift: onLeave ? "LEAVE" : "OFF",
+        ...(onLeave ? { leave_type: leaveTypeFor(leave, nurse.id, dateStr) } : {}),
       });
     }
   }

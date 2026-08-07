@@ -147,6 +147,17 @@ type WorkflowStatus = {
   nextRotaStage?: string;
 };
 
+type EntitlementInfo = {
+  cap: number;
+  used: number;
+  remaining: number;
+  exhausted: boolean;
+  period: "year" | "month";
+  windowStart: string;
+  windowEnd: string;
+};
+type EntitlementUsage = Record<string, EntitlementInfo>;
+
 function fmtDateLeave(d: string) {
   return new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
     day: "numeric",
@@ -1669,14 +1680,35 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     !!nextPeriodEnd &&
     from <= nextPeriodEnd;
 
+  // Remaining entitlement for the target nurse — Annual 21/yr, Study/
+  // Compassionate 5/yr, Maternity 12wk/yr, Sick 12/month. Admin can still
+  // submit past the limit (matches the backend's own admin bypass), so the
+  // dropdown isn't narrowed for them — everyone else has exhausted types
+  // removed from what they can even select.
+  const { data: entitlementUsage } = useQuery<EntitlementUsage>({
+    queryKey: ["leave-entitlements", targetNurseId],
+    enabled: !!targetNurseId,
+    staleTime: 60 * 1000,
+    queryFn: () => api.get<EntitlementUsage>(`/leave-entitlements/${targetNurseId}`),
+  });
+  const exhaustedTypes = new Set(
+    isAdmin
+      ? []
+      : Object.entries(entitlementUsage ?? {})
+          .filter(([, v]) => v.exhausted)
+          .map(([t]) => t),
+  );
+
   // In-approval rota: all leave blocked for those dates.
   // Published / closure window: only 3 exempt types allowed.
-  const allowedTypes =
+  // Exhausted-entitlement types are then dropped from whatever's left.
+  const allowedTypes = (
     datesInApprovalRota
       ? []
       : datesInPublishedRota || leaveWindowClosed
         ? ["Sick", "Emergency"]
-        : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"];
+        : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"]
+  ).filter((t) => !exhaustedTypes.has(t));
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
@@ -1920,6 +1952,20 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               Select a date range first — which types are allowed depends on it.
             </p>
           ) : null}
+          {exhaustedTypes.size > 0 && (
+            <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+              {[...exhaustedTypes].join(", ")} {exhaustedTypes.size === 1 ? "is" : "are"} hidden —
+              entitlement already used up for {[...exhaustedTypes].some((t) => entitlementUsage?.[t]?.period === "month") ? "this period" : "this year"}.
+            </p>
+          )}
+          {entitlementUsage?.[effectiveType] && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {effectiveType}: {entitlementUsage[effectiveType].used} of{" "}
+              {entitlementUsage[effectiveType].cap} day(s) used{" "}
+              {entitlementUsage[effectiveType].period === "month" ? "this month" : "this year"} ·{" "}
+              {entitlementUsage[effectiveType].remaining} remaining
+            </p>
+          )}
         </div>
 
         <div>

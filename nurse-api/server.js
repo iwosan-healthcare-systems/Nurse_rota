@@ -45,6 +45,7 @@ app.use('/api/user-roles',        requireAuth, require('./routes/user-roles'));
 app.use('/api/shift-assignments', requireAuth, require('./routes/shift-assignments'));
 app.use('/api/shift-logs',        requireAuth, require('./routes/shift-logs'));
 app.use('/api/leave-requests',    requireAuth, require('./routes/leave-requests'));
+app.use('/api/leave-entitlements', requireAuth, require('./routes/leave-entitlements'));
 app.use('/api/locum',             requireAuth, require('./routes/locum'));
 app.use('/api/audit-logs',        requireAuth, require('./routes/audit-logs'));
 app.use('/api/portal-settings',   requireAuth, require('./routes/portal-settings'));

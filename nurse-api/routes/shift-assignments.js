@@ -187,11 +187,11 @@ router.post(
       await client.query("BEGIN");
       for (const row of rows) {
         await client.query(
-          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift)
-         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7)
+          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift, leave_type)
+         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7, $8)
          ON CONFLICT (nurse_id, shift_date)
          DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
-           pre_leave_shift = EXCLUDED.pre_leave_shift, updated_at = NOW()`,
+           pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
           [
             row.nurse_id,
             row.shift,
@@ -200,6 +200,7 @@ router.post(
             row.status || "draft",
             row.created_by || null,
             row.pre_leave_shift || null,
+            row.leave_type || null,
           ],
         );
       }
@@ -213,7 +214,13 @@ router.post(
       const maxDate = dates[dates.length - 1];
       await client.query(
         `UPDATE shift_assignments sa
-            SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW()
+            SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
+                leave_type = (
+                  SELECT lr.type FROM leave_requests lr
+                  WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
+                    AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+                  LIMIT 1
+                )
           WHERE sa.nurse_id = ANY($1)
             AND sa.shift_date BETWEEN $2 AND $3
             AND sa.shift != 'LEAVE'
@@ -717,7 +724,13 @@ router.post(
 
     const { rowCount } = await pool.query(
       `UPDATE shift_assignments sa
-          SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW()
+          SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
+              leave_type = (
+                SELECT lr.type FROM leave_requests lr
+                WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
+                  AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+                LIMIT 1
+              )
         WHERE sa.nurse_id = ANY($1)
           AND sa.shift_date BETWEEN $2 AND $3
           AND sa.shift != 'LEAVE'
