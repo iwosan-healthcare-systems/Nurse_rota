@@ -68,7 +68,13 @@ function fmtDate(d: string) {
 }
 
 function LeaveEntitlementsPage() {
-  const { isAdmin, activeRole, nurseId, fullName } = useAuth();
+  const { isAdmin, activeRole, nurseId, fullName, canManageLeaveEntitlements } = useAuth();
+  // Viewing the admin-wide table is a plain role check, matching the
+  // backend's bulk-listing route (GET /leave-entitlements) — unchanged by
+  // the Permissions matrix, since that only governs who can ADJUST a
+  // balance (canManageLeaveEntitlements, passed down below), not who can see
+  // the table at all. If admin later revokes HR's adjust capability, HR
+  // should still see the table read-only rather than losing the page.
   const canManage = isAdmin || activeRole === "hr_admin";
 
   return (
@@ -82,7 +88,7 @@ function LeaveEntitlementsPage() {
         }
       />
       {canManage ? (
-        <ManageEntitlements />
+        <ManageEntitlements canAdjust={canManageLeaveEntitlements} />
       ) : (
         <OwnEntitlements nurseId={nurseId} fullName={fullName} />
       )}
@@ -152,7 +158,7 @@ function OwnEntitlements({ nurseId, fullName }: { nurseId: string | null; fullNa
 
 // ── Admin/HR management view ─────────────────────────────────────────────────
 
-function ManageEntitlements() {
+function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
   const qc = useQueryClient();
   const [facility, setFacility] = useState("");
   const [adjustingCell, setAdjustingCell] = useState<{
@@ -276,21 +282,23 @@ function ManageEntitlements() {
                             >
                               {e.used}/{e.cap}
                             </span>
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setAdjustingCell({
-                                  nurseId: r.nurse_id,
-                                  nurseName: r.name,
-                                  type: t,
-                                  period: e.period,
-                                })
-                              }
-                              title={`Adjust ${t} for ${r.name}`}
-                              className="text-muted-foreground hover:text-foreground"
-                            >
-                              <Pencil className="h-3 w-3" />
-                            </button>
+                            {canAdjust && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setAdjustingCell({
+                                    nurseId: r.nurse_id,
+                                    nurseName: r.name,
+                                    type: t,
+                                    period: e.period,
+                                  })
+                                }
+                                title={`Adjust ${t} for ${r.name}`}
+                                className="text-muted-foreground hover:text-foreground"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                            )}
                           </div>
                         </td>
                       );

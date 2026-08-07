@@ -33,6 +33,7 @@ export const NAV_DEFINITIONS: NavDef[] = [
   { key: "/staff", label: "Staff", defaultRoles: MANAGERS },
   { key: "/wards", label: "Wards", defaultRoles: MANAGERS },
   { key: "/leave", label: "Leave & Requests", defaultRoles: ALL },
+  { key: "/leave-entitlements", label: "Leave Entitlements", defaultRoles: ALL },
   { key: "/locum", label: "Bank Shift (Locum)", defaultRoles: ALL },
   { key: "/approvals", label: "Approvals", defaultRoles: APPROVERS },
   {

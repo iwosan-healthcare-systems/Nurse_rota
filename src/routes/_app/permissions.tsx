@@ -112,6 +112,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Grant / Decline Rota Edit Access Requests (HR)",
     roles: ["admin", "hr_admin"],
   },
+  {
+    key: "manage_leave_entitlements",
+    label: "Adjust Leave Entitlements (manual credit for pre-system leave)",
+    roles: ["admin", "hr_admin"],
+  },
   { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: SYSTEM_ROLES },
   {
     key: "print_staff_list",

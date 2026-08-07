@@ -85,6 +85,7 @@ interface AuthCtx {
   canRevertPublished: boolean;
   canRequestRotaEditAccess: boolean;
   canGrantRotaEditAccess: boolean;
+  canManageLeaveEntitlements: boolean;
   canApproveLeave: boolean;
   canApproveMatronLeave: boolean;
   canViewAllLeaveRequests: boolean;
@@ -350,6 +351,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canRevertPublished: cap("revert_published", ["admin"]),
     canRequestRotaEditAccess: cap("request_rota_edit_access", ["admin", "head_nurse"]),
     canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "hr_admin"]),
+    canManageLeaveEntitlements: cap("manage_leave_entitlements", ["admin", "hr_admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),
     canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
     // View-only visibility into ALL leave/shift-switch requests, separate from

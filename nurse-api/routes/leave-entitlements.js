@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
+const { requireCapability } = require("../middleware/capability");
 const {
   LEAVE_ENTITLEMENTS,
   getEntitlementUsage,
@@ -75,11 +76,11 @@ router.get(
 );
 
 // GET /api/leave-entitlements/:nurse_id/adjustments — full manual-adjustment
-// history for one nurse, newest first. Admin/HR only — same sensitivity as
-// the bulk overview above.
+// history for one nurse, newest first. Gated by the same capability as
+// creating one (below) — same sensitivity, same audience.
 router.get(
   "/:nurse_id/adjustments",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_leave_entitlements", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const history = await getAdjustmentHistory(req.params.nurse_id);
     res.json(history);
@@ -88,11 +89,14 @@ router.get(
 
 // POST /api/leave-entitlements/:nurse_id/adjustments — credit (or, with a
 // negative `days`, correct) leave taken before this system existed, or any
-// other case never submitted as a real request. Admin/HR only. Append-only —
-// there is deliberately no PATCH/DELETE here (see migration 033's header).
+// other case never submitted as a real request. Gated by a capability
+// (fallback admin/hr_admin, same as before this was made adjustable) rather
+// than a fixed role list, so admin can grant/revoke it via the Permissions
+// page. Append-only — there is deliberately no PATCH/DELETE here (see
+// migration 033's header).
 router.post(
   "/:nurse_id/adjustments",
-  requireRole("admin", "hr_admin"),
+  requireCapability("manage_leave_entitlements", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
     const { type, days, period_year, period_month, reason } = req.body;
     const entitlement = LEAVE_ENTITLEMENTS[type];
