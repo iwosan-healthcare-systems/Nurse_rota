@@ -83,6 +83,18 @@ const nav = [
   { to: "/roles", label: "System Roles", icon: Shield, roles: ["admin"] as AppRole[] },
 ] as const;
 
+// Is `path` the nav item at `to`, or a sub-route of it? A plain
+// path.startsWith(to) false-matches sibling routes that share a prefix —
+// e.g. "/leave-entitlements".startsWith("/leave") is true, which made the
+// "Leave & Requests" nav item (and its page title) light up while actually
+// viewing "/leave-entitlements". Requiring the next character to be "/" (a
+// real sub-path) or nothing (an exact match) closes that off for every nav
+// pair, not just this one.
+function pathMatchesNav(path: string, to: string): boolean {
+  if (to === "/") return path === "/";
+  return path === to || path.startsWith(to + "/");
+}
+
 // eslint-disable-next-line react-refresh/only-export-components
 export async function appBeforeLoad() {
   if (!getToken()) throw redirect({ to: "/login" });
@@ -206,7 +218,7 @@ export function AppShell() {
     return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
   });
 
-  const currentNavItem = nav.find((n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)));
+  const currentNavItem = nav.find((n) => pathMatchesNav(path, n.to));
   const isPathPermitted =
     loading ||
     !activeRole ||
@@ -1756,7 +1768,7 @@ function RoleSelectionScreen({
 }
 
 function currentTitle(path: string) {
-  const n = nav.find((n) => (n.to === "/" ? path === "/" : path.startsWith(n.to)));
+  const n = nav.find((n) => pathMatchesNav(path, n.to));
   return n?.label ?? "NurseRota";
 }
 
@@ -1800,7 +1812,7 @@ function SidebarContent({
       </div>
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {items.map(({ to, label, icon: Icon }) => {
-          const active = to === "/" ? path === "/" : path.startsWith(to);
+          const active = pathMatchesNav(path, to);
           return (
             <Link
               key={to}
