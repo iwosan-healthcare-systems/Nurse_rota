@@ -369,6 +369,23 @@ function isFixedWeekdayWard(ward: WardInput): boolean {
   return FIXED_WEEKDAY_WARDS.has(ward.name.trim().toLowerCase());
 }
 
+// Ikoyi GOPD's night requirement is exactly 1 nurse at a time — not "at
+// least 1" the way min_night_nurses normally behaves elsewhere (a floor
+// enforceMinima checks, never a ceiling). The standard scheduleGroup
+// approach staggers every nurse through their own independent N-block
+// position, which puts more than one nurse on N the same night as soon as a
+// ward has more nurses than fit cleanly across its 4 stagger slots — fine
+// for wards that actually need several nurses overnight, wrong for a ward
+// that needs exactly one. Hardcoded to this one ward/facility rather than a
+// general min_night_nurses===1 rule (confirmed with the user) — same
+// hardcoded-name precedent as FIXED_WEEKDAY_WARDS above.
+function isSingleNightSlotWard(ward: WardInput): boolean {
+  return (
+    (ward.facility ?? "").trim().toLowerCase() === "ikoyi" &&
+    ward.name.trim().toLowerCase() === "gopd"
+  );
+}
+
 function stableGroupOffset(group: NurseInput[]): number {
   if (group.length === 0) return 0;
   let h = 5381;
@@ -600,6 +617,146 @@ function scheduleGroup(
           : "OFF"
         : cycle[(startPos + d) % len];
       const onLeave = inLeave(leave, nurse.id, dateStr);
+      out.push({
+        nurse_id: nurse.id,
+        ward: wardName,
+        shift_date: dateStr,
+        shift: onLeave ? "LEAVE" : baseShift,
+        ...(onLeave
+          ? { pre_leave_shift: baseShift, leave_type: leaveTypeFor(leave, nurse.id, dateStr) }
+          : {}),
+      });
+    }
+  }
+}
+
+/**
+ * Schedule a ward's night duty as a single continuous rotating slot — one
+ * nurse on N at a time, 4-day blocks, gapless, fairly rotated through the
+ * whole group — instead of scheduleGroup's normal per-nurse staggered
+ * cycle (which doesn't cap how many nurses can independently land on N the
+ * same night). Everyone's own days OTHER than their rotation turn follow
+ * the plain 4M-4OFF DAY_ONLY_CYCLE. Mirrors scheduleCoverageNurses' NC
+ * round-robin mechanism (including its rest-safety guard: whoever the
+ * rotation picks has their own conflicting lead-in days forced to OFF
+ * rather than the rotation skipping them, which would break fairness the
+ * same way it did there — see that function's own comment for the story).
+ */
+function scheduleSingleNightSlotWard(
+  group: NurseInput[],
+  days: number,
+  startDate: Date,
+  leave: LeaveInput[],
+  wardName: string,
+  out: DraftAssignment[],
+  periodOffset: number,
+  prev: readonly PriorAssignment[],
+): void {
+  const sorted = [...group].sort((a, b) => a.id.localeCompare(b.id));
+  const N = sorted.length;
+  if (N === 0) return;
+
+  const DL = DAY_ONLY_CYCLE.length; // 8
+  const numBlocks = DL / 4; // 2
+  const periodsElapsed = Math.round(periodOffset / days);
+  const seed = stableGroupOffset(sorted);
+
+  const idRank = new Map(sorted.map((n, i) => [n.id, i]));
+  const forAssignment = [...sorted].sort((a, b) => {
+    const tDiff = (b.target_hours ?? 0) - (a.target_hours ?? 0);
+    if (tDiff !== 0) return tDiff;
+    return (idRank.get(a.id) ?? 0) - (idRank.get(b.id) ?? 0);
+  });
+  const nurseBlock = new Map<string, number>();
+  for (let i = 0; i < N; i++) {
+    const slot = Math.round((i * numBlocks) / N) % numBlocks;
+    nurseBlock.set(forAssignment[i].id, slot);
+  }
+
+  const phaseOverrides = buildPhaseOverrides(sorted, prev, DAY_ONLY_CYCLE);
+  function nurseEffectiveBase(i: number): number {
+    return (
+      phaseOverrides.get(sorted[i].id) ??
+      (((periodOffset + (nurseBlock.get(sorted[i].id) ?? 0) * 4) % DL) + DL) % DL
+    );
+  }
+
+  // What would nurse i actually render as on day d, given every night block
+  // decided so far this period (own base M/OFF cycle, unless a night block —
+  // or the forced rest before one — is already in effect)? Same recipe as
+  // scheduleCoverageNurses' predictedShift, adapted to the 2-state (N vs
+  // M/OFF) world here instead of N/NC/MWC.
+  const nightStartDays = new Map<number, number[]>(); // nurseIdx → all night-block start days
+  const nightPersonalOff = new Map<number, Set<number>>(); // nurseIdx → day-offsets forced OFF for rest
+
+  function predictedShift(i: number, d: number): ShiftCode {
+    if (nightPersonalOff.get(i)?.has(d)) return "OFF";
+    const starts = nightStartDays.get(i) ?? [];
+    const past = starts.filter((s) => s <= d);
+    const relevantStart = past.length > 0 ? Math.max(...past) : undefined;
+    const inNight = relevantStart !== undefined && d < relevantStart + 4;
+    const inPostOff = relevantStart !== undefined && !inNight && d < relevantStart + 8;
+    if (inNight) return "N";
+    if (inPostOff) return "OFF";
+    if (relevantStart !== undefined) return DAY_ONLY_CYCLE[(d - (relevantStart + 8)) % DL];
+    return DAY_ONLY_CYCLE[(((nurseEffectiveBase(i) + d) % DL) + DL) % DL];
+  }
+
+  function personalCycleConflictDays(i: number, blockStart: number): number[] {
+    const conflicts: number[] = [];
+    for (let k = blockStart - 4; k < blockStart; k++) {
+      if (k < 0) continue;
+      if (predictedShift(i, k) === "M") conflicts.push(k);
+    }
+    return conflicts;
+  }
+
+  // Continuous round-robin — see scheduleCoverageNurses for why selection
+  // must stay leave-only (never also skip on a rest conflict, which would
+  // collapse the "fair" rotation onto whichever nurse's phase happens to
+  // clear every block).
+  if (N > 0) {
+    const blockCount = Math.floor(days / 4);
+    let rotPtr = (periodsElapsed * blockCount + seed) % N;
+    for (let b = 0; b < blockCount; b++) {
+      const blockStart = b * 4;
+      const blockDates: string[] = [];
+      for (let k = 0; k < 4; k++) {
+        const d = new Date(startDate);
+        d.setDate(d.getDate() + blockStart + k);
+        blockDates.push(ymd(d));
+      }
+      let chosen = -1;
+      for (let attempt = 0; attempt < N; attempt++) {
+        const candidateIdx = (rotPtr + attempt) % N;
+        if (!blockDates.some((dt) => inLeave(leave, sorted[candidateIdx].id, dt))) {
+          chosen = candidateIdx;
+          rotPtr += attempt + 1;
+          break;
+        }
+      }
+      if (chosen === -1) continue; // everyone on leave this block
+
+      if (!nightStartDays.has(chosen)) nightStartDays.set(chosen, []);
+      nightStartDays.get(chosen)!.push(blockStart);
+
+      const conflicts = personalCycleConflictDays(chosen, blockStart);
+      if (conflicts.length > 0) {
+        if (!nightPersonalOff.has(chosen)) nightPersonalOff.set(chosen, new Set());
+        const set = nightPersonalOff.get(chosen)!;
+        for (const k of conflicts) set.add(k);
+      }
+    }
+  }
+
+  for (let d = 0; d < days; d++) {
+    const date = new Date(startDate);
+    date.setDate(date.getDate() + d);
+    const dateStr = ymd(date);
+    for (let i = 0; i < N; i++) {
+      const nurse = sorted[i];
+      const onLeave = inLeave(leave, nurse.id, dateStr);
+      const baseShift = predictedShift(i, d);
       out.push({
         nurse_id: nurse.id,
         ward: wardName,
@@ -1381,18 +1538,34 @@ export function generateSchedule(opts: {
       prev,
       true,
     );
-    scheduleGroup(
-      regulars,
-      wardCycle,
-      days,
-      opts.startDate,
-      leave,
-      ward.name,
-      out,
-      periodOffset + regularSeed,
-      prev,
-      fixedWeekday,
-    );
+    // Ikoyi GOPD: night duty is a single rotating slot (one nurse at a
+    // time), not the normal per-nurse staggered cycle — see
+    // isSingleNightSlotWard's comment for why.
+    if (isSingleNightSlotWard(ward)) {
+      scheduleSingleNightSlotWard(
+        regulars,
+        days,
+        opts.startDate,
+        leave,
+        ward.name,
+        out,
+        periodOffset + regularSeed,
+        prev,
+      );
+    } else {
+      scheduleGroup(
+        regulars,
+        wardCycle,
+        days,
+        opts.startDate,
+        leave,
+        ward.name,
+        out,
+        periodOffset + regularSeed,
+        prev,
+        fixedWeekday,
+      );
+    }
     scheduleGroup(
       naRegular,
       naCycle,
