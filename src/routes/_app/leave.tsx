@@ -1653,10 +1653,21 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         .toISOString()
         .slice(0, 10)
     : null;
+  // Only actually restrict once we KNOW the picked date falls in the closing
+  // window — before the user has chosen a from date (or before workflowStatus
+  // has loaded), there's nothing to evaluate yet, so this must default to
+  // "not closed," not "closed." The previous `!nextPeriodEnd || !from` fallback
+  // did the opposite: it treated "don't know yet" as "yes, blocked," which
+  // silently forced the type to Sick/Emergency and clamped the date picker's
+  // max to 3 days out the instant the modal opened — before the user had
+  // touched anything — making unrelated future dates look unselectable with
+  // no visible cause.
   const leaveWindowClosed =
     !!workflowStatus?.firstRotaPublished &&
     !!workflowStatus.leaveIsClosed &&
-    (!nextPeriodEnd || !from || from <= nextPeriodEnd);
+    !!from &&
+    !!nextPeriodEnd &&
+    from <= nextPeriodEnd;
 
   // In-approval rota: all leave blocked for those dates.
   // Published / closure window: only 3 exempt types allowed.

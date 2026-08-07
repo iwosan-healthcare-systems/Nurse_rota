@@ -882,6 +882,8 @@ function ManagementAlerts() {
     leaveIsClosed?: boolean;
     editIsClosed?: boolean;
     nextRotaStage?: string;
+    stageCounts?: { draft: number; submitted: number; hr_approved: number; published: number };
+    totalUnits?: number;
   }>({
     queryKey: ["workflow-status"],
     staleTime: 5 * 60 * 1000,
@@ -896,6 +898,27 @@ function ManagementAlerts() {
           year: "numeric",
         })
       : "";
+
+  // Every stage above "draft" can be a MIX of units at different stages —
+  // nextRotaStage only reports the single most-advanced one present, which
+  // was actively misleading on its own (e.g. showing "approved, ready to
+  // publish" when only one ward out of many had actually reached that
+  // stage). This renders the other counts as a trailing breakdown so the
+  // banner is honest about what's actually going on across all units.
+  const stageCounts = workflowStatus?.stageCounts;
+  const totalUnits = workflowStatus?.totalUnits;
+  function unitCountsBreakdown(highlight: "submitted" | "hr_approved" | "published"): string {
+    if (!stageCounts || !totalUnits) return "";
+    const parts: string[] = [];
+    if (stageCounts.draft > 0) parts.push(`${stageCounts.draft} still in draft`);
+    if (highlight !== "submitted" && stageCounts.submitted > 0)
+      parts.push(`${stageCounts.submitted} submitted, awaiting HR`);
+    if (highlight !== "hr_approved" && stageCounts.hr_approved > 0)
+      parts.push(`${stageCounts.hr_approved} approved, not yet published`);
+    if (highlight !== "published" && stageCounts.published > 0)
+      parts.push(`${stageCounts.published} already published`);
+    return parts.length ? ` · ${parts.join(" · ")}` : "";
+  }
 
   const wfReady = !!workflowStatus?.firstRotaPublished;
   const stage = workflowStatus?.nextRotaStage;
@@ -937,15 +960,21 @@ function ManagementAlerts() {
     wfTimelineTitle = `Draft rota generated for ${wfPeriodStr}`;
     wfTimelineDetail = `Open for edits (by request to HR) until ${fmtEditCloseDate} (T-17), when it's automatically submitted for HR review.`;
   } else if (stage === "submitted") {
-    wfTimelineTitle = `Rota for ${wfPeriodStr} submitted for HR review`;
-    wfTimelineDetail = `HR approval is due by ${fmtPublishDeadline} (T-14).`;
+    wfTimelineTitle = totalUnits
+      ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s) submitted for HR review — ${wfPeriodStr}`
+      : `Rota for ${wfPeriodStr} submitted for HR review`;
+    wfTimelineDetail = `HR approval is due by ${fmtPublishDeadline} (T-14).${unitCountsBreakdown("submitted")}`;
   } else if (stage === "hr_approved") {
-    wfTimelineTitle = `Rota for ${wfPeriodStr} approved by HR`;
-    wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.`;
+    wfTimelineTitle = totalUnits
+      ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s) approved by HR — ${wfPeriodStr}`
+      : `Rota for ${wfPeriodStr} approved by HR`;
+    wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.${unitCountsBreakdown("hr_approved")}`;
     wfTimelineDone = true;
   } else if (stage === "published") {
-    wfTimelineTitle = `Rota for ${wfPeriodStr} published`;
-    wfTimelineDetail = `This period is confirmed and takes effect ${wfPeriodStr}.`;
+    wfTimelineTitle = totalUnits
+      ? `${stageCounts?.published ?? 0} of ${totalUnits} unit(s) published — ${wfPeriodStr}`
+      : `Rota for ${wfPeriodStr} published`;
+    wfTimelineDetail = `This period is confirmed and takes effect ${wfPeriodStr}.${unitCountsBreakdown("published")}`;
     wfTimelineDone = true;
   }
   const showWfTimeline = wfReady && !!wfTimelineTitle;
@@ -1037,10 +1066,12 @@ function ManagementAlerts() {
           <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
-              Draft rota awaiting HR approval
+              {totalUnits ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s)` : "Draft rota"}{" "}
+              awaiting HR approval
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              The rota for {wfPeriodStr} has been submitted. Go to Approvals to review and approve.
+              Submitted for {wfPeriodStr}. Go to Approvals to review and approve.
+              {unitCountsBreakdown("submitted")}
             </p>
           </div>
         </div>
@@ -1050,11 +1081,13 @@ function ManagementAlerts() {
           <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
-              Rota approved — ready to publish
+              {totalUnits ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s)` : "Rota"}{" "}
+              approved — ready to publish
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              HR has approved the rota for {wfPeriodStr}. Go to Approvals to publish it (or it
-              auto-publishes at the T-14 deadline).
+              HR-approved for {wfPeriodStr}. Go to Approvals to publish (or it auto-publishes at
+              the T-14 deadline).
+              {unitCountsBreakdown("hr_approved")}
             </p>
           </div>
         </div>

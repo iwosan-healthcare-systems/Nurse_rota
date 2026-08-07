@@ -4,6 +4,20 @@ const { requireCapability } = require("../middleware/capability");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
+// Mirrors lib/force-submit-rota.js's roleGroupOf, plus the "naday" bucket
+// approvals.tsx's own frontend copy also classifies — kept as its own copy
+// here per this codebase's existing convention (each file carries its own).
+function roleGroupOf(role) {
+  if (!role) return null;
+  if (/^matron$/i.test(role)) return "matron";
+  if (/^(head|coverage)\s*nurse$/i.test(role) || /^coverage\s*nurse\s*-\s*day$/i.test(role))
+    return "head";
+  if (/^porter(\s*-\s*day)?$/i.test(role)) return "porter";
+  if (/nurse\s*intern|intern\s*nurse/i.test(role)) return "intern";
+  if (/nurs(?:e|ing)\s*assistant\s*-\s*day/i.test(role)) return "naday";
+  return null;
+}
+
 router.post(
   "/increment-nurse-hours",
   wrap(async (req, res) => {
@@ -220,23 +234,44 @@ router.get(
       publish_is_overdue: publishIsOverdue,
     } = dateRows[0];
 
-    // Determine the highest approval stage reached for the next period.
-    // Ordering ensures we return the most-advanced status present.
-    const { rows: stageRows } = await pool.query(`
-      SELECT status FROM shift_assignments
-      WHERE shift_date >= $1
-      ORDER BY
-        CASE status
-          WHEN 'published'   THEN 1
-          WHEN 'hr_approved' THEN 2
-          WHEN 'submitted'   THEN 3
-          WHEN 'draft'       THEN 4
-          ELSE 5
-        END
-      LIMIT 1
-    `, [nextPeriodStart]);
+    // Determine per-UNIT (ward, or facility-wide role group) approval stage
+    // for the next period, then roll that up into both a single "most
+    // advanced stage present" value (nextRotaStage — kept for backward
+    // compatibility, drives which banner section the dashboard shows) and a
+    // count of units at each stage (stageCounts/totalUnits — lets the
+    // banner say "3 of 8 units approved" instead of implying the WHOLE
+    // rota shares whichever single ward happens to be furthest along, which
+    // was actively misleading when different wards are at different stages).
+    const { rows: unitRows } = await pool.query(
+      `SELECT n.facility, sa.ward, n.role, sa.status
+         FROM shift_assignments sa
+         JOIN nurses n ON n.id = sa.nurse_id
+        WHERE sa.shift_date >= $1`,
+      [nextPeriodStart],
+    );
+    const STAGE_RANK = { published: 1, hr_approved: 2, submitted: 3, draft: 4 };
+    const unitStage = new Map(); // "facility|ward-or-roleGroup" -> most-advanced status for that unit
+    for (const row of unitRows) {
+      const group = row.ward ? null : roleGroupOf(row.role);
+      if (!row.ward && !group) continue; // unclassifiable role, skip defensively
+      const rank = STAGE_RANK[row.status];
+      if (!rank) continue; // ignore anything outside the 4 known stages
+      const key = `${row.facility}|${row.ward ?? group}`;
+      const current = unitStage.get(key);
+      if (!current || rank < STAGE_RANK[current]) unitStage.set(key, row.status);
+    }
 
-    const nextRotaStage = stageRows[0]?.status ?? 'none';
+    const stageCounts = { draft: 0, submitted: 0, hr_approved: 0, published: 0 };
+    for (const status of unitStage.values()) stageCounts[status]++;
+    const totalUnits = unitStage.size;
+
+    let nextRotaStage = 'none';
+    for (const s of ['published', 'hr_approved', 'submitted', 'draft']) {
+      if (stageCounts[s] > 0) {
+        nextRotaStage = s;
+        break;
+      }
+    }
 
     // T-19/T-17 milestone dates + due-flags come from the shared lib (single
     // source of truth for the auto-generate/auto-submit jobs) — added here so
@@ -256,6 +291,8 @@ router.get(
       editIsClosed: periodDates?.editIsClosed ?? false,
       publishIsOverdue,
       nextRotaStage,
+      stageCounts,
+      totalUnits,
     });
   }),
 );

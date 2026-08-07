@@ -105,6 +105,7 @@ export function DateRangeFilter({
           <input
             type="date"
             value={value.from}
+            max={value.to || undefined}
             onChange={(e) => onChange({ from: e.target.value, to: value.to })}
             className="h-9 rounded-md border border-input bg-card px-3 text-sm"
           />
@@ -112,6 +113,7 @@ export function DateRangeFilter({
           <input
             type="date"
             value={value.to}
+            min={value.from || undefined}
             onChange={(e) => onChange({ from: value.from, to: e.target.value })}
             className="h-9 rounded-md border border-input bg-card px-3 text-sm"
           />
