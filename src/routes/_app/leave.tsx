@@ -1681,6 +1681,13 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
 
+  // Type must be picked LAST — which types are even allowed depends on who the
+  // request is for and which dates are chosen, so those have to be locked in
+  // first (staff member, if this is being submitted on someone else's behalf,
+  // then the date range) or the user could pick a type that then silently
+  // changes out from under them once the real constraints are known.
+  const typeSelectionBlocked = (staffMode && !targetNurseId) || !datesReady || checkingDates;
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (staffMode && !targetNurseId) {
@@ -1895,16 +1902,24 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             id="leave-type"
             value={effectiveType}
             onChange={(e) => setType(e.target.value)}
-            disabled={checkingDates}
+            disabled={typeSelectionBlocked}
             className={inputCls}
           >
             {allowedTypes.map((t) => (
               <option key={t}>{t}</option>
             ))}
           </select>
-          {checkingDates && (
+          {checkingDates ? (
             <p className="text-xs text-muted-foreground mt-1">Checking schedule…</p>
-          )}
+          ) : staffMode && !targetNurseId ? (
+            <p className="text-xs text-muted-foreground mt-1">
+              Select a staff member and date range first — which types are allowed depends on both.
+            </p>
+          ) : !datesReady ? (
+            <p className="text-xs text-muted-foreground mt-1">
+              Select a date range first — which types are allowed depends on it.
+            </p>
+          ) : null}
         </div>
 
         <div>
