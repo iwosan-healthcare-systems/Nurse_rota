@@ -1720,6 +1720,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   // changes out from under them once the real constraints are known.
   const typeSelectionBlocked = (staffMode && !targetNurseId) || !datesReady || checkingDates;
 
+  // Sick/Emergency: `to` auto-defaults to from+2 (see the From/Type onChange
+  // handlers below), but the user can still pick something further out —
+  // this flags that case for an inline error instead of the picker silently
+  // refusing the date (submit() below re-checks this as the final guard).
+  const isSickEmergencyRangeExceeded =
+    (effectiveType === "Sick" || effectiveType === "Emergency") &&
+    !!from &&
+    !!to &&
+    to > addDaysLeaveYmd(from, 2);
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (staffMode && !targetNurseId) {
@@ -1873,16 +1883,14 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => {
                 const v = e.target.value;
                 setFrom(v);
-                if (!to || to < v) setTo(v);
-                // Re-clamp `to` to the new 3-day Sick/Emergency cap when the
-                // start date moves — otherwise a `to` picked under the OLD
-                // start date could now sit past the new from+2 limit.
-                if (
-                  (effectiveType === "Sick" || effectiveType === "Emergency") &&
-                  to &&
-                  to > addDaysLeaveYmd(v, 2)
-                ) {
+                // Sick/Emergency: default `to` straight to the 3-day span every
+                // time `from` moves — the user can still pick a different `to`
+                // afterwards (isSickEmergencyRangeExceeded below flags it with
+                // an inline error rather than the picker silently refusing it).
+                if (effectiveType === "Sick" || effectiveType === "Emergency") {
                   setTo(addDaysLeaveYmd(v, 2));
+                } else if (!to || to < v) {
+                  setTo(v);
                 }
               }}
               className={inputCls}
@@ -1897,20 +1905,20 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               required
               type="date"
               min={from || today}
-              max={
-                (effectiveType === "Sick" || effectiveType === "Emergency") && from
-                  ? addDaysLeaveYmd(from, 2)
-                  : undefined
-              }
               value={to}
               onChange={(e) => setTo(e.target.value)}
               className={inputCls}
             />
-            {(effectiveType === "Sick" || effectiveType === "Emergency") && (
-              <p className="text-xs text-muted-foreground mt-1">
-                {effectiveType} leave is capped at 3 days from the start date.
-              </p>
-            )}
+            {(effectiveType === "Sick" || effectiveType === "Emergency") &&
+              (isSickEmergencyRangeExceeded ? (
+                <p className="text-xs text-destructive mt-1">
+                  {effectiveType} leave can't be more than 3 days from the start date.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground mt-1">
+                  {effectiveType} leave is capped at 3 days from the start date.
+                </p>
+              ))}
           </div>
         </div>
 
@@ -1951,11 +1959,11 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => {
               const v = e.target.value;
               setType(v);
-              // Switching TO Sick/Emergency after a wider range was already
-              // picked (e.g. for Annual leave) — pull `to` back within the
-              // 3-day-from-start cap instead of leaving a stale out-of-range
-              // value that would only get caught later at submit time.
-              if ((v === "Sick" || v === "Emergency") && from && to > addDaysLeaveYmd(from, 2)) {
+              // Switching TO Sick/Emergency (e.g. from Annual) — default `to`
+              // straight to the 3-day span, same as picking `from` does. The
+              // user can still widen it afterwards; isSickEmergencyRangeExceeded
+              // catches that with an inline error instead of silently blocking.
+              if ((v === "Sick" || v === "Emergency") && from) {
                 setTo(addDaysLeaveYmd(from, 2));
               }
             }}
@@ -2014,7 +2022,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy || checkingDates || datesInApprovalRota}
+            disabled={busy || checkingDates || datesInApprovalRota || isSickEmergencyRangeExceeded}
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >

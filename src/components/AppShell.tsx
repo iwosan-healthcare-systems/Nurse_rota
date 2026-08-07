@@ -62,6 +62,7 @@ const nav = [
   { to: "/staff", label: "Staff", icon: Users, roles: MANAGERS },
   { to: "/wards", label: "Wards", icon: Building2, roles: MANAGERS },
   { to: "/leave", label: "Leave & Requests", icon: PlaneTakeoff, roles: ALL },
+  { to: "/leave-entitlements", label: "Leave Entitlements", icon: ClipboardCheck, roles: ALL },
   { to: "/approvals", label: "Approvals", icon: FileCheck2, roles: APPROVERS },
   { to: "/locum", label: "Bank Shift (Locum)", icon: Stethoscope, roles: ALL },
   {
