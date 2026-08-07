@@ -1735,8 +1735,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       return;
     }
     if (effectiveType === "Sick" || effectiveType === "Emergency") {
-      if (from > addDaysLeaveYmd(today, 3)) {
-        toast.error(`${effectiveType} leave can only be requested for within 3 days of today.`);
+      if (to > addDaysLeaveYmd(from, 2)) {
+        toast.error(`${effectiveType} leave can only be requested for up to 3 days from the start date.`);
         return;
       }
     }
@@ -1869,16 +1869,21 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               required
               type="date"
               min={today}
-              max={
-                effectiveType === "Sick" || effectiveType === "Emergency"
-                  ? addDaysLeaveYmd(today, 3)
-                  : undefined
-              }
               value={from}
               onChange={(e) => {
                 const v = e.target.value;
                 setFrom(v);
                 if (!to || to < v) setTo(v);
+                // Re-clamp `to` to the new 3-day Sick/Emergency cap when the
+                // start date moves — otherwise a `to` picked under the OLD
+                // start date could now sit past the new from+2 limit.
+                if (
+                  (effectiveType === "Sick" || effectiveType === "Emergency") &&
+                  to &&
+                  to > addDaysLeaveYmd(v, 2)
+                ) {
+                  setTo(addDaysLeaveYmd(v, 2));
+                }
               }}
               className={inputCls}
             />
@@ -1892,10 +1897,20 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               required
               type="date"
               min={from || today}
+              max={
+                (effectiveType === "Sick" || effectiveType === "Emergency") && from
+                  ? addDaysLeaveYmd(from, 2)
+                  : undefined
+              }
               value={to}
               onChange={(e) => setTo(e.target.value)}
               className={inputCls}
             />
+            {(effectiveType === "Sick" || effectiveType === "Emergency") && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {effectiveType} leave is capped at 3 days from the start date.
+              </p>
+            )}
           </div>
         </div>
 
@@ -1933,7 +1948,17 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
           <select
             id="leave-type"
             value={effectiveType}
-            onChange={(e) => setType(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setType(v);
+              // Switching TO Sick/Emergency after a wider range was already
+              // picked (e.g. for Annual leave) — pull `to` back within the
+              // 3-day-from-start cap instead of leaving a stale out-of-range
+              // value that would only get caught later at submit time.
+              if ((v === "Sick" || v === "Emergency") && from && to > addDaysLeaveYmd(from, 2)) {
+                setTo(addDaysLeaveYmd(from, 2));
+              }
+            }}
             disabled={typeSelectionBlocked}
             className={inputCls}
           >
