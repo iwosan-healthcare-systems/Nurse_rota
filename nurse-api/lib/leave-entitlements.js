@@ -5,7 +5,7 @@ const pool = require("../db");
 // calendar month. Types not listed here (Emergency, Public Holiday, Leave
 // of Absence, Swap) have no cap at all — untracked, always allowed.
 const LEAVE_ENTITLEMENTS = {
-  Annual: { days: 21, period: "year" },
+  Annual: { days: 15, period: "year" },
   "Study Leave": { days: 5, period: "year" },
   "Compassionate Leave": { days: 5, period: "year" },
   Maternity: { days: 84, period: "year" }, // 12 weeks

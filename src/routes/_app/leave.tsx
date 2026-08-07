@@ -1680,7 +1680,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     !!nextPeriodEnd &&
     from <= nextPeriodEnd;
 
-  // Remaining entitlement for the target nurse — Annual 21/yr, Study/
+  // Remaining entitlement for the target nurse — Annual 15/yr, Study/
   // Compassionate 5/yr, Maternity 12wk/yr, Sick 12/month. Admin can still
   // submit past the limit (matches the backend's own admin bypass), so the
   // dropdown isn't narrowed for them — everyone else has exhausted types

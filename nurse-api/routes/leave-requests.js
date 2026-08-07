@@ -170,7 +170,7 @@ router.post(
       }
     }
 
-    // Entitlement cap (Annual 21/yr, Study/Compassionate 5/yr, Maternity 12wk/yr,
+    // Entitlement cap (Annual 15/yr, Study/Compassionate 5/yr, Maternity 12wk/yr,
     // Sick 12/month) — hard block once exhausted, admin can still override.
     // Pending + Approved both count as "used" so several simultaneous
     // requests can't jointly exceed the cap before any is individually
