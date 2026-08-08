@@ -44,11 +44,15 @@ router.post(
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
-    const [{ rows: roleRows }, expiryDays] = await Promise.all([
+    const [{ rows: roleRows }, expiryDays, { rows: overrideRows }] = await Promise.all([
       pool.query("SELECT role FROM user_roles WHERE user_id = $1", [user.id]),
       getPasswordExpiryDays(),
+      pool.query("SELECT capability_key FROM user_capability_overrides WHERE user_id = $1", [
+        user.id,
+      ]),
     ]);
     const roles = roleRows.map((r) => r.role);
+    const capabilityOverrides = overrideRows.map((r) => r.capability_key);
     const isAdminUser = roles.includes("admin");
     const passwordExpiresInDays = isAdminUser
       ? null
@@ -107,6 +111,7 @@ router.post(
         password_expires_in_days: passwordExpiresInDays,
         nurse_id: nurse?.id ?? null,
         nurse_facility: nurse?.facility ?? null,
+        capability_overrides: capabilityOverrides,
       },
     });
   }),
@@ -122,11 +127,17 @@ router.get(
     );
     if (!rows[0]) return res.status(404).json({ error: "User not found" });
 
-    const [{ rows: roleRows }, { rows: profileIdRows }, expiryDays] = await Promise.all([
-      pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.user.userId]),
-      pool.query("SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1", [req.user.userId]),
-      getPasswordExpiryDays(),
-    ]);
+    const [{ rows: roleRows }, { rows: profileIdRows }, expiryDays, { rows: overrideRows }] =
+      await Promise.all([
+        pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.user.userId]),
+        pool.query("SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1", [
+          req.user.userId,
+        ]),
+        getPasswordExpiryDays(),
+        pool.query("SELECT capability_key FROM user_capability_overrides WHERE user_id = $1", [
+          req.user.userId,
+        ]),
+      ]);
 
     let nurseRows = profileIdRows;
     if (!nurseRows[0]) {
@@ -151,6 +162,7 @@ router.get(
       password_expires_in_days: passwordExpiresInDays,
       nurse_id: nurse?.id ?? null,
       nurse_facility: nurse?.facility ?? null,
+      capability_overrides: overrideRows.map((r) => r.capability_key),
     });
   }),
 );

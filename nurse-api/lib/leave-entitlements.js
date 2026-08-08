@@ -1,9 +1,52 @@
 const pool = require("../db");
+const {
+  isMatron,
+  isGlobalHead,
+  isSurgicalNurseType,
+  isSurgicalNurseDayType,
+  isNAType,
+  isPorterType,
+  isInternType,
+} = require("./auto-schedule.generated.js");
+
+// Role-level entitlement overrides apply to a GROUP of job-role strings, not
+// one literal role — so setting "Surgical Nurse" once covers both "Surgical
+// Nurse" and "Surgical Nurse - Day", the same way the scheduling engine
+// already treats Day/non-Day variants as one pool for other purposes.
+// Reuses auto-schedule.generated.js's own role classifiers directly (rather
+// than re-deriving equivalent regexes here) so the two stay in permanent
+// agreement about what counts as "the same role family". `key` is what's
+// stored in leave_entitlement_overrides.role; `label` is what the frontend
+// shows. Falls through to "nurse" (plain ward nurse) when nothing else matches.
+const ROLE_GROUPS = [
+  { key: "matron", label: "Matron", test: isMatron },
+  { key: "coverage_nurse", label: "Coverage Nurse (Head Nurse) (Day & Normal)", test: isGlobalHead },
+  {
+    key: "surgical_nurse",
+    label: "Surgical Nurse (Day & Normal)",
+    test: (r) => isSurgicalNurseType(r) || isSurgicalNurseDayType(r),
+  },
+  { key: "nursing_assistant", label: "Nursing Assistant (Day & Normal)", test: isNAType },
+  { key: "porter", label: "Porter (Day & Normal)", test: isPorterType },
+  { key: "nurse_intern", label: "Nurse Intern", test: isInternType },
+];
+
+function roleGroupKey(role) {
+  for (const g of ROLE_GROUPS) {
+    if (g.test(role)) return g.key;
+  }
+  return "nurse";
+}
 
 // Per-type leave entitlement caps. "year" resets every calendar year
 // (Jan 1 - Dec 31, same for every staff member); "month" resets every
 // calendar month. Types not listed here (Emergency, Public Holiday, Leave
 // of Absence, Swap) have no cap at all — untracked, always allowed.
+// These are the SYSTEM DEFAULTS — an individual or job-role override in
+// leave_entitlement_overrides (034) replaces the `days` figure for whoever
+// it applies to; the `period` (year vs month) is never overridable, since
+// that's a structural property of the leave type itself, not a per-person
+// allowance.
 const LEAVE_ENTITLEMENTS = {
   Annual: { days: 15, period: "year" },
   "Study Leave": { days: 5, period: "year" },
@@ -42,6 +85,63 @@ function daysBetweenInclusive(fromStr, toStr) {
   return Math.max(0, Math.round((new Date(toStr) - new Date(fromStr)) / 86400000) + 1);
 }
 
+// Effective cap for one nurse/type: individual override beats job-role
+// override beats the system default — see migration 034's header for why
+// this precedence and why it's admin-only to set. `role` is the nurse's
+// literal role string (e.g. "Surgical Nurse - Day"); resolved to its role
+// GROUP key before matching against a role-scoped override.
+async function effectiveCap(nurseId, role, type) {
+  const { rows } = await pool.query(
+    `SELECT days FROM leave_entitlement_overrides
+      WHERE type = $3 AND (
+        (scope = 'individual' AND nurse_id = $1) OR
+        (scope = 'role' AND role = $2)
+      )
+      ORDER BY scope = 'individual' DESC
+      LIMIT 1`,
+    [nurseId, roleGroupKey(role), type],
+  );
+  return rows[0] ? Number(rows[0].days) : LEAVE_ENTITLEMENTS[type].days;
+}
+
+// Same precedence as effectiveCap, but resolved for many nurses at once —
+// two queries total (role overrides + individual overrides) regardless of
+// how many nurses are passed in. `nurses` is [{ id, role }, ...].
+// Returns { [nurseId]: { [type]: capNumber } }.
+async function effectiveCapsForNurses(nurses) {
+  const out = {};
+  for (const n of nurses) {
+    out[n.id] = {};
+    for (const type of Object.keys(LEAVE_ENTITLEMENTS)) out[n.id][type] = LEAVE_ENTITLEMENTS[type].days;
+  }
+  if (nurses.length === 0) return out;
+
+  const groupKeys = [...new Set(nurses.map((n) => roleGroupKey(n.role)))];
+  const { rows: roleRows } = await pool.query(
+    `SELECT role, type, days FROM leave_entitlement_overrides WHERE scope = 'role' AND role = ANY($1)`,
+    [groupKeys],
+  );
+  const roleCap = new Map(roleRows.map((r) => [`${r.role}|${r.type}`, Number(r.days)]));
+  for (const n of nurses) {
+    const group = roleGroupKey(n.role);
+    for (const type of Object.keys(LEAVE_ENTITLEMENTS)) {
+      const key = `${group}|${type}`;
+      if (roleCap.has(key)) out[n.id][type] = roleCap.get(key);
+    }
+  }
+
+  const nurseIds = nurses.map((n) => n.id);
+  const { rows: indivRows } = await pool.query(
+    `SELECT nurse_id, type, days FROM leave_entitlement_overrides WHERE scope = 'individual' AND nurse_id = ANY($1)`,
+    [nurseIds],
+  );
+  for (const r of indivRows) {
+    if (out[r.nurse_id]) out[r.nurse_id][r.type] = Number(r.days);
+  }
+
+  return out;
+}
+
 // Days already reserved (Pending + Approved — Pending counts too, so several
 // simultaneous requests can't jointly blow past the cap before any of them
 // are individually decided; Rejected/Expired never count) for one nurse/type,
@@ -78,10 +178,15 @@ async function daysUsedFromAdjustments(nurseId, type, period, year, month) {
 //   exhausted, period, windowStart, windowEnd } } for every tracked type,
 // for one nurse, as of right now. `used` is always the combined total — a
 // day taken is a day taken regardless of source — but the two sources stay
-// visible separately so the UI can always show which is which.
+// visible separately so the UI can always show which is which. `cap`
+// already reflects any individual/role override in effect.
 async function getEntitlementUsage(nurseId) {
+  const { rows: nurseRows } = await pool.query(`SELECT role FROM nurses WHERE id = $1`, [nurseId]);
+  const role = nurseRows[0]?.role ?? "";
+
   const out = {};
-  for (const [type, { days: cap, period }] of Object.entries(LEAVE_ENTITLEMENTS)) {
+  for (const [type, { period }] of Object.entries(LEAVE_ENTITLEMENTS)) {
+    const cap = await effectiveCap(nurseId, role, type);
     const { start, end, year, month } = currentWindow(period);
     const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end);
     const usedFromAdjustments = await daysUsedFromAdjustments(nurseId, type, period, year, month);
@@ -106,10 +211,16 @@ async function getEntitlementUsage(nurseId) {
 // the remaining allowance. Otherwise returns the numbers needed to explain
 // why it doesn't fit. Manual adjustments count toward "already used" here
 // too — a day credited for pre-system leave is just as real as one from an
-// app-submitted request when deciding whether there's room left.
+// app-submitted request when deciding whether there's room left. The cap
+// used is the nurse's EFFECTIVE cap (individual/role override applied).
 async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
   const entitlement = LEAVE_ENTITLEMENTS[type];
   if (!entitlement) return null;
+
+  const { rows: nurseRows } = await pool.query(`SELECT role FROM nurses WHERE id = $1`, [nurseId]);
+  const role = nurseRows[0]?.role ?? "";
+  const cap = await effectiveCap(nurseId, role, type);
+
   const { start, end, year, month } = currentWindow(entitlement.period);
   const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end);
   const usedFromAdjustments = await daysUsedFromAdjustments(
@@ -126,8 +237,8 @@ async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
   const requestedDaysInWindow =
     overlapStart <= overlapEnd ? daysBetweenInclusive(overlapStart, overlapEnd) : 0;
 
-  if (used + requestedDaysInWindow > entitlement.cap) {
-    return { cap: entitlement.cap, used, requestedDaysInWindow, period: entitlement.period };
+  if (used + requestedDaysInWindow > cap) {
+    return { cap, used, requestedDaysInWindow, period: entitlement.period };
   }
   return null;
 }
@@ -137,13 +248,16 @@ async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
 // requests, one for adjustments — both GROUP BY nurse_id) regardless of how
 // many nurses are passed in, instead of looping getEntitlementUsage per
 // nurse (which would be several queries PER nurse — far too slow for an
-// admin-wide listing across hundreds of staff).
+// admin-wide listing across hundreds of staff). `nurses` is [{id, role}].
 // Returns { [nurse_id]: { [type]: {cap, used, usedFromRequests, usedFromAdjustments, ...} } }.
-async function getEntitlementUsageForNurses(nurseIds) {
+async function getEntitlementUsageForNurses(nurses) {
+  const nurseIds = nurses.map((n) => n.id);
   const usageByNurse = new Map(nurseIds.map((id) => [id, {}]));
   if (nurseIds.length === 0) return {};
 
-  for (const [type, { days: cap, period }] of Object.entries(LEAVE_ENTITLEMENTS)) {
+  const caps = await effectiveCapsForNurses(nurses);
+
+  for (const [type, { period }] of Object.entries(LEAVE_ENTITLEMENTS)) {
     const { start, end, year, month } = currentWindow(period);
 
     const { rows: reqRows } = await pool.query(
@@ -170,6 +284,7 @@ async function getEntitlementUsageForNurses(nurseIds) {
     const reqByNurse = new Map(reqRows.map((r) => [r.nurse_id, Number(r.days)]));
     const adjByNurse = new Map(adjRows.map((r) => [r.nurse_id, Number(r.days)]));
     for (const id of nurseIds) {
+      const cap = caps[id]?.[type] ?? LEAVE_ENTITLEMENTS[type].days;
       const usedFromRequests = reqByNurse.get(id) ?? 0;
       const usedFromAdjustments = adjByNurse.get(id) ?? 0;
       const used = usedFromRequests + usedFromAdjustments;
@@ -222,11 +337,70 @@ async function getAdjustmentHistory(nurseId) {
   return rows;
 }
 
+// All overrides currently in effect (both scopes) — the admin config
+// listing that shows what's been customized away from system defaults.
+async function getOverrides() {
+  const { rows } = await pool.query(
+    `SELECT o.*, n.name AS nurse_name
+       FROM leave_entitlement_overrides o
+       LEFT JOIN nurses n ON n.id = o.nurse_id
+      ORDER BY o.scope, COALESCE(n.name, o.role), o.type`,
+  );
+  return rows;
+}
+
+// Set (or update) an override — a config table, not a log, so this is a
+// real UPSERT keyed on the matching partial unique index (034).
+async function upsertOverride({ scope, nurseId, role, type, days, createdBy, createdByName }) {
+  const { rows } = await pool.query(
+    scope === "individual"
+      ? `INSERT INTO leave_entitlement_overrides (scope, nurse_id, type, days, created_by, created_by_name)
+         VALUES ('individual', $1, $2, $3, $4, $5)
+         ON CONFLICT (nurse_id, type) WHERE scope = 'individual'
+         DO UPDATE SET days = EXCLUDED.days, created_by = EXCLUDED.created_by,
+                        created_by_name = EXCLUDED.created_by_name, updated_at = NOW()
+         RETURNING *`
+      : `INSERT INTO leave_entitlement_overrides (scope, role, type, days, created_by, created_by_name)
+         VALUES ('role', $1, $2, $3, $4, $5)
+         ON CONFLICT (role, type) WHERE scope = 'role'
+         DO UPDATE SET days = EXCLUDED.days, created_by = EXCLUDED.created_by,
+                        created_by_name = EXCLUDED.created_by_name, updated_at = NOW()
+         RETURNING *`,
+    scope === "individual"
+      ? [nurseId, type, days, createdBy ?? null, createdByName ?? null]
+      : [role, type, days, createdBy ?? null, createdByName ?? null],
+  );
+  return rows[0];
+}
+
+// Removes an override — reverts that nurse/role+type back to the system
+// default (LEAVE_ENTITLEMENTS).
+async function deleteOverride(id) {
+  const { rows } = await pool.query(
+    `DELETE FROM leave_entitlement_overrides WHERE id = $1 RETURNING *`,
+    [id],
+  );
+  return rows[0];
+}
+
+// { key, label } pairs only — the frontend's role-override dropdown source
+// of truth, without leaking the classifier functions themselves. "nurse"
+// (plain ward nurse) is listed first since it's the fallthrough default in
+// roleGroupKey rather than an explicit ROLE_GROUPS entry.
+const ROLE_GROUP_OPTIONS = [
+  { key: "nurse", label: "Nurse" },
+  ...ROLE_GROUPS.map(({ key, label }) => ({ key, label })),
+];
+
 module.exports = {
   LEAVE_ENTITLEMENTS,
+  ROLE_GROUP_OPTIONS,
   getEntitlementUsage,
   getEntitlementUsageForNurses,
   wouldExceedEntitlement,
   createAdjustment,
   getAdjustmentHistory,
+  getOverrides,
+  upsertOverride,
+  deleteOverride,
 };

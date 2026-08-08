@@ -43,7 +43,25 @@ async function checkCapability(req, key, fallbackRoles) {
   const caps = await loadCapabilities();
   const entry = caps.find((c) => c.key === key);
   const allowedRoles = entry ? entry.roles : fallbackRoles;
-  return userRoles.some((r) => allowedRoles.includes(r));
+  if (userRoles.some((r) => allowedRoles.includes(r))) return true;
+  return hasUserOverride(req.user?.userId, key);
+}
+
+// Per-user ADDITIVE override, checked only when the role-based check above
+// already failed — see migrations/035_user_capability_overrides.sql. A
+// single indexed lookup, deliberately NOT cached like loadCapabilities()
+// above: this only runs on the minority path (role check failed), so its
+// cost lands exactly where correctness matters, and caching it would
+// reintroduce the exact staleness problem this feature exists to avoid —
+// an admin unblocking one specific person should take effect immediately,
+// not after a 30s cache window.
+async function hasUserOverride(userId, key) {
+  if (!userId) return false;
+  const { rows } = await pool.query(
+    "SELECT 1 FROM user_capability_overrides WHERE user_id = $1 AND capability_key = $2 LIMIT 1",
+    [userId, key],
+  );
+  return rows.length > 0;
 }
 
 function requireCapability(key, fallbackRoles) {

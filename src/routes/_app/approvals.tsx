@@ -336,7 +336,7 @@ function ApprovalsPage() {
     period_end: string;
     requested_by_name: string | null;
     reason: string;
-    status: "Pending" | "Approved" | "Declined";
+    status: "Pending" | "Approved" | "Declined" | "Expired";
     created_at: string;
     reviewed_at: string | null;
     review_note: string | null;
@@ -355,7 +355,7 @@ function ApprovalsPage() {
 
   // Edit-access tab filters — status, facility, and rota period.
   const [editReqStatusFilter, setEditReqStatusFilter] = useState<
-    "all" | "Pending" | "Approved" | "Declined"
+    "all" | "Pending" | "Approved" | "Declined" | "Expired"
   >("all");
   const [editReqFacilityFilter, setEditReqFacilityFilter] = useState("");
   const [editReqPeriodFilter, setEditReqPeriodFilter] = useState("");
@@ -414,6 +414,7 @@ function ApprovalsPage() {
     Approved:
       "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400",
     Declined: "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400",
+    Expired: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-400",
   };
 
   const windows = useMemo(
@@ -1281,6 +1282,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                     <option value="Pending">Pending</option>
                     <option value="Approved">Approved</option>
                     <option value="Declined">Declined</option>
+                    <option value="Expired">Expired</option>
                   </select>
                   <select
                     aria-label="Filter by rota period"
@@ -1331,12 +1333,19 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       <p className="text-xs text-muted-foreground mt-0.5">
                         Period {fmtDate(req.period_start)} → {fmtDate(req.period_end)} · Requested{" "}
                         {fmtDate(req.created_at)}
-                        {req.reviewed_at && <> · Decided {fmtDate(req.reviewed_at)}</>}
+                        {req.reviewed_at && (
+                          <>
+                            {" "}
+                            · {req.status === "Expired" ? "Expired" : "Decided"}{" "}
+                            {fmtDate(req.reviewed_at)}
+                          </>
+                        )}
                       </p>
                       <p className="text-xs mt-1">{req.reason}</p>
                       {req.review_note && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          HR note: {req.review_note}
+                          {req.status === "Expired" ? "" : "HR note: "}
+                          {req.review_note}
                         </p>
                       )}
                     </div>

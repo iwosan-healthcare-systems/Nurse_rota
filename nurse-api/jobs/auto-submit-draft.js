@@ -149,7 +149,7 @@ async function runAutoSubmit({ simulateToday } = {}) {
   // tick.
   if (!DRY_RUN) {
     const { rows: liveGrants } = await pool.query(
-      `SELECT id, facility, ward, role_group, period_start FROM rota_edit_requests
+      `SELECT id, status, facility, ward, role_group, period_start FROM rota_edit_requests
         WHERE status = 'Pending' OR (status = 'Approved' AND revoked_at IS NULL)`,
     );
     for (const grant of liveGrants) {
@@ -162,12 +162,28 @@ async function runAutoSubmit({ simulateToday } = {}) {
         periodStart: grant.period_start,
       });
       if (reverted) continue;
-      await pool.query(
-        `UPDATE rota_edit_requests
-            SET revoked_at = NOW(), revoke_reason = 'auto_closed_t17', updated_at = NOW()
-          WHERE id = $1`,
-        [grant.id],
-      );
+      if (grant.status === "Pending") {
+        // Never decided before the deadline — mark it Expired (not just
+        // revoked) so it's unambiguous in the UI and can no longer be
+        // approved/declined (PATCH /:id only matches status = 'Pending').
+        // Access only returns once the draft is reverted and a fresh
+        // request is raised — see routes/rota-edit-requests.js.
+        await pool.query(
+          `UPDATE rota_edit_requests
+              SET status = 'Expired',
+                  review_note = 'Auto-expired — the T-17 deadline passed before this request was decided.',
+                  reviewed_at = NOW(), updated_at = NOW()
+            WHERE id = $1`,
+          [grant.id],
+        );
+      } else {
+        await pool.query(
+          `UPDATE rota_edit_requests
+              SET revoked_at = NOW(), revoke_reason = 'auto_closed_t17', updated_at = NOW()
+            WHERE id = $1`,
+          [grant.id],
+        );
+      }
     }
   }
 }

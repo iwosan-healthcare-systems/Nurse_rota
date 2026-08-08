@@ -1,7 +1,5 @@
 import type { AppRole, SystemRole } from "./auth-context";
 
-export const MENU_PERMISSIONS_KEY = "nurse_rota_menu_permissions";
-
 // Mirrors the nav array in AppShell — one source of truth for labels / defaults.
 // Icons live in AppShell; this module only cares about access control.
 // These are DEFAULT role sets used only when no admin override exists for a
@@ -46,6 +44,7 @@ export const NAV_DEFINITIONS: NavDef[] = [
   { key: "/permissions", label: "Permissions", defaultRoles: ["admin"] },
   { key: "/menu-permissions", label: "Menu Access", defaultRoles: ["admin"] },
   { key: "/roles", label: "System Roles", defaultRoles: ["admin"] },
+  { key: "/system-settings", label: "System Settings", defaultRoles: ["admin"] },
 ];
 
 // These routes are always visible to admins and cannot be hidden.
@@ -55,15 +54,8 @@ export const ADMIN_LOCKED_KEYS = new Set([
   "/menu-permissions",
   "/roles",
   "/audit",
+  "/system-settings",
 ]);
-
-export function loadMenuPermissions(): Record<string, AppRole[]> {
-  return {};
-}
-
-export function saveMenuPermissions(_overrides: Record<string, AppRole[]>): void {
-  window.dispatchEvent(new Event("menu-permissions-changed"));
-}
 
 /** Returns the effective roles for a nav key, merging stored overrides over defaults. */
 export function getEffectiveRoles(key: string, overrides: Record<string, AppRole[]>): AppRole[] {

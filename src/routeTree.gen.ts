@@ -14,6 +14,7 @@ import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as AppWardsRouteImport } from './routes/_app/wards'
 import { Route as AppUsersRouteImport } from './routes/_app/users'
+import { Route as AppSystemSettingsRouteImport } from './routes/_app/system-settings'
 import { Route as AppStaffRouteImport } from './routes/_app/staff'
 import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift-history'
 import { Route as AppShiftRouteImport } from './routes/_app/shift'
@@ -50,6 +51,11 @@ const AppWardsRoute = AppWardsRouteImport.update({
 const AppUsersRoute = AppUsersRouteImport.update({
   id: '/users',
   path: '/users',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemSettingsRoute = AppSystemSettingsRouteImport.update({
+  id: '/system-settings',
+  path: '/system-settings',
   getParentRoute: () => AppRoute,
 } as any)
 const AppStaffRoute = AppStaffRouteImport.update({
@@ -134,6 +140,7 @@ export interface FileRoutesByFullPath {
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
   '/staff': typeof AppStaffRoute
+  '/system-settings': typeof AppSystemSettingsRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
 }
@@ -152,6 +159,7 @@ export interface FileRoutesByTo {
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
   '/staff': typeof AppStaffRoute
+  '/system-settings': typeof AppSystemSettingsRoute
   '/users': typeof AppUsersRoute
   '/wards': typeof AppWardsRoute
   '/': typeof AppIndexRoute
@@ -173,6 +181,7 @@ export interface FileRoutesById {
   '/_app/shift': typeof AppShiftRoute
   '/_app/shift-history': typeof AppShiftHistoryRoute
   '/_app/staff': typeof AppStaffRoute
+  '/_app/system-settings': typeof AppSystemSettingsRoute
   '/_app/users': typeof AppUsersRoute
   '/_app/wards': typeof AppWardsRoute
   '/_app/': typeof AppIndexRoute
@@ -195,6 +204,7 @@ export interface FileRouteTypes {
     | '/shift'
     | '/shift-history'
     | '/staff'
+    | '/system-settings'
     | '/users'
     | '/wards'
   fileRoutesByTo: FileRoutesByTo
@@ -213,6 +223,7 @@ export interface FileRouteTypes {
     | '/shift'
     | '/shift-history'
     | '/staff'
+    | '/system-settings'
     | '/users'
     | '/wards'
     | '/'
@@ -233,6 +244,7 @@ export interface FileRouteTypes {
     | '/_app/shift'
     | '/_app/shift-history'
     | '/_app/staff'
+    | '/_app/system-settings'
     | '/_app/users'
     | '/_app/wards'
     | '/_app/'
@@ -278,6 +290,13 @@ declare module '@tanstack/react-router' {
       path: '/users'
       fullPath: '/users'
       preLoaderRoute: typeof AppUsersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/system-settings': {
+      id: '/_app/system-settings'
+      path: '/system-settings'
+      fullPath: '/system-settings'
+      preLoaderRoute: typeof AppSystemSettingsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/staff': {
@@ -388,6 +407,7 @@ interface AppRouteChildren {
   AppShiftRoute: typeof AppShiftRoute
   AppShiftHistoryRoute: typeof AppShiftHistoryRoute
   AppStaffRoute: typeof AppStaffRoute
+  AppSystemSettingsRoute: typeof AppSystemSettingsRoute
   AppUsersRoute: typeof AppUsersRoute
   AppWardsRoute: typeof AppWardsRoute
   AppIndexRoute: typeof AppIndexRoute
@@ -407,6 +427,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppShiftRoute: AppShiftRoute,
   AppShiftHistoryRoute: AppShiftHistoryRoute,
   AppStaffRoute: AppStaffRoute,
+  AppSystemSettingsRoute: AppSystemSettingsRoute,
   AppUsersRoute: AppUsersRoute,
   AppWardsRoute: AppWardsRoute,
   AppIndexRoute: AppIndexRoute,

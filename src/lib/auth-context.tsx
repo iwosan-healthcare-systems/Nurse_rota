@@ -42,6 +42,13 @@ export interface ApiUser {
   password_expires_in_days: number | null;
   nurse_id: string | null;
   nurse_facility: string | null;
+  // Individually-granted capability keys, additive on top of whatever
+  // capabilities this user's role(s) already give them — see
+  // migrations/035_user_capability_overrides.sql. Enforced instantly
+  // server-side; only reflected here after this user's next login/`/me`
+  // refetch (same staleness convention already disclosed for role grants
+  // in users.tsx: "Role changes take effect on next login").
+  capability_overrides: string[];
 }
 
 
@@ -86,6 +93,7 @@ interface AuthCtx {
   canRequestRotaEditAccess: boolean;
   canGrantRotaEditAccess: boolean;
   canManageLeaveEntitlements: boolean;
+  canManageLeaveEntitlementCaps: boolean;
   canApproveLeave: boolean;
   canApproveMatronLeave: boolean;
   canViewAllLeaveRequests: boolean;
@@ -298,7 +306,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const hasAnyRole = (rs: AppRole[]) => ar !== null && rs.includes(ar);
   const cap = (key: string, defaults: AppRole[]) => {
     const roles = capabilities.find((c) => c.key === key)?.roles ?? defaults;
-    return ar !== null && roles.includes(ar);
+    if (ar !== null && roles.includes(ar)) return true;
+    return user?.capability_overrides.includes(key) ?? false;
   };
   // Roles that are never "staff on the roster with their own shifts to track,"
   // even when the login happens to also be linked to a nurses record (e.g. an
@@ -352,6 +361,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canRequestRotaEditAccess: cap("request_rota_edit_access", ["admin", "head_nurse"]),
     canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "hr_admin"]),
     canManageLeaveEntitlements: cap("manage_leave_entitlements", ["admin", "hr_admin"]),
+    canManageLeaveEntitlementCaps: cap("manage_leave_entitlement_caps", ["admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),
     canApproveMatronLeave: cap("approve_matron_leave", ["admin", "cno"]),
     // View-only visibility into ALL leave/shift-switch requests, separate from

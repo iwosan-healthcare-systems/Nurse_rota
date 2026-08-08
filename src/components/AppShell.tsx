@@ -32,6 +32,7 @@ import {
   CalendarX,
   ArrowRightLeft,
   Shield,
+  Settings,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -81,6 +82,12 @@ const nav = [
     roles: ["admin"] as AppRole[],
   },
   { to: "/roles", label: "System Roles", icon: Shield, roles: ["admin"] as AppRole[] },
+  {
+    to: "/system-settings",
+    label: "System Settings",
+    icon: Settings,
+    roles: ["admin"] as AppRole[],
+  },
 ] as const;
 
 // Is `path` the nav item at `to`, or a sub-route of it? A plain

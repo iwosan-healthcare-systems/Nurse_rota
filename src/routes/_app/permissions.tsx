@@ -1,26 +1,26 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
-import { Check, X, ShieldAlert, Pencil, RotateCcw } from "lucide-react";
+import { ShieldAlert, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { FlagTagAssignment, type TagEntity, type TagFlag } from "@/components/FlagTagAssignment";
 
 export const Route = createFileRoute("/_app/permissions")({
   head: () => ({
     meta: [
       { title: "Permissions — Nurses Rota" },
-      { name: "description", content: "Manage user roles and view the role permission matrix." },
+      { name: "description", content: "Manage role capabilities and per-user permission overrides." },
     ],
   }),
   component: PermissionsPage,
 });
 
 // Used only as the default "everyone" role list for capabilities that have no
-// DB entry yet — the table's actual displayed columns come from the dynamic
-// role list (useAuth().allRoles) inside PermissionsPage. A newly created
-// custom role starts with none of these either, until an admin explicitly
-// grants it via the matrix — nothing here auto-includes custom roles.
+// DB entry yet — the tag-assignment UI's actual role list comes from the
+// dynamic role registry (useAuth().allRoles), minus admin (see below).
 const SYSTEM_ROLES: SystemRole[] = [
   "admin",
   "cno",
@@ -117,6 +117,16 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Adjust Leave Entitlements (manual credit for pre-system leave)",
     roles: ["admin", "hr_admin"],
   },
+  {
+    key: "manage_leave_entitlement_caps",
+    label: "Change Leave Entitlement Caps (per individual or job role)",
+    roles: ["admin"],
+  },
+  {
+    key: "view_all_leave_requests",
+    label: "View All Leave & Shift-Switch Requests (not just own)",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"],
+  },
   { key: "download_rota", label: "Download Published Rota (Excel / PDF)", roles: SYSTEM_ROLES },
   {
     key: "print_staff_list",
@@ -181,94 +191,37 @@ const DEFAULT_CAPABILITIES: Capability[] = [
 
 const CAPABILITIES_CHANGED_EVENT = "capabilities-changed";
 
+function humanizeKey(key: string) {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+// Merges the DB-saved role-lists onto DEFAULT_CAPABILITIES's labels — but,
+// unlike the old version of this function, any DB key that ISN'T in
+// DEFAULT_CAPABILITIES also gets surfaced (with a humanized fallback label)
+// instead of silently dropped. That drop is exactly what deleted
+// view_all_leave_requests from the database the last time an unrelated
+// capability was saved, before it was added to the list above — this keeps
+// any future case of "a migration added a key nobody's told the frontend
+// about yet" visible and editable instead of quietly lossy.
 function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capability[] {
-  return DEFAULT_CAPABILITIES.map((cap) => {
+  const known = DEFAULT_CAPABILITIES.map((cap) => {
     const found = saved.find((s) => s.key === cap.key);
     return found ? { ...cap, roles: found.roles } : cap;
   });
+  const knownKeys = new Set(DEFAULT_CAPABILITIES.map((c) => c.key));
+  const unknown = saved
+    .filter((s) => !knownKeys.has(s.key))
+    .map((s) => ({ key: s.key, label: humanizeKey(s.key), roles: s.roles }));
+  return [...known, ...unknown];
 }
 
 function PermissionsPage() {
   const navigate = useNavigate();
-  const { isAdmin, loading, allRoles, roleLabel } = useAuth();
-  const ROLES = allRoles.map((r) => r.key);
-
-  const [capabilities, setCapabilities] = useState<Capability[]>(DEFAULT_CAPABILITIES);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState<Capability[]>([]);
-  const [saving, setSaving] = useState(false);
+  const { isAdmin, loading } = useAuth();
 
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
-
-  useEffect(() => {
-    api
-      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>(
-        "/portal-settings/capabilities",
-      )
-      .then(({ value }) => {
-        if (value) setCapabilities(mergeCapabilities(value));
-      })
-      .catch(() => {
-        /* non-critical */
-      });
-  }, []);
-
-  function startEdit() {
-    setDraft(capabilities.map((c) => ({ ...c, roles: [...c.roles] })));
-    setEditing(true);
-  }
-
-  function cancelEdit() {
-    setDraft([]);
-    setEditing(false);
-  }
-
-  async function saveEdit() {
-    const payload = draft.map((c) => ({ key: c.key, roles: c.roles }));
-    setSaving(true);
-    try {
-      await api.put("/portal-settings/capabilities", { value: payload });
-      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
-      setCapabilities(draft);
-      setEditing(false);
-      toast.success("Permissions saved");
-    } catch (e: unknown) {
-      toast.error("Failed to save: " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function resetDefaults() {
-    if (!confirm("Reset all capabilities to system defaults?")) return;
-    setSaving(true);
-    try {
-      await api.put("/portal-settings/capabilities", { value: [] });
-      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
-      setCapabilities(DEFAULT_CAPABILITIES);
-      setDraft([]);
-      setEditing(false);
-      toast.success("Permissions reset to defaults");
-    } catch (e: unknown) {
-      toast.error("Failed to reset: " + (e instanceof Error ? e.message : String(e)));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  function toggleRole(capKey: string, role: AppRole) {
-    setDraft((prev) =>
-      prev.map((cap) => {
-        if (cap.key !== capKey) return cap;
-        const has = cap.roles.includes(role);
-        return { ...cap, roles: has ? cap.roles.filter((r) => r !== role) : [...cap.roles, role] };
-      }),
-    );
-  }
-
-  const activeCaps = editing ? draft : capabilities;
 
   if (!isAdmin) {
     return (
@@ -280,113 +233,242 @@ function PermissionsPage() {
   }
 
   return (
-    <div className="space-y-8">
-      <PageHeader title="Permissions" subtitle="Role capability matrix" />
+    <div className="space-y-6">
+      <PageHeader title="Permissions" subtitle="Role capabilities and per-user overrides" />
+      <Tabs defaultValue="by-role">
+        <TabsList>
+          <TabsTrigger value="by-role">By Role</TabsTrigger>
+          <TabsTrigger value="by-user">By User</TabsTrigger>
+        </TabsList>
+        <TabsContent value="by-role">
+          <ByRoleTab />
+        </TabsContent>
+        <TabsContent value="by-user">
+          <ByUserTab />
+        </TabsContent>
+      </Tabs>
+    </div>
+  );
+}
 
-      <section className="rounded-xl border bg-card overflow-hidden">
-        <div className="px-5 py-4 border-b flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold">Role capability matrix</h2>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              What each role is allowed to do in the system.
-            </p>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {editing ? (
-              <>
-                <button
-                  type="button"
-                  onClick={cancelEdit}
-                  disabled={saving}
-                  className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={saveEdit}
-                  disabled={saving}
-                  className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
-                >
-                  {saving ? "Saving…" : "Save changes"}
-                </button>
-              </>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={resetDefaults}
-                  disabled={saving}
-                  title="Reset to defaults"
-                  className="h-8 w-8 grid place-items-center rounded-md border bg-card hover:bg-muted text-muted-foreground disabled:opacity-50"
-                >
-                  <RotateCcw className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={startEdit}
-                  className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
-                >
-                  <Pencil className="h-3.5 w-3.5" /> Edit
-                </button>
-              </>
-            )}
-          </div>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-muted/40 text-xs uppercase tracking-wide text-muted-foreground">
-              <tr>
-                <th className="text-left px-4 py-3 font-medium sticky left-0 bg-muted/40 z-10">
-                  Capability
-                </th>
-                {ROLES.map((r) => (
-                  <th key={r} className="px-3 py-3 font-medium text-center whitespace-nowrap">
-                    {roleLabel(r)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {activeCaps.map((cap) => (
-                <tr key={cap.key} className="border-t">
-                  <td className="px-4 py-2.5 font-medium sticky left-0 bg-card z-10">
-                    {cap.label}
-                  </td>
-                  {ROLES.map((r) => (
-                    <td key={r} className="px-3 py-2.5 text-center">
-                      {editing ? (
-                        <label className="inline-grid place-items-center h-8 w-8 cursor-pointer">
-                          <input
-                            type="checkbox"
-                            aria-label={`${cap.label} — ${roleLabel(r)}`}
-                            checked={cap.roles.includes(r)}
-                            onChange={() => toggleRole(cap.key, r)}
-                            className="h-4 w-4 accent-primary cursor-pointer"
-                          />
-                        </label>
-                      ) : cap.roles.includes(r) ? (
-                        <Check className="h-4 w-4 text-emerald-600 inline" />
-                      ) : (
-                        <X className="h-4 w-4 text-muted-foreground/40 inline" />
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {editing ? (
-          <p className="px-5 py-3 border-t text-xs text-amber-600 bg-amber-50 dark:bg-amber-950/20">
-            Editing mode — check or uncheck roles for each capability, then save.
-          </p>
-        ) : (
-          <p className="px-5 py-3 border-t text-xs text-muted-foreground">
-            Capabilities are enforced server-side. Changes here update the reference matrix.
-          </p>
-        )}
-      </section>
+// ── By Role ───────────────────────────────────────────────────────────────
+
+function ByRoleTab() {
+  const { allRoles, roleLabel } = useAuth();
+  const [capabilities, setCapabilities] = useState<Capability[]>(DEFAULT_CAPABILITIES);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    api
+      .get<{ key: string; value: { key: string; roles: AppRole[] }[] }>(
+        "/portal-settings/capabilities",
+      )
+      .then(({ value }) => {
+        if (value) setCapabilities(mergeCapabilities(value));
+      })
+      .catch(() => {});
+  }, []);
+
+  // Admin excluded — it bypasses every capability check unconditionally
+  // already, so tagging it would be a no-op.
+  const entities: TagEntity[] = allRoles
+    .filter((r) => r.key !== "admin")
+    .map((r) => ({ key: r.key, label: roleLabel(r.key) }));
+
+  const flagUniverse: TagFlag[] = useMemo(
+    () => capabilities.map((c) => ({ key: c.key, label: c.label })),
+    [capabilities],
+  );
+
+  const getAssignedKeys = useCallback(
+    (roleKey: string) => capabilities.filter((c) => c.roles.includes(roleKey as AppRole)).map((c) => c.key),
+    [capabilities],
+  );
+
+  async function onAssign(roleKey: string, capKeys: string[]) {
+    const changes = capKeys.map((key) => {
+      const cap = capabilities.find((c) => c.key === key);
+      const roles = cap?.roles.includes(roleKey as AppRole) ? cap.roles : [...(cap?.roles ?? []), roleKey as AppRole];
+      return { key, roles };
+    });
+    await patchCapabilities(changes);
+  }
+
+  async function onUnassign(roleKey: string, capKeys: string[]) {
+    const changes = capKeys.map((key) => {
+      const cap = capabilities.find((c) => c.key === key);
+      return { key, roles: (cap?.roles ?? []).filter((r) => r !== roleKey) };
+    });
+    await patchCapabilities(changes);
+  }
+
+  async function patchCapabilities(changes: { key: string; roles: AppRole[] }[]) {
+    setSaving(true);
+    try {
+      const { value } = await api.patch<{ value: { key: string; roles: AppRole[] }[] }>(
+        "/portal-settings/capabilities",
+        { changes },
+      );
+      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
+      setCapabilities(mergeCapabilities(value));
+      toast.success("Permissions saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function resetDefaults() {
+    if (!confirm("Reset ALL capabilities to system defaults for every role? This cannot be undone.")) return;
+    setSaving(true);
+    try {
+      await api.put("/portal-settings/capabilities", { value: [] });
+      window.dispatchEvent(new Event(CAPABILITIES_CHANGED_EVENT));
+      setCapabilities(DEFAULT_CAPABILITIES);
+      toast.success("Permissions reset to defaults");
+    } catch (e) {
+      toast.error("Failed to reset: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-card p-5 mt-4">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <p className="text-xs text-muted-foreground">
+          What each role is allowed to do in the system. Capabilities are enforced server-side.
+        </p>
+        <button
+          type="button"
+          onClick={resetDefaults}
+          disabled={saving}
+          title="Reset ALL roles to system defaults"
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50 shrink-0"
+        >
+          <RotateCcw className="h-3.5 w-3.5" /> Reset all to defaults
+        </button>
+      </div>
+      <FlagTagAssignment
+        entityPickerLabel="Role Tagging With"
+        entities={entities}
+        flagUniverse={flagUniverse}
+        getAssignedKeys={getAssignedKeys}
+        onAssign={onAssign}
+        onUnassign={onUnassign}
+        saving={saving}
+        searchPlaceholder="Search Flag name"
+      />
+    </div>
+  );
+}
+
+// ── By User ───────────────────────────────────────────────────────────────
+
+type ProfileRow = { id: string; email: string | null; full_name: string | null };
+type RoleRow = { user_id: string; role: string };
+type OverrideRow = { user_id: string; capability_key: string; user_name: string | null };
+
+function ByUserTab() {
+  const [users, setUsers] = useState<{ id: string; name: string }[]>([]);
+  const [capabilities, setCapabilities] = useState<Capability[]>(DEFAULT_CAPABILITIES);
+  const [overrides, setOverrides] = useState<OverrideRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const reload = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [profs, rls, capsRes, overridesRes] = await Promise.all([
+        api.get<ProfileRow[]>("/auth/admin/users"),
+        api.get<RoleRow[]>("/user-roles"),
+        api
+          .get<{ value: { key: string; roles: AppRole[] }[] }>("/portal-settings/capabilities")
+          .catch(() => ({ value: [] as { key: string; roles: AppRole[] }[] })),
+        api.get<OverrideRow[]>("/user-capability-overrides").catch(() => [] as OverrideRow[]),
+      ]);
+      const rolesByUser = new Map<string, string[]>();
+      for (const r of rls) rolesByUser.set(r.user_id, [...(rolesByUser.get(r.user_id) ?? []), r.role]);
+      // Admin users are excluded — they already have every capability, no
+      // need to individually grant them anything extra.
+      const nonAdmin = profs
+        .filter((p) => !(rolesByUser.get(p.id) ?? []).includes("admin"))
+        .map((p) => ({ id: p.id, name: p.full_name || p.email || p.id }));
+      setUsers(nonAdmin);
+      setCapabilities(capsRes.value?.length ? mergeCapabilities(capsRes.value) : DEFAULT_CAPABILITIES);
+      setOverrides(overridesRes);
+    } catch {
+      toast.error("Failed to load users/overrides");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  const entities: TagEntity[] = users.map((u) => ({ key: u.id, label: u.name }));
+  const flagUniverse: TagFlag[] = useMemo(
+    () => capabilities.map((c) => ({ key: c.key, label: c.label })),
+    [capabilities],
+  );
+
+  const getAssignedKeys = useCallback(
+    (userId: string) => overrides.filter((o) => o.user_id === userId).map((o) => o.capability_key),
+    [overrides],
+  );
+
+  async function onAssign(userId: string, keys: string[]) {
+    setSaving(true);
+    try {
+      await api.post("/user-capability-overrides", { user_id: userId, keys });
+      await reload();
+      toast.success("Capability granted — takes effect on the user's next login");
+    } catch (e) {
+      toast.error("Failed to grant: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function onUnassign(userId: string, keys: string[]) {
+    setSaving(true);
+    try {
+      await api.del("/user-capability-overrides", { user_id: userId, keys });
+      await reload();
+      toast.success("Capability revoked");
+    } catch (e) {
+      toast.error("Failed to revoke: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border bg-card p-5 mt-4">
+      <p className="text-xs text-muted-foreground mb-4">
+        Grant one specific staff member an extra capability beyond what their role(s) already give
+        them — additive only, never removes anything their role grants. Admin accounts aren't
+        listed since they already have every capability. Enforcement is instant server-side, but a
+        granted capability only shows up in that user's own interface after their next login.
+      </p>
+      {loading ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : (
+        <FlagTagAssignment
+          entityPickerLabel="User Tagging With"
+          entities={entities}
+          flagUniverse={flagUniverse}
+          getAssignedKeys={getAssignedKeys}
+          onAssign={onAssign}
+          onUnassign={onUnassign}
+          saving={saving}
+          searchPlaceholder="Search Flag name"
+          entityEmptyMessage="No non-admin users found."
+        />
+      )}
     </div>
   );
 }

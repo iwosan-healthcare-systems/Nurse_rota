@@ -49,6 +49,7 @@ app.use('/api/leave-entitlements', requireAuth, require('./routes/leave-entitlem
 app.use('/api/locum',             requireAuth, require('./routes/locum'));
 app.use('/api/audit-logs',        requireAuth, require('./routes/audit-logs'));
 app.use('/api/portal-settings',   requireAuth, require('./routes/portal-settings'));
+app.use('/api/user-capability-overrides', requireAuth, require('./routes/user-capability-overrides'));
 app.use('/api/roles',             requireAuth, require('./routes/roles'));
 app.use('/api/rota-edit-requests',requireAuth, require('./routes/rota-edit-requests'));
 app.use('/api/notifications',     requireAuth, require('./routes/notifications'));

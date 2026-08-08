@@ -4,10 +4,14 @@ const { requireRole } = require("../middleware/auth");
 const { requireCapability } = require("../middleware/capability");
 const {
   LEAVE_ENTITLEMENTS,
+  ROLE_GROUP_OPTIONS,
   getEntitlementUsage,
   getEntitlementUsageForNurses,
   createAdjustment,
   getAdjustmentHistory,
+  getOverrides,
+  upsertOverride,
+  deleteOverride,
 } = require("../lib/leave-entitlements");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -29,7 +33,7 @@ router.get(
       `SELECT id, name, role, ward, facility FROM nurses ${where} ORDER BY name`,
       params,
     );
-    const usage = await getEntitlementUsageForNurses(nurses.map((n) => n.id));
+    const usage = await getEntitlementUsageForNurses(nurses.map((n) => ({ id: n.id, role: n.role })));
     res.json(
       nurses.map((n) => ({
         nurse_id: n.id,
@@ -40,6 +44,105 @@ router.get(
         entitlements: usage[n.id] ?? {},
       })),
     );
+  }),
+);
+
+// GET /api/leave-entitlements/role-groups — the fixed list of role groups a
+// role-scoped override can target (see lib/leave-entitlements.js's
+// ROLE_GROUPS for how a nurse's literal role — e.g. "Surgical Nurse - Day"
+// — resolves into one of these shared groups). Registered before /:nurse_id
+// so "role-groups" is never swallowed as a nurse_id.
+router.get(
+  "/role-groups",
+  requireCapability("manage_leave_entitlement_caps", ["admin"]),
+  wrap(async (req, res) => {
+    res.json(ROLE_GROUP_OPTIONS);
+  }),
+);
+
+// GET /api/leave-entitlements/overrides — every cap override currently in
+// effect (both individual and role scope). Admin only, distinct from the
+// adjustments capability below (hr_admin can record those; changing what
+// someone is entitled to in the first place stays admin-only). Registered
+// before /:nurse_id for the same route-ordering reason as role-groups above.
+router.get(
+  "/overrides",
+  requireCapability("manage_leave_entitlement_caps", ["admin"]),
+  wrap(async (req, res) => {
+    res.json(await getOverrides());
+  }),
+);
+
+// POST /api/leave-entitlements/overrides — set (or update) an individual or
+// role-level cap override. A config table, not a log — re-saving the same
+// nurse/role+type updates the existing row rather than accumulating history.
+router.post(
+  "/overrides",
+  requireCapability("manage_leave_entitlement_caps", ["admin"]),
+  wrap(async (req, res) => {
+    const { scope, nurse_id, role, type, days } = req.body;
+    if (!["individual", "role"].includes(scope)) {
+      return res.status(400).json({ error: "scope must be 'individual' or 'role'" });
+    }
+    if (!LEAVE_ENTITLEMENTS[type]) {
+      return res
+        .status(400)
+        .json({ error: `type must be one of: ${Object.keys(LEAVE_ENTITLEMENTS).join(", ")}` });
+    }
+    if (typeof days !== "number" || !Number.isFinite(days) || days < 0) {
+      return res.status(400).json({ error: "days must be a non-negative number" });
+    }
+    if (scope === "individual" && !nurse_id) {
+      return res.status(400).json({ error: "nurse_id is required for an individual override" });
+    }
+    if (scope === "role" && !ROLE_GROUP_OPTIONS.some((g) => g.key === role)) {
+      return res.status(400).json({
+        error: `role must be one of: ${ROLE_GROUP_OPTIONS.map((g) => g.key).join(", ")}`,
+      });
+    }
+
+    let targetLabel = role;
+    if (scope === "individual") {
+      const { rows } = await pool.query(`SELECT name FROM nurses WHERE id = $1`, [nurse_id]);
+      targetLabel = rows[0]?.name ?? nurse_id;
+    }
+
+    const saved = await upsertOverride({
+      scope,
+      nurseId: scope === "individual" ? nurse_id : null,
+      role: scope === "role" ? role : null,
+      type,
+      days,
+      createdBy: req.user.userId,
+      createdByName: req.user.full_name || null,
+    });
+    await pool
+      .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ($1, $2, $3)`, [
+        req.user.full_name || "admin",
+        "Leave entitlement cap changed",
+        `${type} → ${days} day(s) for ${scope === "individual" ? targetLabel : `role group "${targetLabel}"`}`,
+      ])
+      .catch(() => {});
+    res.status(201).json(saved);
+  }),
+);
+
+// DELETE /api/leave-entitlements/overrides/:id — remove an override,
+// reverting that nurse/role+type back to the system default.
+router.delete(
+  "/overrides/:id",
+  requireCapability("manage_leave_entitlement_caps", ["admin"]),
+  wrap(async (req, res) => {
+    const removed = await deleteOverride(req.params.id);
+    if (!removed) return res.status(404).json({ error: "Override not found" });
+    await pool
+      .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ($1, $2, $3)`, [
+        req.user.full_name || "admin",
+        "Leave entitlement cap override removed",
+        `${removed.type} override removed (${removed.scope === "individual" ? `nurse ${removed.nurse_id}` : `role "${removed.role}"`}) — reverted to system default`,
+      ])
+      .catch(() => {});
+    res.json({ success: true });
   }),
 );
 
