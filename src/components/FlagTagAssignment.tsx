@@ -35,6 +35,8 @@ export function FlagTagAssignment({
   entityEmptyMessage = "No options available.",
 }: FlagTagAssignmentProps) {
   const [selectedEntityKey, setSelectedEntityKey] = useState("");
+  const [entitySearch, setEntitySearch] = useState("");
+  const [entityOpen, setEntityOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [leftChecked, setLeftChecked] = useState<Set<string>>(new Set());
   const [rightChecked, setRightChecked] = useState<Set<string>>(new Set());
@@ -43,6 +45,16 @@ export function FlagTagAssignment({
     () => new Set(selectedEntityKey ? getAssignedKeys(selectedEntityKey) : []),
     [selectedEntityKey, getAssignedKeys],
   );
+
+  const selectedEntity = entities.find((e) => e.key === selectedEntityKey);
+
+  const filteredEntities = useMemo(() => {
+    const q = entitySearch.trim().toLowerCase();
+    if (!q) return entities;
+    return entities.filter(
+      (e) => e.label.toLowerCase().includes(q) || (e.sublabel ?? "").toLowerCase().includes(q),
+    );
+  }, [entities, entitySearch]);
 
   const matchesSearch = (f: TagFlag) => {
     if (!search.trim()) return true;
@@ -72,6 +84,8 @@ export function FlagTagAssignment({
 
   function selectEntity(key: string) {
     setSelectedEntityKey(key);
+    setEntitySearch("");
+    setEntityOpen(false);
     setSearch("");
     setLeftChecked(new Set());
     setRightChecked(new Set());
@@ -80,14 +94,16 @@ export function FlagTagAssignment({
   function toggleLeft(key: string) {
     setLeftChecked((s) => {
       const next = new Set(s);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
   function toggleRight(key: string) {
     setRightChecked((s) => {
       const next = new Set(s);
-      next.has(key) ? next.delete(key) : next.add(key);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
   }
@@ -123,23 +139,48 @@ export function FlagTagAssignment({
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
+        <div className="relative">
           <label className="text-xs font-medium text-muted-foreground block mb-1">
             {entityPickerLabel}
           </label>
-          <select
-            value={selectedEntityKey}
-            onChange={(e) => selectEntity(e.target.value)}
+          <input
+            type="text"
+            value={entityOpen ? entitySearch : (selectedEntity?.label ?? "")}
+            onChange={(e) => {
+              setEntitySearch(e.target.value);
+              setEntityOpen(true);
+            }}
+            onFocus={() => {
+              setEntitySearch("");
+              setEntityOpen(true);
+            }}
+            onBlur={() => {
+              // Let a click on an option fire before the list disappears.
+              setTimeout(() => setEntityOpen(false), 150);
+            }}
+            placeholder="[ Select ]"
             className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-          >
-            <option value="">[ Select ]</option>
-            {entities.map((e) => (
-              <option key={e.key} value={e.key}>
-                {e.label}
-                {e.sublabel ? ` — ${e.sublabel}` : ""}
-              </option>
-            ))}
-          </select>
+          />
+          {entityOpen && (
+            <div className="absolute z-10 mt-1 w-full bg-card border rounded-md shadow-lg max-h-56 overflow-y-auto">
+              {filteredEntities.length === 0 ? (
+                <p className="px-3 py-2 text-xs text-muted-foreground">No matches.</p>
+              ) : (
+                filteredEntities.map((e) => (
+                  <button
+                    type="button"
+                    key={e.key}
+                    onMouseDown={(ev) => ev.preventDefault()}
+                    onClick={() => selectEntity(e.key)}
+                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted"
+                  >
+                    {e.label}
+                    {e.sublabel ? ` — ${e.sublabel}` : ""}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
           {entities.length === 0 && (
             <p className="text-xs text-muted-foreground mt-1">{entityEmptyMessage}</p>
           )}
@@ -230,7 +271,10 @@ export function FlagTagAssignment({
               </p>
             ) : (
               assigned.map((f) => (
-                <div key={f.key} className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/40">
+                <div
+                  key={f.key}
+                  className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-muted/40"
+                >
                   <input
                     type="checkbox"
                     checked={rightChecked.has(f.key)}

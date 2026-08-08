@@ -1,22 +1,10 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "@/components/PageHeader";
 import { api } from "@/lib/api";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
-import { ShieldAlert, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { FlagTagAssignment, type TagEntity, type TagFlag } from "@/components/FlagTagAssignment";
-
-export const Route = createFileRoute("/_app/permissions")({
-  head: () => ({
-    meta: [
-      { title: "Permissions — Nurses Rota" },
-      { name: "description", content: "Manage role capabilities and per-user permission overrides." },
-    ],
-  }),
-  component: PermissionsPage,
-});
 
 // Used only as the default "everyone" role list for capabilities that have no
 // DB entry yet — the tag-assignment UI's actual role list comes from the
@@ -160,7 +148,11 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Send Locum Invites to OFF Nurses",
     roles: ["admin", "chief_matron"],
   },
-  { key: "respond_locum_invite", label: "Accept / Decline a Locum Invite (Nurse)", roles: SYSTEM_ROLES },
+  {
+    key: "respond_locum_invite",
+    label: "Accept / Decline a Locum Invite (Nurse)",
+    roles: SYSTEM_ROLES,
+  },
   {
     key: "view_locum_hours",
     label: "View Locum Hours Tracking",
@@ -171,22 +163,74 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "View Locum Request Status",
     roles: ["admin", "cno", "chief_matron", "head_nurse"],
   },
-  { key: "view_audit_logs", label: "View Audit Logs (API)", roles: ["admin", "cno", "service_support"] },
-  { key: "manage_users", label: "Manage User Accounts (create / ban / reset password)", roles: ["admin", "cno", "service_support"] },
+  {
+    key: "view_audit_logs",
+    label: "View Audit Logs (API)",
+    roles: ["admin", "cno", "service_support"],
+  },
+  {
+    key: "manage_users",
+    label: "Manage User Accounts (create / ban / reset password)",
+    roles: ["admin", "cno", "service_support"],
+  },
   { key: "delete_user_account", label: "Delete User Account", roles: ["admin"] },
   { key: "edit_user_profile", label: "Edit User Profile (name / email)", roles: ["admin", "cno"] },
   { key: "bulk_create_users", label: "Bulk-Create Logins from Staff List", roles: ["admin"] },
-  { key: "review_locum_request", label: "Review Locum Request (CNO approve/decline)", roles: ["admin", "cno", "chief_matron"] },
-  { key: "view_profiles", label: "View User Profiles List", roles: ["admin", "cno", "chief_matron", "hr_admin"] },
-  { key: "manage_rota_periods", label: "Manage Rota Periods (auto-end / auto-close)", roles: ["admin", "cno"] },
-  { key: "manage_period_hours", label: "Manage Period Hours Archive", roles: ["admin", "cno", "hr_admin"] },
-  { key: "manage_shift_logs", label: "Bulk-Manage Shift Logs", roles: ["admin", "cno", "chief_matron", "hr_admin"] },
-  { key: "edit_nurse_record", label: "Edit Individual Staff Record", roles: ["admin", "hr_admin", "head_nurse"] },
-  { key: "rotate_interns", label: "Rotate Interns Between Wards", roles: ["admin", "cno", "chief_matron"] },
-  { key: "view_user_roles", label: "View User Role Assignments", roles: ["admin", "cno", "hr_admin", "service_support"] },
-  { key: "manage_user_roles", label: "Grant / Revoke User Roles", roles: ["admin", "cno", "service_support"] },
-  { key: "edit_shift_assignments", label: "Create / Delete Individual Shift Cells", roles: ["admin", "head_nurse"] },
-  { key: "manage_shift_assignments", label: "Bulk-Manage Shift Assignments", roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"] },
+  {
+    key: "review_locum_request",
+    label: "Review Locum Request (CNO approve/decline)",
+    roles: ["admin", "cno", "chief_matron"],
+  },
+  {
+    key: "view_profiles",
+    label: "View User Profiles List",
+    roles: ["admin", "cno", "chief_matron", "hr_admin"],
+  },
+  {
+    key: "manage_rota_periods",
+    label: "Manage Rota Periods (auto-end / auto-close)",
+    roles: ["admin", "cno"],
+  },
+  {
+    key: "manage_period_hours",
+    label: "Manage Period Hours Archive",
+    roles: ["admin", "cno", "hr_admin"],
+  },
+  {
+    key: "manage_shift_logs",
+    label: "Bulk-Manage Shift Logs",
+    roles: ["admin", "cno", "chief_matron", "hr_admin"],
+  },
+  {
+    key: "edit_nurse_record",
+    label: "Edit Individual Staff Record",
+    roles: ["admin", "hr_admin", "head_nurse"],
+  },
+  {
+    key: "rotate_interns",
+    label: "Rotate Interns Between Wards",
+    roles: ["admin", "cno", "chief_matron"],
+  },
+  {
+    key: "view_user_roles",
+    label: "View User Role Assignments",
+    roles: ["admin", "cno", "hr_admin", "service_support"],
+  },
+  {
+    key: "manage_user_roles",
+    label: "Grant / Revoke User Roles",
+    roles: ["admin", "cno", "service_support"],
+  },
+  {
+    key: "edit_shift_assignments",
+    label: "Create / Delete Individual Shift Cells",
+    roles: ["admin", "head_nurse"],
+  },
+  {
+    key: "manage_shift_assignments",
+    label: "Bulk-Manage Shift Assignments",
+    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+  },
 ];
 
 const CAPABILITIES_CHANGED_EVENT = "capabilities-changed";
@@ -195,14 +239,11 @@ function humanizeKey(key: string) {
   return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-// Merges the DB-saved role-lists onto DEFAULT_CAPABILITIES's labels — but,
-// unlike the old version of this function, any DB key that ISN'T in
-// DEFAULT_CAPABILITIES also gets surfaced (with a humanized fallback label)
-// instead of silently dropped. That drop is exactly what deleted
-// view_all_leave_requests from the database the last time an unrelated
-// capability was saved, before it was added to the list above — this keeps
-// any future case of "a migration added a key nobody's told the frontend
-// about yet" visible and editable instead of quietly lossy.
+// Merges the DB-saved role-lists onto DEFAULT_CAPABILITIES's labels — but any
+// DB key that ISN'T in DEFAULT_CAPABILITIES also gets surfaced (with a
+// humanized fallback label) instead of silently dropped, so a migration that
+// adds a capability before the frontend list is updated stays visible and
+// editable instead of quietly lossy the next time anything here is saved.
 function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capability[] {
   const known = DEFAULT_CAPABILITIES.map((cap) => {
     const found = saved.find((s) => s.key === cap.key);
@@ -215,39 +256,20 @@ function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capabili
   return [...known, ...unknown];
 }
 
-function PermissionsPage() {
-  const navigate = useNavigate();
-  const { isAdmin, loading } = useAuth();
-
-  useEffect(() => {
-    if (!loading && !isAdmin) navigate({ to: "/" });
-  }, [loading, isAdmin, navigate]);
-
-  if (!isAdmin) {
-    return (
-      <div className="py-20 text-center">
-        <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">Administrator access required.</p>
-      </div>
-    );
-  }
-
+export function PermissionsSettings() {
   return (
-    <div className="space-y-6">
-      <PageHeader title="Permissions" subtitle="Role capabilities and per-user overrides" />
-      <Tabs defaultValue="by-role">
-        <TabsList>
-          <TabsTrigger value="by-role">By Role</TabsTrigger>
-          <TabsTrigger value="by-user">By User</TabsTrigger>
-        </TabsList>
-        <TabsContent value="by-role">
-          <ByRoleTab />
-        </TabsContent>
-        <TabsContent value="by-user">
-          <ByUserTab />
-        </TabsContent>
-      </Tabs>
-    </div>
+    <Tabs defaultValue="by-role">
+      <TabsList>
+        <TabsTrigger value="by-role">By Role</TabsTrigger>
+        <TabsTrigger value="by-user">By User</TabsTrigger>
+      </TabsList>
+      <TabsContent value="by-role">
+        <ByRoleTab />
+      </TabsContent>
+      <TabsContent value="by-user">
+        <ByUserTab />
+      </TabsContent>
+    </Tabs>
   );
 }
 
@@ -281,14 +303,17 @@ function ByRoleTab() {
   );
 
   const getAssignedKeys = useCallback(
-    (roleKey: string) => capabilities.filter((c) => c.roles.includes(roleKey as AppRole)).map((c) => c.key),
+    (roleKey: string) =>
+      capabilities.filter((c) => c.roles.includes(roleKey as AppRole)).map((c) => c.key),
     [capabilities],
   );
 
   async function onAssign(roleKey: string, capKeys: string[]) {
     const changes = capKeys.map((key) => {
       const cap = capabilities.find((c) => c.key === key);
-      const roles = cap?.roles.includes(roleKey as AppRole) ? cap.roles : [...(cap?.roles ?? []), roleKey as AppRole];
+      const roles = cap?.roles.includes(roleKey as AppRole)
+        ? cap.roles
+        : [...(cap?.roles ?? []), roleKey as AppRole];
       return { key, roles };
     });
     await patchCapabilities(changes);
@@ -320,7 +345,10 @@ function ByRoleTab() {
   }
 
   async function resetDefaults() {
-    if (!confirm("Reset ALL capabilities to system defaults for every role? This cannot be undone.")) return;
+    if (
+      !confirm("Reset ALL capabilities to system defaults for every role? This cannot be undone.")
+    )
+      return;
     setSaving(true);
     try {
       await api.put("/portal-settings/capabilities", { value: [] });
@@ -389,14 +417,17 @@ function ByUserTab() {
         api.get<OverrideRow[]>("/user-capability-overrides").catch(() => [] as OverrideRow[]),
       ]);
       const rolesByUser = new Map<string, string[]>();
-      for (const r of rls) rolesByUser.set(r.user_id, [...(rolesByUser.get(r.user_id) ?? []), r.role]);
+      for (const r of rls)
+        rolesByUser.set(r.user_id, [...(rolesByUser.get(r.user_id) ?? []), r.role]);
       // Admin users are excluded — they already have every capability, no
       // need to individually grant them anything extra.
       const nonAdmin = profs
         .filter((p) => !(rolesByUser.get(p.id) ?? []).includes("admin"))
         .map((p) => ({ id: p.id, name: p.full_name || p.email || p.id }));
       setUsers(nonAdmin);
-      setCapabilities(capsRes.value?.length ? mergeCapabilities(capsRes.value) : DEFAULT_CAPABILITIES);
+      setCapabilities(
+        capsRes.value?.length ? mergeCapabilities(capsRes.value) : DEFAULT_CAPABILITIES,
+      );
       setOverrides(overridesRes);
     } catch {
       toast.error("Failed to load users/overrides");
@@ -450,9 +481,9 @@ function ByUserTab() {
     <div className="rounded-xl border bg-card p-5 mt-4">
       <p className="text-xs text-muted-foreground mb-4">
         Grant one specific staff member an extra capability beyond what their role(s) already give
-        them — additive only, never removes anything their role grants. Admin accounts aren't
-        listed since they already have every capability. Enforcement is instant server-side, but a
-        granted capability only shows up in that user's own interface after their next login.
+        them — additive only, never removes anything their role grants. Admin accounts aren't listed
+        since they already have every capability. Enforcement is instant server-side, but a granted
+        capability only shows up in that user's own interface after their next login.
       </p>
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>

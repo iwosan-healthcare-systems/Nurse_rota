@@ -51,7 +51,6 @@ export interface ApiUser {
   capability_overrides: string[];
 }
 
-
 interface AuthCtx {
   user: ApiUser | null;
   roles: AppRole[];
@@ -158,7 +157,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then(({ value }) => {
         if (Array.isArray(value)) setCapabilities(value);
       })
-      .catch(() => {/* non-critical */});
+      .catch(() => {
+        /* non-critical */
+      });
   }, []);
 
   // Re-fetch capabilities from DB when the permissions page saves.
@@ -189,7 +190,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       api
         .get<RoleDef[]>("/roles")
         .then((rows) => setAllRoles(rows))
-        .catch(() => {/* non-critical — roleLabel falls back to ROLE_LABELS/raw key */});
+        .catch(() => {
+          /* non-critical — roleLabel falls back to ROLE_LABELS/raw key */
+        });
     };
     fetchRoles();
     window.addEventListener("roles-changed", fetchRoles);
@@ -317,7 +320,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // chief_matron and head_nurse are deliberately NOT in this list: they work
   // regular shifts and are expected to see their personal schedule alongside
   // their management alerts (see NurseDashboard).
-  const ALWAYS_MANAGEMENT_ROLES: readonly string[] = ["admin", "cno", "hr_admin", "service_support"];
+  const ALWAYS_MANAGEMENT_ROLES: readonly string[] = [
+    "admin",
+    "cno",
+    "hr_admin",
+    "service_support",
+  ];
   const isStaffAccount = !!(user?.nurse_id && ar && !ALWAYS_MANAGEMENT_ROLES.includes(ar));
 
   const roleLabel = (key: string) =>
@@ -408,8 +416,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canApproveLocum: cap("approve_locum", ["admin", "cno"]),
     canSendLocumInvites: cap("send_locum_invites", ["admin", "chief_matron"]),
     canViewLocumHours: cap("view_locum_hours", ["admin", "cno", "chief_matron", "hr_admin"]),
-    canViewLocumRequests: cap("view_locum_requests", ["admin", "cno", "chief_matron", "head_nurse"]),
-    canViewReports: cap("view_reports", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin", "service_support"]),
+    canViewLocumRequests: cap("view_locum_requests", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+    ]),
+    canViewReports: cap("view_reports", [
+      "admin",
+      "cno",
+      "chief_matron",
+      "head_nurse",
+      "hr_admin",
+      "service_support",
+    ]),
     canViewAudit: cap("view_audit", ["admin", "service_support"]),
     signOut,
   };
@@ -457,8 +477,8 @@ export const ROLE_LABELS: Record<SystemRole, string> = {
 
 export const ROLE_DESCRIPTIONS: Record<SystemRole, string> = {
   admin: "Full system access — manage staff, wards, users and all settings",
-  cno: "Approve rotas, manage shift switches and oversee all facilities",
-  chief_matron: "Review and approve rotas, manage leave and ward staffing",
+  cno: "Publish rotas, manage shift switches and oversee all facilities",
+  chief_matron: "Edit rotas, manage leave and ward staffing",
   head_nurse: "Provide coverage across wards, manage schedules and approve leave",
   hr_admin: "Manage staff records, leave requests and HR administration",
   service_support: "Manage user accounts, reset passwords, assign roles and view audit logs",

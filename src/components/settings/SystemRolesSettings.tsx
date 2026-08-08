@@ -1,44 +1,25 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { api } from "@/lib/api";
-import { useAuth, type RoleDef } from "@/lib/auth-context";
-import { Modal } from "./staff";
+import { type RoleDef } from "@/lib/auth-context";
+import { Modal } from "@/routes/_app/staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import { Plus, Pencil, Trash2, ShieldAlert, Shield, Lock } from "lucide-react";
-
-export const Route = createFileRoute("/_app/roles")({
-  head: () => ({
-    meta: [
-      { title: "System Roles — Nurses Rota" },
-      { name: "description", content: "Create and manage custom system roles." },
-    ],
-  }),
-  component: RolesPage,
-});
+import { Plus, Pencil, Trash2, Shield, Lock } from "lucide-react";
 
 const KEY_RE = /^[a-z][a-z0-9_]{1,49}$/;
 
 const ROLES_CHANGED_EVENT = "roles-changed";
 
-function RolesPage() {
-  const navigate = useNavigate();
-  const { canManageRoles, loading } = useAuth();
+export function SystemRolesSettings() {
   const qc = useQueryClient();
 
   const [showCreate, setShowCreate] = useState(false);
   const [editTarget, setEditTarget] = useState<RoleDef | null>(null);
 
-  useEffect(() => {
-    if (!loading && !canManageRoles) navigate({ to: "/" });
-  }, [loading, canManageRoles, navigate]);
-
   const { data: roles = [], isLoading } = useQuery<RoleDef[]>({
     queryKey: ["roles-admin"],
-    enabled: canManageRoles,
     queryFn: () => api.get<RoleDef[]>("/roles"),
   });
 
@@ -59,30 +40,20 @@ function RolesPage() {
     }
   }
 
-  if (!canManageRoles) {
-    return (
-      <div className="py-20 text-center">
-        <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">Administrator access required.</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="System Roles"
-        subtitle="Create custom roles, then assign their permissions and menu access"
-        actions={
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90"
-          >
-            <Plus className="h-4 w-4" /> New Role
-          </button>
-        }
-      />
+    <div className="space-y-4 mt-4">
+      <div className="flex items-start justify-between gap-4">
+        <p className="text-xs text-muted-foreground">
+          Create custom roles, then assign their permissions and menu access in the tabs above.
+        </p>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="inline-flex items-center gap-2 h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 shrink-0"
+        >
+          <Plus className="h-4 w-4" /> New Role
+        </button>
+      </div>
 
       {isLoading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
@@ -108,7 +79,9 @@ function RolesPage() {
               <tbody>
                 {roles.map((role) => (
                   <tr key={role.key} className="border-t hover:bg-muted/30">
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{role.key}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
+                      {role.key}
+                    </td>
                     <td className="px-4 py-3 font-medium">
                       <div className="flex items-center gap-2">
                         {role.label}
@@ -119,7 +92,9 @@ function RolesPage() {
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-muted-foreground max-w-md">{role.description || "—"}</td>
+                    <td className="px-4 py-3 text-muted-foreground max-w-md">
+                      {role.description || "—"}
+                    </td>
                     <td className="px-4 py-3 text-muted-foreground tabular-nums">
                       {role.usage_count ?? 0}
                     </td>
@@ -159,15 +134,9 @@ function RolesPage() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        After creating a role, grant it capabilities in{" "}
-        <a href="/permissions" className="underline hover:text-foreground">
-          Permissions
-        </a>{" "}
-        and pages in{" "}
-        <a href="/menu-permissions" className="underline hover:text-foreground">
-          Menu Access
-        </a>
-        . A new role starts with no permissions and no menu access until you grant them.
+        After creating a role, grant it capabilities in the Permissions tab and pages in the Menu
+        Access tab above. A new role starts with no permissions and no menu access until you grant
+        them.
       </p>
 
       {showCreate && (

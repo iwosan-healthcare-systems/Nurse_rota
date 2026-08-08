@@ -20,7 +20,6 @@ import {
   UserCog,
   LogIn,
   Timer,
-  LayoutGrid,
   Loader2,
   ShieldAlert,
   AlertCircle,
@@ -31,7 +30,6 @@ import {
   ClipboardCheck,
   CalendarX,
   ArrowRightLeft,
-  Shield,
   Settings,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
@@ -74,14 +72,9 @@ const nav = [
   },
   { to: "/audit", label: "Audit Log", icon: ShieldCheck, roles: ["admin", "cno"] as AppRole[] },
   { to: "/users", label: "User Profiles", icon: UserCog, roles: ["admin"] as AppRole[] },
-  { to: "/permissions", label: "Permissions", icon: KeyRound, roles: ["admin"] as AppRole[] },
-  {
-    to: "/menu-permissions",
-    label: "Menu Access",
-    icon: LayoutGrid,
-    roles: ["admin"] as AppRole[],
-  },
-  { to: "/roles", label: "System Roles", icon: Shield, roles: ["admin"] as AppRole[] },
+  // Permissions, Menu Access, and System Roles all live as tabs inside
+  // System Settings now, rather than as separate nav entries — one
+  // admin-only page for every system-wide setting instead of four.
   {
     to: "/system-settings",
     label: "System Settings",

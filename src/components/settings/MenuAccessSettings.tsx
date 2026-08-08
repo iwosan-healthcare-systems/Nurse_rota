@@ -1,39 +1,18 @@
-/* eslint-disable prettier/prettier */
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PageHeader } from "@/components/PageHeader";
 import { useAuth, type AppRole } from "@/lib/auth-context";
 import { NAV_DEFINITIONS, ADMIN_LOCKED_KEYS, getEffectiveRoles } from "@/lib/menu-permissions";
 import { api } from "@/lib/api";
-import { RotateCcw, ShieldAlert } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { FlagTagAssignment, type TagEntity, type TagFlag } from "@/components/FlagTagAssignment";
 
-export const Route = createFileRoute("/_app/menu-permissions")({
-  head: () => ({
-    meta: [
-      { title: "Menu Access — Nurses Rota" },
-      {
-        name: "description",
-        content: "Control which sidebar menu items each role can see.",
-      },
-    ],
-  }),
-  component: MenuPermissionsPage,
-});
+export function MenuAccessSettings() {
+  const { allRoles, roleLabel } = useAuth();
 
-function MenuPermissionsPage() {
-  const navigate = useNavigate();
-  const { isAdmin, loading, allRoles, roleLabel } = useAuth();
-
-  // Stored as a diff against NAV_DEFINITIONS' defaults — same shape as
-  // before, only entries that differ from the default ever get written.
+  // Stored as a diff against NAV_DEFINITIONS' defaults — only entries that
+  // differ from the default ever get written.
   const [overrides, setOverrides] = useState<Record<string, AppRole[]>>({});
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!loading && !isAdmin) navigate({ to: "/" });
-  }, [loading, isAdmin, navigate]);
 
   useEffect(() => {
     api
@@ -69,7 +48,8 @@ function MenuPermissionsPage() {
   // AppShell so the sidebar re-fetches immediately.
   async function persist(mutate: (effective: Record<string, AppRole[]>) => void) {
     const effective: Record<string, AppRole[]> = {};
-    for (const def of NAV_DEFINITIONS) effective[def.key] = [...getEffectiveRoles(def.key, overrides)];
+    for (const def of NAV_DEFINITIONS)
+      effective[def.key] = [...getEffectiveRoles(def.key, overrides)];
     mutate(effective);
 
     const toStore: Record<string, AppRole[]> = {};
@@ -95,7 +75,8 @@ function MenuPermissionsPage() {
     try {
       await persist((effective) => {
         for (const navKey of navKeys) {
-          if (!effective[navKey].includes(roleKey)) effective[navKey] = [...effective[navKey], roleKey];
+          if (!effective[navKey].includes(roleKey))
+            effective[navKey] = [...effective[navKey], roleKey];
         }
       });
       toast.success("Menu access granted");
@@ -132,50 +113,37 @@ function MenuPermissionsPage() {
     }
   }
 
-  if (!isAdmin) {
-    return (
-      <div className="py-20 text-center">
-        <ShieldAlert className="h-10 w-10 mx-auto text-muted-foreground mb-3" />
-        <p className="text-sm text-muted-foreground">Administrator access required.</p>
-      </div>
-    );
-  }
-
   return (
-    <div className="space-y-6">
-      <PageHeader
-        title="Menu Access"
-        subtitle="Control which sidebar items each role can see"
-        actions={
-          <button
-            type="button"
-            onClick={resetDefaults}
-            disabled={saving}
-            title="Reset all roles to defaults"
-            className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-          >
-            <RotateCcw className="h-3.5 w-3.5" /> Reset to defaults
-          </button>
-        }
-      />
-
-      <div className="rounded-xl border bg-card p-5">
-        <FlagTagAssignment
-          entityPickerLabel="Role Tagging With"
-          entities={entities}
-          flagUniverse={flagUniverse}
-          getAssignedKeys={getAssignedKeys}
-          onAssign={onAssign}
-          onUnassign={onUnassign}
-          saving={saving}
-          searchPlaceholder="Search page name"
-        />
-        <p className="text-xs text-muted-foreground mt-4">
-          A page assigned to a role appears in that role's sidebar. Admin always sees every page
-          ({[...ADMIN_LOCKED_KEYS].length} pages are always admin-only regardless of this list) and
-          isn't shown here since tagging it would have no effect.
+    <div className="rounded-xl border bg-card p-5 mt-4">
+      <div className="flex items-start justify-between gap-4 mb-4">
+        <p className="text-xs text-muted-foreground">
+          Control which sidebar items each role can see.
         </p>
+        <button
+          type="button"
+          onClick={resetDefaults}
+          disabled={saving}
+          title="Reset all roles to defaults"
+          className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50 shrink-0"
+        >
+          <RotateCcw className="h-3.5 w-3.5" /> Reset to defaults
+        </button>
       </div>
+      <FlagTagAssignment
+        entityPickerLabel="Role Tagging With"
+        entities={entities}
+        flagUniverse={flagUniverse}
+        getAssignedKeys={getAssignedKeys}
+        onAssign={onAssign}
+        onUnassign={onUnassign}
+        saving={saving}
+        searchPlaceholder="Search page name"
+      />
+      <p className="text-xs text-muted-foreground mt-4">
+        A page assigned to a role appears in that role's sidebar. Admin always sees every page (
+        {[...ADMIN_LOCKED_KEYS].length} pages are always admin-only regardless of this list) and
+        isn't shown here since tagging it would have no effect.
+      </p>
     </div>
   );
 }

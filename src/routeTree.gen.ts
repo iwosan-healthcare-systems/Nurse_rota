@@ -19,10 +19,7 @@ import { Route as AppStaffRouteImport } from './routes/_app/staff'
 import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift-history'
 import { Route as AppShiftRouteImport } from './routes/_app/shift'
 import { Route as AppRotaRouteImport } from './routes/_app/rota'
-import { Route as AppRolesRouteImport } from './routes/_app/roles'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
-import { Route as AppPermissionsRouteImport } from './routes/_app/permissions'
-import { Route as AppMenuPermissionsRouteImport } from './routes/_app/menu-permissions'
 import { Route as AppLocumRouteImport } from './routes/_app/locum'
 import { Route as AppLeaveEntitlementsRouteImport } from './routes/_app/leave-entitlements'
 import { Route as AppLeaveRouteImport } from './routes/_app/leave'
@@ -78,24 +75,9 @@ const AppRotaRoute = AppRotaRouteImport.update({
   path: '/rota',
   getParentRoute: () => AppRoute,
 } as any)
-const AppRolesRoute = AppRolesRouteImport.update({
-  id: '/roles',
-  path: '/roles',
-  getParentRoute: () => AppRoute,
-} as any)
 const AppReportsRoute = AppReportsRouteImport.update({
   id: '/reports',
   path: '/reports',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppPermissionsRoute = AppPermissionsRouteImport.update({
-  id: '/permissions',
-  path: '/permissions',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppMenuPermissionsRoute = AppMenuPermissionsRouteImport.update({
-  id: '/menu-permissions',
-  path: '/menu-permissions',
   getParentRoute: () => AppRoute,
 } as any)
 const AppLocumRoute = AppLocumRouteImport.update({
@@ -132,10 +114,7 @@ export interface FileRoutesByFullPath {
   '/leave': typeof AppLeaveRoute
   '/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/locum': typeof AppLocumRoute
-  '/menu-permissions': typeof AppMenuPermissionsRoute
-  '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
-  '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
@@ -151,10 +130,7 @@ export interface FileRoutesByTo {
   '/leave': typeof AppLeaveRoute
   '/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/locum': typeof AppLocumRoute
-  '/menu-permissions': typeof AppMenuPermissionsRoute
-  '/permissions': typeof AppPermissionsRoute
   '/reports': typeof AppReportsRoute
-  '/roles': typeof AppRolesRoute
   '/rota': typeof AppRotaRoute
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
@@ -173,10 +149,7 @@ export interface FileRoutesById {
   '/_app/leave': typeof AppLeaveRoute
   '/_app/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/_app/locum': typeof AppLocumRoute
-  '/_app/menu-permissions': typeof AppMenuPermissionsRoute
-  '/_app/permissions': typeof AppPermissionsRoute
   '/_app/reports': typeof AppReportsRoute
-  '/_app/roles': typeof AppRolesRoute
   '/_app/rota': typeof AppRotaRoute
   '/_app/shift': typeof AppShiftRoute
   '/_app/shift-history': typeof AppShiftHistoryRoute
@@ -196,10 +169,7 @@ export interface FileRouteTypes {
     | '/leave'
     | '/leave-entitlements'
     | '/locum'
-    | '/menu-permissions'
-    | '/permissions'
     | '/reports'
-    | '/roles'
     | '/rota'
     | '/shift'
     | '/shift-history'
@@ -215,10 +185,7 @@ export interface FileRouteTypes {
     | '/leave'
     | '/leave-entitlements'
     | '/locum'
-    | '/menu-permissions'
-    | '/permissions'
     | '/reports'
-    | '/roles'
     | '/rota'
     | '/shift'
     | '/shift-history'
@@ -236,10 +203,7 @@ export interface FileRouteTypes {
     | '/_app/leave'
     | '/_app/leave-entitlements'
     | '/_app/locum'
-    | '/_app/menu-permissions'
-    | '/_app/permissions'
     | '/_app/reports'
-    | '/_app/roles'
     | '/_app/rota'
     | '/_app/shift'
     | '/_app/shift-history'
@@ -327,32 +291,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRotaRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/roles': {
-      id: '/_app/roles'
-      path: '/roles'
-      fullPath: '/roles'
-      preLoaderRoute: typeof AppRolesRouteImport
-      parentRoute: typeof AppRoute
-    }
     '/_app/reports': {
       id: '/_app/reports'
       path: '/reports'
       fullPath: '/reports'
       preLoaderRoute: typeof AppReportsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/permissions': {
-      id: '/_app/permissions'
-      path: '/permissions'
-      fullPath: '/permissions'
-      preLoaderRoute: typeof AppPermissionsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/menu-permissions': {
-      id: '/_app/menu-permissions'
-      path: '/menu-permissions'
-      fullPath: '/menu-permissions'
-      preLoaderRoute: typeof AppMenuPermissionsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/locum': {
@@ -399,10 +342,7 @@ interface AppRouteChildren {
   AppLeaveRoute: typeof AppLeaveRoute
   AppLeaveEntitlementsRoute: typeof AppLeaveEntitlementsRoute
   AppLocumRoute: typeof AppLocumRoute
-  AppMenuPermissionsRoute: typeof AppMenuPermissionsRoute
-  AppPermissionsRoute: typeof AppPermissionsRoute
   AppReportsRoute: typeof AppReportsRoute
-  AppRolesRoute: typeof AppRolesRoute
   AppRotaRoute: typeof AppRotaRoute
   AppShiftRoute: typeof AppShiftRoute
   AppShiftHistoryRoute: typeof AppShiftHistoryRoute
@@ -419,10 +359,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppLeaveRoute: AppLeaveRoute,
   AppLeaveEntitlementsRoute: AppLeaveEntitlementsRoute,
   AppLocumRoute: AppLocumRoute,
-  AppMenuPermissionsRoute: AppMenuPermissionsRoute,
-  AppPermissionsRoute: AppPermissionsRoute,
   AppReportsRoute: AppReportsRoute,
-  AppRolesRoute: AppRolesRoute,
   AppRotaRoute: AppRotaRoute,
   AppShiftRoute: AppShiftRoute,
   AppShiftHistoryRoute: AppShiftHistoryRoute,

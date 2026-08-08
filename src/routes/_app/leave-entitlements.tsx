@@ -3,7 +3,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useState } from "react";
-import { AlertTriangle, Pencil, PlaneTakeoff, History, Search, Settings2, Trash2 } from "lucide-react";
+import { AlertTriangle, Pencil, PlaneTakeoff, History, Search } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
@@ -62,33 +62,17 @@ type Adjustment = {
   created_by_name: string | null;
   created_at: string;
 };
-type RoleGroupOption = { key: string; label: string };
-type EntitlementOverride = {
-  id: string;
-  scope: "individual" | "role";
-  nurse_id: string | null;
-  nurse_name: string | null;
-  role: string | null;
-  type: string;
-  days: string | number;
-  created_by_name: string | null;
-  created_at: string;
-  updated_at: string;
-};
 
 function fmtDate(d: string) {
-  return new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(d).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
 }
 
 function LeaveEntitlementsPage() {
-  const {
-    isAdmin,
-    activeRole,
-    nurseId,
-    fullName,
-    canManageLeaveEntitlements,
-    canManageLeaveEntitlementCaps,
-  } = useAuth();
+  const { isAdmin, activeRole, nurseId, fullName, canManageLeaveEntitlements } = useAuth();
   // Viewing the admin-wide table is a plain role check, matching the
   // backend's bulk-listing route (GET /leave-entitlements) — unchanged by
   // the Permissions matrix, since that only governs who can ADJUST a
@@ -108,10 +92,7 @@ function LeaveEntitlementsPage() {
         }
       />
       {canManage ? (
-        <ManageEntitlements
-          canAdjust={canManageLeaveEntitlements}
-          canManageCaps={canManageLeaveEntitlementCaps}
-        />
+        <ManageEntitlements canAdjust={canManageLeaveEntitlements} />
       ) : (
         <OwnEntitlements nurseId={nurseId} fullName={fullName} />
       )}
@@ -121,7 +102,13 @@ function LeaveEntitlementsPage() {
 
 // ── Staff self-view — read-only, own record only ────────────────────────────
 
-function OwnEntitlements({ nurseId, fullName }: { nurseId: string | null; fullName: string | null }) {
+function OwnEntitlements({
+  nurseId,
+  fullName,
+}: {
+  nurseId: string | null;
+  fullName: string | null;
+}) {
   const { data: usage, isLoading } = useQuery<EntitlementUsage>({
     queryKey: ["leave-entitlements", nurseId],
     enabled: !!nurseId,
@@ -158,7 +145,8 @@ function OwnEntitlements({ nurseId, fullName }: { nurseId: string | null; fullNa
               Resets {e.period === "month" ? "every calendar month" : "every calendar year (Jan 1)"}
             </p>
             <p className="text-3xl font-bold mt-3 tabular-nums">
-              {e.remaining} <span className="text-base font-normal text-muted-foreground">left</span>
+              {e.remaining}{" "}
+              <span className="text-base font-normal text-muted-foreground">left</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
               {e.used} of {e.cap} day(s) used {e.period === "month" ? "this month" : "this year"}
@@ -181,13 +169,7 @@ function OwnEntitlements({ nurseId, fullName }: { nurseId: string | null; fullNa
 
 // ── Admin/HR management view ─────────────────────────────────────────────────
 
-function ManageEntitlements({
-  canAdjust,
-  canManageCaps,
-}: {
-  canAdjust: boolean;
-  canManageCaps: boolean;
-}) {
+function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
   const qc = useQueryClient();
   const [facility, setFacility] = useState("");
   const [adjustingCell, setAdjustingCell] = useState<{
@@ -276,13 +258,19 @@ function ManageEntitlements({
             <tbody>
               {isLoading ? (
                 <tr>
-                  <td colSpan={2 + ENTITLEMENT_TYPES.length} className="px-4 py-8 text-center text-muted-foreground">
+                  <td
+                    colSpan={2 + ENTITLEMENT_TYPES.length}
+                    className="px-4 py-8 text-center text-muted-foreground"
+                  >
                     Loading…
                   </td>
                 </tr>
               ) : visibleRows.length === 0 ? (
                 <tr>
-                  <td colSpan={2 + ENTITLEMENT_TYPES.length} className="px-4 py-8 text-center text-muted-foreground">
+                  <td
+                    colSpan={2 + ENTITLEMENT_TYPES.length}
+                    className="px-4 py-8 text-center text-muted-foreground"
+                  >
                     {search.trim() ? "No staff match your search." : "No staff found."}
                   </td>
                 </tr>
@@ -296,7 +284,12 @@ function ManageEntitlements({
                     </td>
                     {ENTITLEMENT_TYPES.map((t) => {
                       const e = r.entitlements[t];
-                      if (!e) return <td key={t} className="px-4 py-3 text-center">—</td>;
+                      if (!e)
+                        return (
+                          <td key={t} className="px-4 py-3 text-center">
+                            —
+                          </td>
+                        );
                       const cls = e.exhausted
                         ? "bg-rose-100 text-rose-700"
                         : e.remaining <= Math.max(1, Math.ceil(e.cap * 0.2))
@@ -340,8 +333,6 @@ function ManageEntitlements({
         </div>
       </div>
 
-      {canManageCaps && <EntitlementCapSettings nurses={rows} />}
-
       {adjustingCell && (
         <AdjustEntitlementModal
           nurseId={adjustingCell.nurseId}
@@ -355,251 +346,6 @@ function ManageEntitlements({
         />
       )}
     </>
-  );
-}
-
-// ── Admin-only: change the CAP itself (not usage) — per individual or per
-// job-role group. Deliberately separate from the pencil-icon adjustment
-// feature above: that credits days already taken; this changes how many
-// days someone is entitled to in the first place. ─────────────────────────
-
-function EntitlementCapSettings({
-  nurses,
-}: {
-  nurses: { nurse_id: string; name: string }[];
-}) {
-  const qc = useQueryClient();
-  const [scope, setScope] = useState<"individual" | "role">("individual");
-  const [nurseId, setNurseId] = useState("");
-  const [role, setRole] = useState("");
-  const [type, setType] = useState<string>(ENTITLEMENT_TYPES[0]);
-  const [days, setDays] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [nurseSearch, setNurseSearch] = useState("");
-
-  const { data: roleGroups = [] } = useQuery<RoleGroupOption[]>({
-    queryKey: ["leave-entitlement-role-groups"],
-    queryFn: () => api.get<RoleGroupOption[]>("/leave-entitlements/role-groups"),
-  });
-  const { data: overrides = [], isLoading } = useQuery<EntitlementOverride[]>({
-    queryKey: ["leave-entitlement-overrides"],
-    queryFn: () => api.get<EntitlementOverride[]>("/leave-entitlements/overrides"),
-  });
-
-  const matchingNurses = nurseSearch.trim()
-    ? nurses.filter((n) => n.name.toLowerCase().includes(nurseSearch.trim().toLowerCase())).slice(0, 8)
-    : [];
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    const daysNum = Number(days);
-    if (!days || Number.isNaN(daysNum) || daysNum < 0) {
-      toast.error("Enter a valid number of days (0 or more).");
-      return;
-    }
-    if (scope === "individual" && !nurseId) {
-      toast.error("Select a staff member.");
-      return;
-    }
-    if (scope === "role" && !role) {
-      toast.error("Select a job role.");
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.post("/leave-entitlements/overrides", {
-        scope,
-        nurse_id: scope === "individual" ? nurseId : undefined,
-        role: scope === "role" ? role : undefined,
-        type,
-        days: daysNum,
-      });
-      toast.success("Entitlement cap saved");
-      setDays("");
-      setNurseId("");
-      setNurseSearch("");
-      setRole("");
-      qc.invalidateQueries({ queryKey: ["leave-entitlement-overrides"] });
-      qc.invalidateQueries({ queryKey: ["leave-entitlements-all"] });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to save cap");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function remove(id: string) {
-    try {
-      await api.del(`/leave-entitlements/overrides/${id}`);
-      toast.success("Reverted to system default");
-      qc.invalidateQueries({ queryKey: ["leave-entitlement-overrides"] });
-      qc.invalidateQueries({ queryKey: ["leave-entitlements-all"] });
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to remove override");
-    }
-  }
-
-  const selectedNurseName = nurses.find((n) => n.nurse_id === nurseId)?.name;
-
-  return (
-    <div className="mt-8 bg-card border rounded-xl shadow-soft p-5">
-      <div className="flex items-center gap-2 mb-1">
-        <Settings2 className="h-4 w-4 text-muted-foreground" />
-        <h2 className="text-sm font-semibold">Entitlement Caps (Admin)</h2>
-      </div>
-      <p className="text-xs text-muted-foreground mb-4">
-        Change how many days someone is entitled to, rather than crediting days already used. An
-        individual override always wins over a job-role override, which wins over the system
-        default. A role override applies to every Day/non-Day variant of that role together.
-      </p>
-
-      <form onSubmit={submit} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end mb-5">
-        <div>
-          <label className="text-xs font-medium block mb-1">Applies to</label>
-          <div className="flex rounded-md border overflow-hidden h-9 text-sm">
-            <button
-              type="button"
-              onClick={() => setScope("individual")}
-              className={`flex-1 ${scope === "individual" ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
-            >
-              Individual
-            </button>
-            <button
-              type="button"
-              onClick={() => setScope("role")}
-              className={`flex-1 ${scope === "role" ? "bg-primary text-primary-foreground" : "bg-card hover:bg-muted"}`}
-            >
-              Job Role
-            </button>
-          </div>
-        </div>
-
-        {scope === "individual" ? (
-          <div className="relative sm:col-span-1">
-            <label className="text-xs font-medium block mb-1">Staff member</label>
-            <input
-              type="text"
-              value={nurseId ? (selectedNurseName ?? "") : nurseSearch}
-              onChange={(e) => {
-                setNurseId("");
-                setNurseSearch(e.target.value);
-              }}
-              placeholder="Search by name…"
-              className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-            {matchingNurses.length > 0 && !nurseId && (
-              <div className="absolute z-10 mt-1 w-full bg-card border rounded-md shadow-lg max-h-48 overflow-y-auto">
-                {matchingNurses.map((n) => (
-                  <button
-                    type="button"
-                    key={n.nurse_id}
-                    onClick={() => {
-                      setNurseId(n.nurse_id);
-                      setNurseSearch("");
-                    }}
-                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-muted"
-                  >
-                    {n.name}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <div>
-            <label className="text-xs font-medium block mb-1">Job role</label>
-            <select
-              value={role}
-              onChange={(e) => setRole(e.target.value)}
-              className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-            >
-              <option value="">Select…</option>
-              {roleGroups.map((g) => (
-                <option key={g.key} value={g.key}>
-                  {g.label}
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        <div>
-          <label className="text-xs font-medium block mb-1">Leave type</label>
-          <select
-            value={type}
-            onChange={(e) => setType(e.target.value)}
-            className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-          >
-            {ENTITLEMENT_TYPES.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </div>
-
-        <div className="flex gap-2">
-          <div className="flex-1">
-            <label className="text-xs font-medium block mb-1">Days</label>
-            <input
-              type="number"
-              min={0}
-              step="1"
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-              placeholder="e.g. 18"
-              className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={busy}
-            className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm font-medium disabled:opacity-50 shrink-0"
-          >
-            {busy ? "Saving…" : "Save"}
-          </button>
-        </div>
-      </form>
-
-      {isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading current overrides…</p>
-      ) : overrides.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          No overrides set — every staff member is currently on the system default caps.
-        </p>
-      ) : (
-        <div className="space-y-1.5">
-          {overrides.map((o) => (
-            <div
-              key={o.id}
-              className="flex items-center justify-between gap-3 text-xs border rounded-md px-3 py-2 bg-muted/30"
-            >
-              <div className="min-w-0">
-                <span className="font-medium">
-                  {o.scope === "individual"
-                    ? (o.nurse_name ?? "Unknown staff")
-                    : (roleGroups.find((g) => g.key === o.role)?.label ?? o.role)}
-                </span>
-                <span className="text-muted-foreground"> — {o.type}: </span>
-                <span className="font-semibold tabular-nums">{o.days} day(s)</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · set by {o.created_by_name ?? "Unknown"} on {fmtDate(o.updated_at)}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => remove(o.id)}
-                title="Remove override (revert to system default)"
-                className="text-muted-foreground hover:text-rose-600 shrink-0"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
   );
 }
 
@@ -729,7 +475,9 @@ function AdjustEntitlementModal({
               {historyForType.map((a) => (
                 <div key={a.id} className="text-xs border rounded-md px-2.5 py-1.5 bg-muted/30">
                   <div className="flex items-center justify-between">
-                    <span className={`font-semibold ${Number(a.days) < 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                    <span
+                      className={`font-semibold ${Number(a.days) < 0 ? "text-rose-600" : "text-emerald-600"}`}
+                    >
                       {Number(a.days) > 0 ? "+" : ""}
                       {a.days} day(s)
                     </span>
@@ -750,7 +498,11 @@ function AdjustEntitlementModal({
         )}
 
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className="h-9 px-4 rounded-md border bg-card text-sm">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
             Cancel
           </button>
           <button

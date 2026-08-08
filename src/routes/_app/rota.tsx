@@ -1299,7 +1299,7 @@ function RotaPage() {
         actor_name: user?.email ?? null,
       })
       .catch(() => {});
-    toast.success("Submitted to Chief Matron");
+    toast.success("Submitted for HR review");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
   }
@@ -1879,7 +1879,7 @@ function RotaPage() {
           actor_name: user?.email ?? null,
         })
         .catch(() => {});
-      toast.success(`${labels[key]} schedule submitted to Chief Matron`);
+      toast.success(`${labels[key]} schedule submitted for HR review`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
     } catch {
