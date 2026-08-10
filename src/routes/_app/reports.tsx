@@ -35,7 +35,7 @@ import {
   isInternType,
   isNADayType,
   enforceMinima,
-  summariseViolations,
+  groupViolationsByDay,
   type WardInput,
   type NurseInput,
   type DraftAssignment,
@@ -161,7 +161,15 @@ type LeaveRequest = {
   from_date: string;
   to_date: string;
   status: "Pending" | "Approved" | "Rejected" | "Expired" | "Reverted";
-  type: "Sick" | "Annual" | "Emergency" | "Public Holiday" | "Swap" | "Study Leave" | "Compassionate Leave" | "Leave of Absence";
+  type:
+    | "Sick"
+    | "Annual"
+    | "Emergency"
+    | "Public Holiday"
+    | "Swap"
+    | "Study Leave"
+    | "Compassionate Leave"
+    | "Leave of Absence";
   reason: string | null;
   created_at: string;
   rota_stage_at_request: "no_rota" | "draft" | "published" | null;
@@ -257,6 +265,19 @@ function fmtDate(d: string) {
   });
 }
 
+// Compact "D/M (actual/required)" per day, comma-joined — used in the Safety
+// Violations tables so each shift/role row still fits on one line while
+// showing exactly which dates fell short and by how much, instead of only
+// the single worst day across the whole period.
+function formatShortfallDays(days: { date: string; actual: number }[], required: number): string {
+  return days
+    .map((d) => {
+      const dt = new Date(d.date.slice(0, 10) + "T00:00:00");
+      return `${dt.getDate()}/${dt.getMonth() + 1} (${d.actual}/${required})`;
+    })
+    .join(", ");
+}
+
 function dateRange(start: string, end: string): string[] {
   const out: string[] = [];
   const cur = new Date(start.slice(0, 10) + "T00:00:00");
@@ -285,7 +306,10 @@ function groupArchiveWindows(
 ): ArchiveWindow[] {
   if (!rows.length) return [];
   const byKey = new Map<string, ArchiveAssignment[]>();
-  const keyMeta = new Map<string, { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }>();
+  const keyMeta = new Map<
+    string,
+    { ward: string | null; facility: string | null; roleGroup: FacilityWideGroup | null }
+  >();
 
   for (const row of rows) {
     const fac = nurseToFacility.get(row.nurse_id) ?? null;
@@ -321,7 +345,8 @@ function groupArchiveWindows(
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
       const spanDays = Math.round(
-        (new Date(sorted[i].shift_date).getTime() - new Date(cluster[0].shift_date).getTime()) / 86400000,
+        (new Date(sorted[i].shift_date).getTime() - new Date(cluster[0].shift_date).getTime()) /
+          86400000,
       );
       if (diff > 14 || spanDays >= 28) {
         windows.push(makeArchiveWindow(cluster, ward, facility, roleGroup));
@@ -387,7 +412,9 @@ function ReportsContent() {
 
   // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
   const canFilterReportFacility = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
-  const lockedReportFacility: string | null = canFilterReportFacility ? null : (nurseFacility ?? null);
+  const lockedReportFacility: string | null = canFilterReportFacility
+    ? null
+    : (nurseFacility ?? null);
   const [selectedReportFacility, setSelectedReportFacility] = useState("");
   const reportFacility: string | null = lockedReportFacility ?? (selectedReportFacility || null);
 
@@ -503,9 +530,7 @@ function ReportsContent() {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
-      return api.get<ArchiveAssignment[]>(
-        `/shift-assignments?status=published&from=${cutoff}`,
-      );
+      return api.get<ArchiveAssignment[]>(`/shift-assignments?status=published&from=${cutoff}`);
     },
     enabled: tab === "schedules",
   });
@@ -533,9 +558,7 @@ function ReportsContent() {
   // Leave requests scoped to the same facility set — CNO/admin see all, others see their own.
   const scopedLeave = useMemo(
     () =>
-      reportFacility
-        ? leave.filter((l) => l.nurse_id && scopedNurseIds.has(l.nurse_id))
-        : leave,
+      reportFacility ? leave.filter((l) => l.nurse_id && scopedNurseIds.has(l.nurse_id)) : leave,
     [leave, scopedNurseIds, reportFacility],
   );
   const reportLeaveOnly = useMemo(
@@ -572,13 +595,7 @@ function ReportsContent() {
       data = data.filter((l) => !l.is_swap && !l.is_leave);
     }
     return data;
-  }, [
-    scopedShiftLogs,
-    hoursRange,
-    hoursStatusFilter,
-    hoursShiftTypeFilter,
-    hoursCategoryFilter,
-  ]);
+  }, [scopedShiftLogs, hoursRange, hoursStatusFilter, hoursShiftTypeFilter, hoursCategoryFilter]);
 
   const filteredLocumRequests = useMemo(() => {
     let data = scopedLocumRequests;
@@ -592,7 +609,8 @@ function ReportsContent() {
     if (locumReqRange.from)
       data = data.filter((r) => r.shift_date.slice(0, 10) >= locumReqRange.from);
     if (locumReqRange.to) data = data.filter((r) => r.shift_date.slice(0, 10) <= locumReqRange.to);
-    if (locumReqStatusFilter !== "all") data = data.filter((r) => r.status === locumReqStatusFilter);
+    if (locumReqStatusFilter !== "all")
+      data = data.filter((r) => r.status === locumReqStatusFilter);
     if (locumReqShiftFilter !== "all") data = data.filter((r) => r.shift === locumReqShiftFilter);
     return data;
   }, [scopedLocumRequestsAll, locumReqRange, locumReqStatusFilter, locumReqShiftFilter]);
@@ -857,7 +875,12 @@ function ReportsContent() {
     }
     const order = [...counts.keys()].sort();
     return [...counts.entries()]
-      .map(([ward, count]) => ({ key: ward, label: ward, value: count, color: colorForKey(ward, order) }))
+      .map(([ward, count]) => ({
+        key: ward,
+        label: ward,
+        value: count,
+        color: colorForKey(ward, order),
+      }))
       .sort((a, b) => b.value - a.value);
   }, [scopedNurses, reportFacility]);
 
@@ -891,10 +914,7 @@ function ReportsContent() {
     () => new Map(nurses.map((n) => [n.id, n.facility])),
     [nurses],
   );
-  const archiveNurseToRole = useMemo(
-    () => new Map(nurses.map((n) => [n.id, n.role])),
-    [nurses],
-  );
+  const archiveNurseToRole = useMemo(() => new Map(nurses.map((n) => [n.id, n.role])), [nurses]);
 
   // Archive: group published assignments into facility+ward/roleGroup windows
   const allArchiveWindows = useMemo(
@@ -1101,7 +1121,8 @@ function ReportsContent() {
               : log
                 ? "In Progress"
                 : "Not Started",
-          "Hours Logged": missed || log?.hours_logged == null ? "" : Number(log.hours_logged).toFixed(2),
+          "Hours Logged":
+            missed || log?.hours_logged == null ? "" : Number(log.hours_logged).toFixed(2),
           Late: log?.is_late ? "Yes" : "No",
           "Late (mins)": log?.late_minutes ?? "",
           "Late Reason": log?.late_reason ?? "",
@@ -1145,7 +1166,12 @@ function ReportsContent() {
         "Requested At": new Date(r.created_at).toLocaleString("en-GB"),
       }));
       const wb = xlsWorkbook();
-      xlsAddJsonSheet(wb, rows, "Locum Requests", [12, 10, 10, 16, 12, 16, 20, 20, 20, 26, 20, 20, 20]);
+      xlsAddJsonSheet(
+        wb,
+        rows,
+        "Locum Requests",
+        [12, 10, 10, 16, 12, 16, 20, 20, 20, 26, 20, 20, 20],
+      );
       await xlsDownload(wb, `locum-requests-${todayYmd()}.xlsx`);
       toast.success("Exported");
     } catch {
@@ -1161,7 +1187,13 @@ function ReportsContent() {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
 
       const rotaStageLabel = (s: LeaveRequest["rota_stage_at_request"]) =>
-        s === "published" ? "After publish" : s === "draft" ? "Before submission" : s === "no_rota" ? "No rota yet" : "–";
+        s === "published"
+          ? "After publish"
+          : s === "draft"
+            ? "Before submission"
+            : s === "no_rota"
+              ? "No rota yet"
+              : "–";
 
       const leaveRows = leaveOnly.map((l) => ({
         Nurse: nurseMap.get(l.nurse_id ?? "")?.name ?? "Unknown",
@@ -1237,7 +1269,11 @@ function ReportsContent() {
   }
 
   function escHtml(s: string): string {
-    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    return s
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   // ── Staff directory print ─────────────────────────────────────────────────
@@ -1312,7 +1348,10 @@ ${staffToPrint
       const wb = xlsWorkbook();
       xlsAddJsonSheet(wb, rows, "Staff", [4, 28, 22, 18, 10]);
       const slug = ward ? `-${ward.replace(/\s+/g, "-").toLowerCase()}` : "";
-      await xlsDownload(wb, `staff-${effectiveDirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`);
+      await xlsDownload(
+        wb,
+        `staff-${effectiveDirFacility.toLowerCase()}${slug}-${todayYmd()}.xlsx`,
+      );
       toast.success("Exported");
     } catch {
       toast.error("Export failed");
@@ -1326,14 +1365,22 @@ ${staffToPrint
     // her role when this rota was published, and a role change must not make
     // her vanish from her own history. Facility-wide (roleGroup) windows are
     // filtered below using each row's own nurse_role snapshot instead.
-    const facilityNurses = win.facility ? nurses.filter((n) => n.facility === win.facility) : nurses;
+    const facilityNurses = win.facility
+      ? nurses.filter((n) => n.facility === win.facility)
+      : nurses;
     const facilityNurseIds = facilityNurses.map((n) => n.id);
 
     const wardParam =
       win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
     let allAssignments = facilityNurseIds.length
       ? await api.get<
-          { nurse_id: string; shift_date: string; shift: string; ward: string | null; nurse_role: string | null }[]
+          {
+            nurse_id: string;
+            shift_date: string;
+            shift: string;
+            ward: string | null;
+            nurse_role: string | null;
+          }[]
         >(
           `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published${wardParam}`,
         )
@@ -1385,16 +1432,18 @@ ${staffToPrint
     try {
       const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
+      const wardLabel = win.ward
+        ? ` — ${win.ward}`
+        : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const violationsHtml =
         violations.length > 0
-          ? `<h2 style="font-size:9pt;color:#b91c1c;margin:10px 0 4px;">Safety Violations — ward minimums not fully met</h2>
-<table style="margin-bottom:8px;"><thead><tr><th>Shift</th><th>Role</th><th>Required</th><th>Actual</th><th>Shortfall</th></tr></thead>
-<tbody>${summariseViolations(violations)
+          ? `<h2 style="font-size:9pt;color:#b91c1c;margin:10px 0 4px;">Safety Violations — days ward minimums were not met</h2>
+<table style="margin-bottom:8px;"><thead><tr><th>Shift</th><th>Role</th><th>Required</th><th style="text-align:left;">Days Not Met (Actual/Required)</th></tr></thead>
+<tbody>${groupViolationsByDay(violations)
               .map(
                 (v) =>
-                  `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td>${v.actual}</td><td>${v.required - v.actual}</td></tr>`,
+                  `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td style="text-align:left;white-space:normal;">${formatShortfallDays(v.days, v.required)}</td></tr>`,
               )
               .join("")}</tbody></table>`
           : "";
@@ -1468,7 +1517,9 @@ ${violationsHtml}
     try {
       const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
-      const wardLabel = win.ward ? ` — ${win.ward}` : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
+      const wardLabel = win.ward
+        ? ` — ${win.ward}`
+        : ` — ${win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff"}`;
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
       const title = `Nurse Rota: ${fmtDate(win.startDate)} — ${fmtDate(win.endDate)}${facilityLabel}${wardLabel}`;
       const headers = [
@@ -1487,29 +1538,36 @@ ${violationsHtml}
         ...dates.map((d) => assignMap.get(`${n.id}|${d}`) ?? ""),
       ]);
       const wb = xlsWorkbook();
-      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [22, 18, 14, ...dates.map(() => 5)]);
+      xlsAddAoaSheet(wb, [[title], [], headers, ...rowData], "Rota", [
+        22,
+        18,
+        14,
+        ...dates.map(() => 5),
+      ]);
       if (violations.length > 0) {
-        const summary = summariseViolations(violations);
+        const grouped = groupViolationsByDay(violations);
         xlsAddAoaSheet(
           wb,
           [
             [`Safety Violations — ${win.ward}${facilityLabel}`],
             [],
-            ["Shift", "Role", "Required", "Actual", "Shortfall"],
-            ...summary.map((v) => [
+            ["Shift", "Role", "Required", "Days Not Met (Actual/Required)"],
+            ...grouped.map((v) => [
               v.shift === "M" ? "Morning" : "Night",
               v.role === "na" ? "Nursing Assistant" : "Nurse",
               v.required,
-              v.actual,
-              v.required - v.actual,
+              formatShortfallDays(v.days, v.required),
             ]),
           ],
           "Safety Violations",
-          [12, 20, 10, 10, 10],
+          [12, 20, 10, 60],
         );
       }
       const slug = win.ward ? `-${win.ward.replace(/\s+/g, "-").toLowerCase()}` : "-coverage";
-      await xlsDownload(wb, `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`);
+      await xlsDownload(
+        wb,
+        `rota-archive-${win.startDate.slice(0, 10)}-to-${win.endDate.slice(0, 10)}${slug}.xlsx`,
+      );
     } catch {
       toast.error("Failed to generate Excel file");
     } finally {
@@ -1522,10 +1580,23 @@ ${violationsHtml}
     const uKey = `unified-${periodStart}`;
     setArchiveDownloading(uKey + "-pdf");
     try {
+      // Ward names (IP Ward, ER, GOPD, Operation Theatre, …) repeat across
+      // facilities, and "All Facilities" prints every facility's windows for
+      // the period into one document — so once more than one facility is
+      // actually present, each section label needs its facility appended or
+      // there's no way to tell, say, Ikeja's "IP Ward" section apart from
+      // Ikoyi's.
+      const distinctFacilities = [
+        ...new Set(periodWins.map((w) => w.facility).filter(Boolean)),
+      ] as string[];
+      const isMultiFacility = distinctFacilities.length > 1;
       const allData = await Promise.all(
         periodWins.map(async (win) => {
           const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
-          const label = win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+          const baseLabel =
+            win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
+          const label =
+            isMultiFacility && win.facility ? `${baseLabel} — ${win.facility}` : baseLabel;
           return { label, activeNurses, assignMap, violations };
         }),
       );
@@ -1543,7 +1614,9 @@ ${violationsHtml}
           return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
         })
         .join("");
-      const facility = periodWins[0]?.facility ?? "";
+      const facility = isMultiFacility
+        ? "All Facilities"
+        : (distinctFacilities[0] ?? periodWins[0]?.facility ?? "");
       const sections = allData
         .filter(({ activeNurses }) => activeNurses.length > 0)
         .map(({ label, activeNurses, assignMap, violations }) => {
@@ -1560,11 +1633,11 @@ ${violationsHtml}
             .join("");
           const violationRows =
             violations.length > 0
-              ? `<table style="margin-bottom:10px;"><thead><tr><th style="color:#b91c1c;" colspan="5">Safety Violations — ${escHtml(label)}</th></tr><tr><th>Shift</th><th>Role</th><th>Required</th><th>Actual</th><th>Shortfall</th></tr></thead>
-<tbody>${summariseViolations(violations)
+              ? `<table style="margin-bottom:10px;"><thead><tr><th style="color:#b91c1c;" colspan="4">Safety Violations — ${escHtml(label)}</th></tr><tr><th>Shift</th><th>Role</th><th>Required</th><th style="text-align:left;">Days Not Met (Actual/Required)</th></tr></thead>
+<tbody>${groupViolationsByDay(violations)
                   .map(
                     (v) =>
-                      `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td>${v.actual}</td><td>${v.required - v.actual}</td></tr>`,
+                      `<tr><td>${v.shift === "M" ? "Morning" : "Night"}</td><td>${v.role === "na" ? "Nursing Assistant" : "Nurse"}</td><td>${v.required}</td><td style="text-align:left;white-space:normal;">${formatShortfallDays(v.days, v.required)}</td></tr>`,
                   )
                   .join("")}</tbody></table>`
               : "";
@@ -1635,7 +1708,9 @@ ${sections}
       <div className="mb-4">
         <FacilityChips
           value={lockedReportFacility ?? selectedReportFacility}
-          onChange={(f) => { setSelectedReportFacility(f); }}
+          onChange={(f) => {
+            setSelectedReportFacility(f);
+          }}
           locked={!!lockedReportFacility}
           showAll={canFilterReportFacility}
         />
@@ -1719,7 +1794,9 @@ ${sections}
             />
             <CategoryChartCard
               title={reportFacility ? "Staff by Ward" : "Staff by Facility"}
-              subtitle={reportFacility ? `${reportFacility} — nurses per ward` : "Nurses per facility"}
+              subtitle={
+                reportFacility ? `${reportFacility} — nurses per ward` : "Nurses per facility"
+              }
               data={staffByGroupData}
               emptyMessage="No staff in this scope yet."
               valueLabel="staff"
@@ -1742,7 +1819,10 @@ ${sections}
           <div className="flex items-center gap-2 flex-wrap">
             <DateRangeFilter
               value={hoursRange}
-              onChange={(v) => { setHoursRange(v); setHoursPage(1); }}
+              onChange={(v) => {
+                setHoursRange(v);
+                setHoursPage(1);
+              }}
             />
             <select
               value={hoursStatusFilter}
@@ -1829,96 +1909,98 @@ ${sections}
           ) : (
             <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
               <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="text-left px-4 py-3 font-semibold">Nurse</th>
-                    <th className="text-left px-4 py-3 font-semibold">Date</th>
-                    <th className="text-left px-4 py-3 font-semibold">Shift</th>
-                    <th className="text-left px-4 py-3 font-semibold">Type</th>
-                    <th className="text-left px-4 py-3 font-semibold">Started</th>
-                    <th className="text-left px-4 py-3 font-semibold">Ended</th>
-                    <th className="text-left px-4 py-3 font-semibold">Late</th>
-                    <th className="text-right px-4 py-3 font-semibold">Hours</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {pagedShiftLogs.map((log) => {
-                    const nurse = nurses.find((n) => n.id === log.nurse_id);
-                    return (
-                      <tr
-                        key={`${log.nurse_id}-${log.shift_date}`}
-                        className="border-t hover:bg-muted/30"
-                      >
-                        <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{fmtDate(log.shift_date)}</td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${log.shift_type === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
-                          >
-                            {log.shift_type === "M" ? "Morning" : "Night"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          {log.is_swap ? (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                      <th className="text-left px-4 py-3 font-semibold">Date</th>
+                      <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                      <th className="text-left px-4 py-3 font-semibold">Type</th>
+                      <th className="text-left px-4 py-3 font-semibold">Started</th>
+                      <th className="text-left px-4 py-3 font-semibold">Ended</th>
+                      <th className="text-left px-4 py-3 font-semibold">Late</th>
+                      <th className="text-right px-4 py-3 font-semibold">Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pagedShiftLogs.map((log) => {
+                      const nurse = nurses.find((n) => n.id === log.nurse_id);
+                      return (
+                        <tr
+                          key={`${log.nurse_id}-${log.shift_date}`}
+                          className="border-t hover:bg-muted/30"
+                        >
+                          <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
+                          <td className="px-4 py-3 text-muted-foreground">
+                            {fmtDate(log.shift_date)}
+                          </td>
+                          <td className="px-4 py-3">
                             <span
-                              title={log.swap_note ?? undefined}
-                              className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full"
+                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${log.shift_type === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
                             >
-                              Additional Shift
+                              {log.shift_type === "M" ? "Morning" : "Night"}
                             </span>
-                          ) : log.is_leave ? (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                              Leave
-                            </span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">Regular</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {log.started_at
-                            ? new Date(log.started_at).toLocaleTimeString("en-GB", {
+                          </td>
+                          <td className="px-4 py-3">
+                            {log.is_swap ? (
+                              <span
+                                title={log.swap_note ?? undefined}
+                                className="inline-flex items-center gap-1 text-[11px] font-semibold text-sky-700 bg-sky-50 border border-sky-200 px-2 py-0.5 rounded-full"
+                              >
+                                Additional Shift
+                              </span>
+                            ) : log.is_leave ? (
+                              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                                Leave
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">Regular</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {log.started_at
+                              ? new Date(log.started_at).toLocaleTimeString("en-GB", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                            {log.ended_at ? (
+                              new Date(log.ended_at).toLocaleTimeString("en-GB", {
                                 hour: "2-digit",
                                 minute: "2-digit",
                               })
-                            : "—"}
-                        </td>
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {log.ended_at ? (
-                            new Date(log.ended_at).toLocaleTimeString("en-GB", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })
-                          ) : (
-                            <span className="text-emerald-600 text-xs font-medium">Running</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {log.is_late ? (
-                            <span
-                              className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
-                              title={log.late_reason ?? undefined}
-                            >
-                              <Clock className="h-3 w-3" />
-                              {log.late_minutes}m late
-                              {log.late_reason && (
-                                <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
-                                  — {log.late_reason}
-                                </span>
-                              )}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums font-medium">
-                          {log.hours_logged != null ? fmtHoursLog(Number(log.hours_logged)) : "—"}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                            ) : (
+                              <span className="text-emerald-600 text-xs font-medium">Running</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {log.is_late ? (
+                              <span
+                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                                title={log.late_reason ?? undefined}
+                              >
+                                <Clock className="h-3 w-3" />
+                                {log.late_minutes}m late
+                                {log.late_reason && (
+                                  <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
+                                    — {log.late_reason}
+                                  </span>
+                                )}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums font-medium">
+                            {log.hours_logged != null ? fmtHoursLog(Number(log.hours_logged)) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
               <Pagination
                 page={hoursPage}
@@ -1953,7 +2035,10 @@ ${sections}
           <div className="flex items-center gap-2 flex-wrap">
             <DateRangeFilter
               value={locumRange}
-              onChange={(v) => { setLocumRange(v); setLocumPage(1); }}
+              onChange={(v) => {
+                setLocumRange(v);
+                setLocumPage(1);
+              }}
             />
             <div className="ml-auto">
               <button
@@ -2014,109 +2099,113 @@ ${sections}
               {/* Detailed log */}
               <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
                 <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="text-left px-4 py-3 font-semibold">Date</th>
-                      <th className="text-left px-4 py-3 font-semibold">Nurse</th>
-                      <th className="text-left px-4 py-3 font-semibold">Ward</th>
-                      <th className="text-left px-4 py-3 font-semibold">Facility</th>
-                      <th className="text-left px-4 py-3 font-semibold">Shift</th>
-                      <th className="text-left px-4 py-3 font-semibold">Started</th>
-                      <th className="text-left px-4 py-3 font-semibold">Ended</th>
-                      <th className="text-right px-4 py-3 font-semibold">Hours</th>
-                      <th className="text-left px-4 py-3 font-semibold">Late</th>
-                      <th className="text-left px-4 py-3 font-semibold">Missed</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedLocumRequests.map((r) => {
-                      const log = r.accepted_by_nurse_id
-                        ? locumLogMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
-                        : undefined;
-                      const missed = !!log?.is_missed;
-                      return (
-                        <tr key={r.id} className="border-t hover:bg-muted/30">
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {fmtDate(r.shift_date)}
-                          </td>
-                          <td className="px-4 py-3 font-medium">
-                            {r.accepted_by_nurse_name ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
-                          <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
-                          <td className="px-4 py-3">
-                            <span
-                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
-                            >
-                              {r.shift === "M" ? "Morning" : "Night"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {missed ? (
-                              <span className="text-muted-foreground text-xs">—</span>
-                            ) : log?.started_at ? (
-                              new Date(log.started_at).toLocaleTimeString("en-GB", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {missed ? (
-                              <span className="text-muted-foreground text-xs">—</span>
-                            ) : log?.ended_at ? (
-                              new Date(log.ended_at).toLocaleTimeString("en-GB", {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                              })
-                            ) : log ? (
-                              <span className="text-emerald-600 text-xs font-medium">Running</span>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">Not started</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-right tabular-nums font-medium">
-                            {missed
-                              ? "—"
-                              : log?.hours_logged != null
-                                ? fmtHoursLog(Number(log.hours_logged))
-                                : "—"}
-                          </td>
-                          <td className="px-4 py-3">
-                            {log?.is_late ? (
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                      <tr>
+                        <th className="text-left px-4 py-3 font-semibold">Date</th>
+                        <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                        <th className="text-left px-4 py-3 font-semibold">Ward</th>
+                        <th className="text-left px-4 py-3 font-semibold">Facility</th>
+                        <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                        <th className="text-left px-4 py-3 font-semibold">Started</th>
+                        <th className="text-left px-4 py-3 font-semibold">Ended</th>
+                        <th className="text-right px-4 py-3 font-semibold">Hours</th>
+                        <th className="text-left px-4 py-3 font-semibold">Late</th>
+                        <th className="text-left px-4 py-3 font-semibold">Missed</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagedLocumRequests.map((r) => {
+                        const log = r.accepted_by_nurse_id
+                          ? locumLogMap.get(
+                              `${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`,
+                            )
+                          : undefined;
+                        const missed = !!log?.is_missed;
+                        return (
+                          <tr key={r.id} className="border-t hover:bg-muted/30">
+                            <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                              {fmtDate(r.shift_date)}
+                            </td>
+                            <td className="px-4 py-3 font-medium">
+                              {r.accepted_by_nurse_name ?? "—"}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
+                            <td className="px-4 py-3">
                               <span
-                                className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
-                                title={log.late_reason ?? undefined}
+                                className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
                               >
-                                <Clock className="h-3 w-3" />
-                                {log.late_minutes}m late
-                                {log.late_reason && (
-                                  <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
-                                    — {log.late_reason}
-                                  </span>
-                                )}
+                                {r.shift === "M" ? "Morning" : "Night"}
                               </span>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            {missed ? (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-700">
-                                Missed
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground text-xs">—</span>
-                            )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            </td>
+                            <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                              {missed ? (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              ) : log?.started_at ? (
+                                new Date(log.started_at).toLocaleTimeString("en-GB", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              ) : (
+                                "—"
+                              )}
+                            </td>
+                            <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                              {missed ? (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              ) : log?.ended_at ? (
+                                new Date(log.ended_at).toLocaleTimeString("en-GB", {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                })
+                              ) : log ? (
+                                <span className="text-emerald-600 text-xs font-medium">
+                                  Running
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">Not started</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums font-medium">
+                              {missed
+                                ? "—"
+                                : log?.hours_logged != null
+                                  ? fmtHoursLog(Number(log.hours_logged))
+                                  : "—"}
+                            </td>
+                            <td className="px-4 py-3">
+                              {log?.is_late ? (
+                                <span
+                                  className="inline-flex items-center gap-1 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                                  title={log.late_reason ?? undefined}
+                                >
+                                  <Clock className="h-3 w-3" />
+                                  {log.late_minutes}m late
+                                  {log.late_reason && (
+                                    <span className="hidden sm:inline text-amber-600 max-w-30 truncate">
+                                      — {log.late_reason}
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-3">
+                              {missed ? (
+                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-rose-100 text-rose-700">
+                                  Missed
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
                 <Pagination
                   page={locumPage}
@@ -2136,170 +2225,186 @@ ${sections}
       )}
 
       {/* ── Locum Requests ───────────────────────────────────────────────── */}
-      {tab === "locum-requests" && (() => {
-        const LOCUM_REQ_STATUS_LABEL: Record<LocumRequestStatus, string> = {
-          pending: "Awaiting CNO Review",
-          approved: "Approved — Send Invites",
-          declined: "Declined by CNO",
-          invites_sent: "Invites Sent",
-          filled: "Shift Filled",
-          expired: "Time Elapsed",
-        };
-        const LOCUM_REQ_STATUS_COLOR: Record<LocumRequestStatus, string> = {
-          pending: "bg-amber-100 text-amber-700",
-          approved: "bg-blue-100 text-blue-700",
-          declined: "bg-red-100 text-red-700",
-          invites_sent: "bg-purple-100 text-purple-700",
-          filled: "bg-emerald-100 text-emerald-700",
-          expired: "bg-gray-100 text-gray-500",
-        };
-        const pendingCount = filteredLocumRequestsAll.filter((r) => r.status === "pending").length;
-        const filledCount = filteredLocumRequestsAll.filter((r) => r.status === "filled").length;
-        const expiredCount = filteredLocumRequestsAll.filter((r) => r.status === "expired").length;
+      {tab === "locum-requests" &&
+        (() => {
+          const LOCUM_REQ_STATUS_LABEL: Record<LocumRequestStatus, string> = {
+            pending: "Awaiting CNO Review",
+            approved: "Approved — Send Invites",
+            declined: "Declined by CNO",
+            invites_sent: "Invites Sent",
+            filled: "Shift Filled",
+            expired: "Time Elapsed",
+          };
+          const LOCUM_REQ_STATUS_COLOR: Record<LocumRequestStatus, string> = {
+            pending: "bg-amber-100 text-amber-700",
+            approved: "bg-blue-100 text-blue-700",
+            declined: "bg-red-100 text-red-700",
+            invites_sent: "bg-purple-100 text-purple-700",
+            filled: "bg-emerald-100 text-emerald-700",
+            expired: "bg-gray-100 text-gray-500",
+          };
+          const pendingCount = filteredLocumRequestsAll.filter(
+            (r) => r.status === "pending",
+          ).length;
+          const filledCount = filteredLocumRequestsAll.filter((r) => r.status === "filled").length;
+          const expiredCount = filteredLocumRequestsAll.filter(
+            (r) => r.status === "expired",
+          ).length;
 
-        return (
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-              <Stat icon={Stethoscope} label="Total Requests" value={filteredLocumRequestsAll.length} />
-              <Stat icon={Clock} label="Awaiting CNO Review" value={pendingCount} />
-              <Stat icon={CheckCircle2} label="Filled" value={filledCount} />
-              <Stat icon={XCircle} label="Time Elapsed" value={expiredCount} />
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap">
-              <DateRangeFilter
-                value={locumReqRange}
-                onChange={(v) => { setLocumReqRange(v); setLocumReqPage(1); }}
-              />
-              <select
-                value={locumReqStatusFilter}
-                onChange={(e) => {
-                  setLocumReqStatusFilter(e.target.value as typeof locumReqStatusFilter);
-                  setLocumReqPage(1);
-                }}
-                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-              >
-                <option value="all">All statuses</option>
-                <option value="pending">Awaiting CNO Review</option>
-                <option value="approved">Approved — Send Invites</option>
-                <option value="declined">Declined by CNO</option>
-                <option value="invites_sent">Invites Sent</option>
-                <option value="filled">Shift Filled</option>
-                <option value="expired">Time Elapsed</option>
-              </select>
-              <select
-                value={locumReqShiftFilter}
-                onChange={(e) => {
-                  setLocumReqShiftFilter(e.target.value as typeof locumReqShiftFilter);
-                  setLocumReqPage(1);
-                }}
-                className="h-9 rounded-md border border-input bg-card px-3 text-sm"
-              >
-                <option value="all">All shifts</option>
-                <option value="M">Morning</option>
-                <option value="N">Night</option>
-              </select>
-              {(locumReqStatusFilter !== "all" || locumReqShiftFilter !== "all") && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setLocumReqStatusFilter("all");
-                    setLocumReqShiftFilter("all");
-                  }}
-                  className="text-xs text-muted-foreground hover:text-foreground underline"
-                >
-                  Clear filters
-                </button>
-              )}
-              <div className="ml-auto">
-                <button
-                  type="button"
-                  onClick={exportLocumRequestsReport}
-                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
-                >
-                  <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
-                </button>
-              </div>
-            </div>
-
-            {filteredLocumRequestsAll.length === 0 ? (
-              scopedLocumRequestsAll.length === 0 ? (
-                <EmptyState
-                  icon={<Stethoscope className="h-6 w-6" />}
-                  title="No locum requests"
-                  description="Locum requests appear here once a matron raises one for an understaffed ward."
+          return (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+                <Stat
+                  icon={Stethoscope}
+                  label="Total Requests"
+                  value={filteredLocumRequestsAll.length}
                 />
-              ) : (
-                <div className="py-16 text-center text-sm text-muted-foreground">
-                  No locum requests found for the selected filters.
-                </div>
-              )
-            ) : (
-              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-                <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="text-left px-4 py-3 font-semibold">Date</th>
-                      <th className="text-left px-4 py-3 font-semibold">Shift</th>
-                      <th className="text-left px-4 py-3 font-semibold">Facility</th>
-                      <th className="text-left px-4 py-3 font-semibold">Ward</th>
-                      <th className="text-right px-4 py-3 font-semibold">Needed</th>
-                      <th className="text-left px-4 py-3 font-semibold">Status</th>
-                      <th className="text-left px-4 py-3 font-semibold">Requested By</th>
-                      <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
-                      <th className="text-left px-4 py-3 font-semibold">Accepted By</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pagedLocumRequestsAll.map((r) => (
-                      <tr key={r.id} className="border-t hover:bg-muted/30">
-                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                          {fmtDate(r.shift_date)}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
-                          >
-                            {r.shift === "M" ? "Morning" : "Night"}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
-                        <td className="px-4 py-3 text-right tabular-nums">{r.nurses_needed}</td>
-                        <td className="px-4 py-3">
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${LOCUM_REQ_STATUS_COLOR[r.status]}`}
-                          >
-                            {LOCUM_REQ_STATUS_LABEL[r.status]}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground">{r.requested_by_name}</td>
-                        <td className="px-4 py-3 text-muted-foreground">{r.reviewed_by_name ?? "—"}</td>
-                        <td className="px-4 py-3 text-muted-foreground">
-                          {r.accepted_by_nurse_name ?? "—"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                </div>
-                <Pagination
-                  page={locumReqPage}
-                  totalPages={locumReqTotalPages}
-                  pageSize={locumReqPageSize}
-                  totalItems={filteredLocumRequestsAll.length}
-                  onPage={setLocumReqPage}
-                  onPageSize={(s) => {
-                    setLocumReqPageSize(s);
+                <Stat icon={Clock} label="Awaiting CNO Review" value={pendingCount} />
+                <Stat icon={CheckCircle2} label="Filled" value={filledCount} />
+                <Stat icon={XCircle} label="Time Elapsed" value={expiredCount} />
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap">
+                <DateRangeFilter
+                  value={locumReqRange}
+                  onChange={(v) => {
+                    setLocumReqRange(v);
                     setLocumReqPage(1);
                   }}
                 />
+                <select
+                  value={locumReqStatusFilter}
+                  onChange={(e) => {
+                    setLocumReqStatusFilter(e.target.value as typeof locumReqStatusFilter);
+                    setLocumReqPage(1);
+                  }}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                >
+                  <option value="all">All statuses</option>
+                  <option value="pending">Awaiting CNO Review</option>
+                  <option value="approved">Approved — Send Invites</option>
+                  <option value="declined">Declined by CNO</option>
+                  <option value="invites_sent">Invites Sent</option>
+                  <option value="filled">Shift Filled</option>
+                  <option value="expired">Time Elapsed</option>
+                </select>
+                <select
+                  value={locumReqShiftFilter}
+                  onChange={(e) => {
+                    setLocumReqShiftFilter(e.target.value as typeof locumReqShiftFilter);
+                    setLocumReqPage(1);
+                  }}
+                  className="h-9 rounded-md border border-input bg-card px-3 text-sm"
+                >
+                  <option value="all">All shifts</option>
+                  <option value="M">Morning</option>
+                  <option value="N">Night</option>
+                </select>
+                {(locumReqStatusFilter !== "all" || locumReqShiftFilter !== "all") && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLocumReqStatusFilter("all");
+                      setLocumReqShiftFilter("all");
+                    }}
+                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                  >
+                    Clear filters
+                  </button>
+                )}
+                <div className="ml-auto">
+                  <button
+                    type="button"
+                    onClick={exportLocumRequestsReport}
+                    className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted"
+                  >
+                    <FileSpreadsheet className="h-4 w-4 text-emerald-600" /> Export
+                  </button>
+                </div>
               </div>
-            )}
-          </div>
-        );
-      })()}
+
+              {filteredLocumRequestsAll.length === 0 ? (
+                scopedLocumRequestsAll.length === 0 ? (
+                  <EmptyState
+                    icon={<Stethoscope className="h-6 w-6" />}
+                    title="No locum requests"
+                    description="Locum requests appear here once a matron raises one for an understaffed ward."
+                  />
+                ) : (
+                  <div className="py-16 text-center text-sm text-muted-foreground">
+                    No locum requests found for the selected filters.
+                  </div>
+                )
+              ) : (
+                <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="text-left px-4 py-3 font-semibold">Date</th>
+                          <th className="text-left px-4 py-3 font-semibold">Shift</th>
+                          <th className="text-left px-4 py-3 font-semibold">Facility</th>
+                          <th className="text-left px-4 py-3 font-semibold">Ward</th>
+                          <th className="text-right px-4 py-3 font-semibold">Needed</th>
+                          <th className="text-left px-4 py-3 font-semibold">Status</th>
+                          <th className="text-left px-4 py-3 font-semibold">Requested By</th>
+                          <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                          <th className="text-left px-4 py-3 font-semibold">Accepted By</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pagedLocumRequestsAll.map((r) => (
+                          <tr key={r.id} className="border-t hover:bg-muted/30">
+                            <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                              {fmtDate(r.shift_date)}
+                            </td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
+                              >
+                                {r.shift === "M" ? "Morning" : "Night"}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
+                            <td className="px-4 py-3 text-muted-foreground">{r.ward}</td>
+                            <td className="px-4 py-3 text-right tabular-nums">{r.nurses_needed}</td>
+                            <td className="px-4 py-3">
+                              <span
+                                className={`text-xs px-2 py-0.5 rounded-full font-semibold ${LOCUM_REQ_STATUS_COLOR[r.status]}`}
+                              >
+                                {LOCUM_REQ_STATUS_LABEL[r.status]}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {r.requested_by_name}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {r.reviewed_by_name ?? "—"}
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              {r.accepted_by_nurse_name ?? "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pagination
+                    page={locumReqPage}
+                    totalPages={locumReqTotalPages}
+                    pageSize={locumReqPageSize}
+                    totalItems={filteredLocumRequestsAll.length}
+                    onPage={setLocumReqPage}
+                    onPageSize={(s) => {
+                      setLocumReqPageSize(s);
+                      setLocumReqPage(1);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          );
+        })()}
 
       {/* ── Leave & Requests ─────────────────────────────────────────────── */}
       {tab === "leave" &&
@@ -2321,7 +2426,10 @@ ${sections}
               <div className="flex items-center gap-2 flex-wrap mb-4">
                 <DateRangeFilter
                   value={leaveRange}
-                  onChange={(v) => { setLeaveRange(v); setLeavePage(1); }}
+                  onChange={(v) => {
+                    setLeaveRange(v);
+                    setLeavePage(1);
+                  }}
                 />
                 <div className="ml-auto">
                   <button
@@ -2368,397 +2476,418 @@ ${sections}
               </div>
 
               {leaveSubTab === "leave" ? (
-              <>
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-                <Stat icon={PlaneTakeoff} label="Total Leave Requests" value={leaveOnly.length} />
-                <Stat icon={Clock} label="Pending" value={pending.length} />
-                <Stat icon={CheckCircle2} label="Approved" value={approved.length} />
-                <Stat icon={XCircle} label="Rejected" value={rejected.length} />
-              </div>
-
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-                <div className="bg-card border rounded-xl p-5 shadow-soft">
-                  <h2 className="font-semibold mb-4">Leave by Type</h2>
-                  {Object.keys(byType).length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      No leave requests
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {Object.entries(byType)
-                        .sort((a, b) => b[1] - a[1])
-                        .map(([type, count]) => (
-                          <div key={type} className="flex items-center gap-3 text-sm">
-                            <span className="w-36 truncate font-medium">{type}</span>
-                            <div className="flex-1 h-4 rounded-full bg-muted overflow-hidden">
-                              <Progress
-                                value={Math.round((count / leaveOnly.length) * 100)}
-                                className="h-full rounded-full bg-primary/70"
-                              />
-                            </div>
-                            <span className="w-8 text-right tabular-nums text-muted-foreground text-xs">
-                              {count}
-                            </span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-
-                <div className="bg-card border rounded-xl p-5 shadow-soft">
-                  <div className="flex items-center gap-2 mb-4">
-                    <CalendarDays className="h-4 w-4 text-muted-foreground" />
-                    <h2 className="font-semibold">Shift Switch Requests</h2>
-                    <span className="ml-auto text-sm font-bold">{switches.length}</span>
+                <>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+                    <Stat
+                      icon={PlaneTakeoff}
+                      label="Total Leave Requests"
+                      value={leaveOnly.length}
+                    />
+                    <Stat icon={Clock} label="Pending" value={pending.length} />
+                    <Stat icon={CheckCircle2} label="Approved" value={approved.length} />
+                    <Stat icon={XCircle} label="Rejected" value={rejected.length} />
                   </div>
-                  {switches.length === 0 ? (
-                    <p className="text-sm text-muted-foreground text-center py-4">
-                      No switch requests
-                    </p>
-                  ) : (
-                    <div className="space-y-2">
-                      {switches.slice(0, 6).map((s) => (
-                        <div
-                          key={s.id}
-                          className="flex items-center justify-between text-sm border rounded-lg px-3 py-2"
-                        >
-                          <div>
-                            <p className="font-medium">
-                              {nurses.find((n) => n.id === s.nurse_id)?.name ?? "Unknown"}
-                            </p>
-                            <p className="text-xs text-muted-foreground">{fmtDate(s.from_date)}</p>
-                          </div>
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                              s.status === "Approved"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : s.status === "Rejected"
-                                  ? "bg-rose-100 text-rose-700"
-                                  : "bg-amber-100 text-amber-700"
-                            }`}
-                          >
-                            {s.status}
-                          </span>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                    <div className="bg-card border rounded-xl p-5 shadow-soft">
+                      <h2 className="font-semibold mb-4">Leave by Type</h2>
+                      {Object.keys(byType).length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          No leave requests
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {Object.entries(byType)
+                            .sort((a, b) => b[1] - a[1])
+                            .map(([type, count]) => (
+                              <div key={type} className="flex items-center gap-3 text-sm">
+                                <span className="w-36 truncate font-medium">{type}</span>
+                                <div className="flex-1 h-4 rounded-full bg-muted overflow-hidden">
+                                  <Progress
+                                    value={Math.round((count / leaveOnly.length) * 100)}
+                                    className="h-full rounded-full bg-primary/70"
+                                  />
+                                </div>
+                                <span className="w-8 text-right tabular-nums text-muted-foreground text-xs">
+                                  {count}
+                                </span>
+                              </div>
+                            ))}
                         </div>
-                      ))}
-                      {switches.length > 6 && (
-                        <button
-                          type="button"
-                          onClick={() => setLeaveSubTab("switches")}
-                          className="cursor-pointer flex items-center justify-center gap-1 w-full text-sm font-semibold text-primary hover:bg-primary/5 py-2 mt-1 rounded-md transition-colors"
-                        >
-                          View all ({switches.length - 6} more)
-                          <ChevronRight className="h-4 w-4" />
-                        </button>
                       )}
                     </div>
-                  )}
-                </div>
-              </div>
 
-              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-                <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                    <tr>
-                      <th className="text-left px-4 py-3 font-semibold">Nurse</th>
-                      <th className="text-left px-4 py-3 font-semibold">Type</th>
-                      <th className="text-left px-4 py-3 font-semibold">Reason</th>
-                      <th className="text-left px-4 py-3 font-semibold">From</th>
-                      <th className="text-left px-4 py-3 font-semibold">To</th>
-                      <th className="text-left px-4 py-3 font-semibold">Status</th>
-                      <th className="text-left px-4 py-3 font-semibold">Rota Stage</th>
-                      <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
-                      <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
-                      <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(() => {
-                      const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-                      const renderLeaveRow = (l: (typeof pagedLeaveOnly)[0]) => (
-                        <tr key={l.id} className="border-t hover:bg-muted/30">
-                          <td className="px-4 py-3 font-medium">
-                            {(l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.name ?? "Unknown"}
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
-                          <td className="px-4 py-3 text-muted-foreground max-w-50">
-                            {l.reason ? (
-                              <span className="block truncate" title={l.reason}>
-                                {l.reason}
-                              </span>
-                            ) : (
-                              "—"
-                            )}
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {fmtDate(l.from_date)}
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {fmtDate(l.to_date)}
-                          </td>
-                          <td className="px-4 py-3">
-                            {/* A "Rejected" row with no reviewer was auto-declined by the
-                                deadline cron, not actively rejected by a person — show that
-                                distinctly rather than implying someone reviewed and declined it.
-                                "Expired" (rota generation reached it undecided) is the same
-                                "system closed this out" situation, so it gets the same label. */}
-                            {(l.status === "Rejected" && !l.reviewed_by_name) ||
-                            l.status === "Expired" ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
-                                Time Elapsed
-                              </span>
-                            ) : l.status === "Reverted" ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-violet-100 text-violet-700">
-                                Reverted
-                              </span>
-                            ) : (
+                    <div className="bg-card border rounded-xl p-5 shadow-soft">
+                      <div className="flex items-center gap-2 mb-4">
+                        <CalendarDays className="h-4 w-4 text-muted-foreground" />
+                        <h2 className="font-semibold">Shift Switch Requests</h2>
+                        <span className="ml-auto text-sm font-bold">{switches.length}</span>
+                      </div>
+                      {switches.length === 0 ? (
+                        <p className="text-sm text-muted-foreground text-center py-4">
+                          No switch requests
+                        </p>
+                      ) : (
+                        <div className="space-y-2">
+                          {switches.slice(0, 6).map((s) => (
+                            <div
+                              key={s.id}
+                              className="flex items-center justify-between text-sm border rounded-lg px-3 py-2"
+                            >
+                              <div>
+                                <p className="font-medium">
+                                  {nurses.find((n) => n.id === s.nurse_id)?.name ?? "Unknown"}
+                                </p>
+                                <p className="text-xs text-muted-foreground">
+                                  {fmtDate(s.from_date)}
+                                </p>
+                              </div>
                               <span
                                 className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                                  l.status === "Approved"
+                                  s.status === "Approved"
                                     ? "bg-emerald-100 text-emerald-700"
-                                    : l.status === "Rejected"
+                                    : s.status === "Rejected"
                                       ? "bg-rose-100 text-rose-700"
                                       : "bg-amber-100 text-amber-700"
                                 }`}
                               >
-                                {l.status}
+                                {s.status}
                               </span>
-                            )}
-                            {l.status === "Reverted" && l.revert_reason && (
-                              <p
-                                className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-40"
-                                title={l.revert_reason}
-                              >
-                                {l.revert_reason}
-                              </p>
-                            )}
-                          </td>
-                          <td className="px-4 py-3">
-                            {l.rota_stage_at_request === "published" ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-sky-100 text-sky-700">After publish</span>
-                            ) : l.rota_stage_at_request === "draft" ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700">Before submission</span>
-                            ) : l.rota_stage_at_request === "no_rota" ? (
-                              <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">No rota yet</span>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">–</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {fmtDate(l.created_at)}
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground">
-                            {l.reviewed_by_name ?? "—"}
-                          </td>
-                          <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                            {l.reviewed_at ? fmtDate(l.reviewed_at) : "—"}
-                          </td>
-                        </tr>
-                      );
-
-                      if (!reportFacility) {
-                        // Group by facility for admin/cno/hr_admin (applied to current page slice)
-                        const grouped = new Map<string, typeof pagedLeaveOnly>();
-                        for (const l of pagedLeaveOnly) {
-                          const f = (l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.facility ?? "Unknown";
-                          if (!grouped.has(f)) grouped.set(f, []);
-                          grouped.get(f)!.push(l);
-                        }
-                        return [...grouped.entries()]
-                          .sort(([a], [b]) => a.localeCompare(b))
-                          .flatMap(([facility, fRows]) => [
-                            <tr key={`hdr-${facility}`}>
-                              <td
-                                colSpan={10}
-                                className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
-                              >
-                                {facility}
-                              </td>
-                            </tr>,
-                            ...fRows.map(renderLeaveRow),
-                          ]);
-                      }
-
-                      return pagedLeaveOnly.map(renderLeaveRow);
-                    })()}
-                  </tbody>
-                </table>
-                </div>
-                <Pagination
-                  page={leavePage}
-                  totalPages={leaveTotalPages}
-                  pageSize={leavePageSize}
-                  totalItems={leaveOnly.length}
-                  onPage={setLeavePage}
-                  onPageSize={(s) => {
-                    setLeavePageSize(s);
-                    setLeavePage(1);
-                  }}
-                />
-              </div>
-              </>
-              ) : (() => {
-                const switchesFiltered = filteredSwitches;
-                const switchPending = switchesFiltered.filter((s) => s.status === "Pending");
-                const switchApproved = switchesFiltered.filter((s) => s.status === "Approved");
-                const switchRejected = switchesFiltered.filter((s) => s.status === "Rejected");
-                const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-
-                const renderSwitchRow = (s: (typeof pagedSwitches)[0]) => {
-                  const sw = parseSwitchReason(s.reason);
-                  return (
-                    <tr key={s.id} className="border-t hover:bg-muted/30">
-                      <td className="px-4 py-3 font-medium">
-                        {(s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)?.name ?? "Unknown"}
-                      </td>
-                      <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
-                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
-                        {fmtDate(s.from_date)}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
-                        {sw ? (
-                          <span className="inline-flex items-center gap-1">
-                            {sw.interWard && (
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                Inter-Ward
-                              </span>
-                            )}
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                              {sw.shiftA || "—"}
-                            </span>
-                            <ArrowLeftRight className="h-3 w-3" />
-                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
-                              {sw.shiftB || "—"}
-                            </span>
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground max-w-45">
-                        {sw?.note ? (
-                          <span className="block truncate" title={sw.note}>
-                            {sw.note}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
-                        {fmtDate(s.created_at)}
-                      </td>
-                      <td className="px-4 py-3">
-                        {s.status === "Rejected" && !s.reviewed_by_name ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
-                            Time Elapsed
-                          </span>
-                        ) : (
-                          <span
-                            className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                              s.status === "Approved"
-                                ? "bg-emerald-100 text-emerald-700"
-                                : s.status === "Rejected"
-                                  ? "bg-rose-100 text-rose-700"
-                                  : "bg-amber-100 text-amber-700"
-                            }`}
-                          >
-                            {s.status}
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{s.reviewed_by_name ?? "—"}</td>
-                      <td className="px-4 py-3 tabular-nums text-muted-foreground">
-                        {s.reviewed_at ? fmtDate(s.reviewed_at) : "—"}
-                      </td>
-                    </tr>
-                  );
-                };
-
-                return (
-                  <>
-                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
-                      <Stat
-                        icon={CalendarDays}
-                        label="Total Shift Switches"
-                        value={switchesFiltered.length}
-                      />
-                      <Stat icon={Clock} label="Pending" value={switchPending.length} />
-                      <Stat icon={CheckCircle2} label="Approved" value={switchApproved.length} />
-                      <Stat icon={XCircle} label="Rejected" value={switchRejected.length} />
+                            </div>
+                          ))}
+                          {switches.length > 6 && (
+                            <button
+                              type="button"
+                              onClick={() => setLeaveSubTab("switches")}
+                              className="cursor-pointer flex items-center justify-center gap-1 w-full text-sm font-semibold text-primary hover:bg-primary/5 py-2 mt-1 rounded-md transition-colors"
+                            >
+                              View all ({switches.length - 6} more)
+                              <ChevronRight className="h-4 w-4" />
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
+                  </div>
 
-                    <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                            <tr>
-                              <th className="text-left px-4 py-3 font-semibold">Nurse A</th>
-                              <th className="text-left px-4 py-3 font-semibold">Nurse B</th>
-                              <th className="text-left px-4 py-3 font-semibold">Date</th>
-                              <th className="text-left px-4 py-3 font-semibold">Shifts</th>
-                              <th className="text-left px-4 py-3 font-semibold">Reason / Note</th>
-                              <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
-                              <th className="text-left px-4 py-3 font-semibold">Status</th>
-                              <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
-                              <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {pagedSwitches.length === 0 ? (
-                              <tr>
-                                <td
-                                  colSpan={9}
-                                  className="px-4 py-8 text-center text-sm text-muted-foreground"
-                                >
-                                  No switch requests match the current filter.
+                  <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                          <tr>
+                            <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                            <th className="text-left px-4 py-3 font-semibold">Type</th>
+                            <th className="text-left px-4 py-3 font-semibold">Reason</th>
+                            <th className="text-left px-4 py-3 font-semibold">From</th>
+                            <th className="text-left px-4 py-3 font-semibold">To</th>
+                            <th className="text-left px-4 py-3 font-semibold">Status</th>
+                            <th className="text-left px-4 py-3 font-semibold">Rota Stage</th>
+                            <th className="text-left px-4 py-3 font-semibold">Requested Date</th>
+                            <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                            <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+                            const renderLeaveRow = (l: (typeof pagedLeaveOnly)[0]) => (
+                              <tr key={l.id} className="border-t hover:bg-muted/30">
+                                <td className="px-4 py-3 font-medium">
+                                  {(l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.name ??
+                                    "Unknown"}
+                                </td>
+                                <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                                <td className="px-4 py-3 text-muted-foreground max-w-50">
+                                  {l.reason ? (
+                                    <span className="block truncate" title={l.reason}>
+                                      {l.reason}
+                                    </span>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                                  {fmtDate(l.from_date)}
+                                </td>
+                                <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                                  {fmtDate(l.to_date)}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {/* A "Rejected" row with no reviewer was auto-declined by the
+                                deadline cron, not actively rejected by a person — show that
+                                distinctly rather than implying someone reviewed and declined it.
+                                "Expired" (rota generation reached it undecided) is the same
+                                "system closed this out" situation, so it gets the same label. */}
+                                  {(l.status === "Rejected" && !l.reviewed_by_name) ||
+                                  l.status === "Expired" ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
+                                      Time Elapsed
+                                    </span>
+                                  ) : l.status === "Reverted" ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-violet-100 text-violet-700">
+                                      Reverted
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                        l.status === "Approved"
+                                          ? "bg-emerald-100 text-emerald-700"
+                                          : l.status === "Rejected"
+                                            ? "bg-rose-100 text-rose-700"
+                                            : "bg-amber-100 text-amber-700"
+                                      }`}
+                                    >
+                                      {l.status}
+                                    </span>
+                                  )}
+                                  {l.status === "Reverted" && l.revert_reason && (
+                                    <p
+                                      className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-40"
+                                      title={l.revert_reason}
+                                    >
+                                      {l.revert_reason}
+                                    </p>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3">
+                                  {l.rota_stage_at_request === "published" ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-sky-100 text-sky-700">
+                                      After publish
+                                    </span>
+                                  ) : l.rota_stage_at_request === "draft" ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-amber-100 text-amber-700">
+                                      Before submission
+                                    </span>
+                                  ) : l.rota_stage_at_request === "no_rota" ? (
+                                    <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
+                                      No rota yet
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-muted-foreground">–</span>
+                                  )}
+                                </td>
+                                <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                                  {fmtDate(l.created_at)}
+                                </td>
+                                <td className="px-4 py-3 text-muted-foreground">
+                                  {l.reviewed_by_name ?? "—"}
+                                </td>
+                                <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                                  {l.reviewed_at ? fmtDate(l.reviewed_at) : "—"}
                                 </td>
                               </tr>
-                            ) : !reportFacility ? (
-                              (() => {
-                                const grouped = new Map<string, typeof pagedSwitches>();
-                                for (const s of pagedSwitches) {
-                                  const f =
-                                    (s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)?.facility ??
-                                    "Unknown";
-                                  if (!grouped.has(f)) grouped.set(f, []);
-                                  grouped.get(f)!.push(s);
-                                }
-                                return [...grouped.entries()]
-                                  .sort(([a], [b]) => a.localeCompare(b))
-                                  .flatMap(([facility, fRows]) => [
-                                    <tr key={`hdr-${facility}`}>
-                                      <td
-                                        colSpan={9}
-                                        className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
-                                      >
-                                        {facility}
-                                      </td>
-                                    </tr>,
-                                    ...fRows.map(renderSwitchRow),
-                                  ]);
-                              })()
-                            ) : (
-                              pagedSwitches.map(renderSwitchRow)
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                      <Pagination
-                        page={switchPage}
-                        totalPages={switchTotalPages}
-                        pageSize={switchPageSize}
-                        totalItems={switchesFiltered.length}
-                        onPage={setSwitchPage}
-                        onPageSize={(s) => {
-                          setSwitchPageSize(s);
-                          setSwitchPage(1);
-                        }}
-                      />
+                            );
+
+                            if (!reportFacility) {
+                              // Group by facility for admin/cno/hr_admin (applied to current page slice)
+                              const grouped = new Map<string, typeof pagedLeaveOnly>();
+                              for (const l of pagedLeaveOnly) {
+                                const f =
+                                  (l.nurse_id ? nurseMap.get(l.nurse_id) : undefined)?.facility ??
+                                  "Unknown";
+                                if (!grouped.has(f)) grouped.set(f, []);
+                                grouped.get(f)!.push(l);
+                              }
+                              return [...grouped.entries()]
+                                .sort(([a], [b]) => a.localeCompare(b))
+                                .flatMap(([facility, fRows]) => [
+                                  <tr key={`hdr-${facility}`}>
+                                    <td
+                                      colSpan={10}
+                                      className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                                    >
+                                      {facility}
+                                    </td>
+                                  </tr>,
+                                  ...fRows.map(renderLeaveRow),
+                                ]);
+                            }
+
+                            return pagedLeaveOnly.map(renderLeaveRow);
+                          })()}
+                        </tbody>
+                      </table>
                     </div>
-                  </>
-                );
-              })()}
+                    <Pagination
+                      page={leavePage}
+                      totalPages={leaveTotalPages}
+                      pageSize={leavePageSize}
+                      totalItems={leaveOnly.length}
+                      onPage={setLeavePage}
+                      onPageSize={(s) => {
+                        setLeavePageSize(s);
+                        setLeavePage(1);
+                      }}
+                    />
+                  </div>
+                </>
+              ) : (
+                (() => {
+                  const switchesFiltered = filteredSwitches;
+                  const switchPending = switchesFiltered.filter((s) => s.status === "Pending");
+                  const switchApproved = switchesFiltered.filter((s) => s.status === "Approved");
+                  const switchRejected = switchesFiltered.filter((s) => s.status === "Rejected");
+                  const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+
+                  const renderSwitchRow = (s: (typeof pagedSwitches)[0]) => {
+                    const sw = parseSwitchReason(s.reason);
+                    return (
+                      <tr key={s.id} className="border-t hover:bg-muted/30">
+                        <td className="px-4 py-3 font-medium">
+                          {(s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)?.name ?? "Unknown"}
+                        </td>
+                        <td className="px-4 py-3 font-medium">{sw?.nurseBName ?? "—"}</td>
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {fmtDate(s.from_date)}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                          {sw ? (
+                            <span className="inline-flex items-center gap-1">
+                              {sw.interWard && (
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
+                                  Inter-Ward
+                                </span>
+                              )}
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                                {sw.shiftA || "—"}
+                              </span>
+                              <ArrowLeftRight className="h-3 w-3" />
+                              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-200">
+                                {sw.shiftB || "—"}
+                              </span>
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground max-w-45">
+                          {sw?.note ? (
+                            <span className="block truncate" title={sw.note}>
+                              {sw.note}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {fmtDate(s.created_at)}
+                        </td>
+                        <td className="px-4 py-3">
+                          {s.status === "Rejected" && !s.reviewed_by_name ? (
+                            <span className="text-xs px-2 py-0.5 rounded-full font-semibold bg-muted text-muted-foreground">
+                              Time Elapsed
+                            </span>
+                          ) : (
+                            <span
+                              className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
+                                s.status === "Approved"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : s.status === "Rejected"
+                                    ? "bg-rose-100 text-rose-700"
+                                    : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {s.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {s.reviewed_by_name ?? "—"}
+                        </td>
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground">
+                          {s.reviewed_at ? fmtDate(s.reviewed_at) : "—"}
+                        </td>
+                      </tr>
+                    );
+                  };
+
+                  return (
+                    <>
+                      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 mb-6">
+                        <Stat
+                          icon={CalendarDays}
+                          label="Total Shift Switches"
+                          value={switchesFiltered.length}
+                        />
+                        <Stat icon={Clock} label="Pending" value={switchPending.length} />
+                        <Stat icon={CheckCircle2} label="Approved" value={switchApproved.length} />
+                        <Stat icon={XCircle} label="Rejected" value={switchRejected.length} />
+                      </div>
+
+                      <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                              <tr>
+                                <th className="text-left px-4 py-3 font-semibold">Nurse A</th>
+                                <th className="text-left px-4 py-3 font-semibold">Nurse B</th>
+                                <th className="text-left px-4 py-3 font-semibold">Date</th>
+                                <th className="text-left px-4 py-3 font-semibold">Shifts</th>
+                                <th className="text-left px-4 py-3 font-semibold">Reason / Note</th>
+                                <th className="text-left px-4 py-3 font-semibold">
+                                  Requested Date
+                                </th>
+                                <th className="text-left px-4 py-3 font-semibold">Status</th>
+                                <th className="text-left px-4 py-3 font-semibold">Reviewed By</th>
+                                <th className="text-left px-4 py-3 font-semibold">Reviewed On</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pagedSwitches.length === 0 ? (
+                                <tr>
+                                  <td
+                                    colSpan={9}
+                                    className="px-4 py-8 text-center text-sm text-muted-foreground"
+                                  >
+                                    No switch requests match the current filter.
+                                  </td>
+                                </tr>
+                              ) : !reportFacility ? (
+                                (() => {
+                                  const grouped = new Map<string, typeof pagedSwitches>();
+                                  for (const s of pagedSwitches) {
+                                    const f =
+                                      (s.nurse_id ? nurseMap.get(s.nurse_id) : undefined)
+                                        ?.facility ?? "Unknown";
+                                    if (!grouped.has(f)) grouped.set(f, []);
+                                    grouped.get(f)!.push(s);
+                                  }
+                                  return [...grouped.entries()]
+                                    .sort(([a], [b]) => a.localeCompare(b))
+                                    .flatMap(([facility, fRows]) => [
+                                      <tr key={`hdr-${facility}`}>
+                                        <td
+                                          colSpan={9}
+                                          className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                                        >
+                                          {facility}
+                                        </td>
+                                      </tr>,
+                                      ...fRows.map(renderSwitchRow),
+                                    ]);
+                                })()
+                              ) : (
+                                pagedSwitches.map(renderSwitchRow)
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                        <Pagination
+                          page={switchPage}
+                          totalPages={switchTotalPages}
+                          pageSize={switchPageSize}
+                          totalItems={switchesFiltered.length}
+                          onPage={setSwitchPage}
+                          onPageSize={(s) => {
+                            setSwitchPageSize(s);
+                            setSwitchPage(1);
+                          }}
+                        />
+                      </div>
+                    </>
+                  );
+                })()
+              )}
             </>
           );
         })()}
@@ -2794,33 +2923,36 @@ ${sections}
           ) : (
             <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
               <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-                  <tr>
-                    <th className="text-left px-4 py-3 font-semibold">Nurse</th>
-                    <th className="text-left px-4 py-3 font-semibold">Period</th>
-                    <th className="text-right px-4 py-3 font-semibold">Shifts</th>
-                    <th className="text-right px-4 py-3 font-semibold">Total Hours</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredPeriodSummaries.map((p) => {
-                    const nurse = nurses.find((n) => n.id === p.nurse_id);
-                    return (
-                      <tr key={p.nurse_id + p.period_start} className="border-t hover:bg-muted/30">
-                        <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
-                        <td className="px-4 py-3 text-muted-foreground tabular-nums">
-                          {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
-                        </td>
-                        <td className="px-4 py-3 text-right tabular-nums">{p.total_shifts}</td>
-                        <td className="px-4 py-3 text-right tabular-nums font-semibold">
-                          {fmtHoursLog(Number(p.total_hours))}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+                    <tr>
+                      <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                      <th className="text-left px-4 py-3 font-semibold">Period</th>
+                      <th className="text-right px-4 py-3 font-semibold">Shifts</th>
+                      <th className="text-right px-4 py-3 font-semibold">Total Hours</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredPeriodSummaries.map((p) => {
+                      const nurse = nurses.find((n) => n.id === p.nurse_id);
+                      return (
+                        <tr
+                          key={p.nurse_id + p.period_start}
+                          className="border-t hover:bg-muted/30"
+                        >
+                          <td className="px-4 py-3 font-medium">{nurse?.name ?? "—"}</td>
+                          <td className="px-4 py-3 text-muted-foreground tabular-nums">
+                            {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">{p.total_shifts}</td>
+                          <td className="px-4 py-3 text-right tabular-nums font-semibold">
+                            {fmtHoursLog(Number(p.total_hours))}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}
@@ -2828,109 +2960,128 @@ ${sections}
       )}
 
       {/* ── Missed Shifts ────────────────────────────────────────────────── */}
-      {tab === "missed" && (() => {
-        const nurseMap = new Map(nurses.map((n) => [n.id, n]));
-        const fmtDate = (d: string) =>
-          new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
-        return (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 flex-wrap">
-              <DateRangeFilter
-                value={missedRange}
-                onChange={(v) => { setMissedRange(v); setMissedPage(1); }}
-              />
-              {filteredMissedLogs.length > 0 && (
-                <button
-                  type="button"
-                  onClick={exportMissedShifts}
-                  className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted ml-auto"
-                >
-                  <Download className="h-4 w-4" /> Export Excel
-                </button>
+      {tab === "missed" &&
+        (() => {
+          const nurseMap = new Map(nurses.map((n) => [n.id, n]));
+          const fmtDate = (d: string) =>
+            new Date(d).toLocaleDateString("en-GB", {
+              day: "numeric",
+              month: "short",
+              year: "numeric",
+            });
+          return (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 flex-wrap">
+                <DateRangeFilter
+                  value={missedRange}
+                  onChange={(v) => {
+                    setMissedRange(v);
+                    setMissedPage(1);
+                  }}
+                />
+                {filteredMissedLogs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={exportMissedShifts}
+                    className="inline-flex items-center gap-2 h-9 px-3 rounded-md border bg-card text-sm hover:bg-muted ml-auto"
+                  >
+                    <Download className="h-4 w-4" /> Export Excel
+                  </button>
+                )}
+              </div>
+              <p className="text-sm text-muted-foreground">
+                Shifts where no clock-in was recorded.{" "}
+                <span className="font-medium text-foreground">{filteredMissedLogs.length}</span>{" "}
+                missed {reportFacility ? `in ${reportFacility}` : "across all facilities"}
+                {(missedRange.from || missedRange.to) && (
+                  <span>
+                    {" "}
+                    (filtered
+                    {missedRange.from ? ` from ${fmtDate(missedRange.from)}` : ""}
+                    {missedRange.to ? ` to ${fmtDate(missedRange.to)}` : ""})
+                  </span>
+                )}
+                .
+              </p>
+              {filteredMissedLogs.length === 0 ? (
+                <div className="py-16 text-center text-sm text-muted-foreground">
+                  {scopedMissedLogs.length === 0
+                    ? "No missed shifts recorded."
+                    : "No missed shifts found for the selected date range."}
+                </div>
+              ) : (
+                <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/40 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                          <th className="px-4 py-3 text-left">Date</th>
+                          <th className="px-4 py-3 text-left">Nurse</th>
+                          <th className="px-4 py-3 text-left hidden sm:table-cell">Facility</th>
+                          <th className="px-4 py-3 text-left hidden md:table-cell">Ward</th>
+                          <th className="px-4 py-3 text-left">Shift</th>
+                          <th className="px-4 py-3 text-left">Type</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-border">
+                        {pagedMissedLogs.map((l, i) => {
+                          const nurse = nurseMap.get(l.nurse_id);
+                          return (
+                            <tr key={i} className="hover:bg-muted/30">
+                              <td className="px-4 py-3 font-medium">{fmtDate(l.shift_date)}</td>
+                              <td className="px-4 py-3">{nurse?.name ?? "Unknown"}</td>
+                              <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
+                                {nurse?.facility ?? "—"}
+                              </td>
+                              <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                                {nurse?.ward?.split("|")[0] ?? "—"}
+                              </td>
+                              <td className="px-4 py-3">
+                                <span
+                                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                    l.shift_type === "M"
+                                      ? "bg-amber-100 text-amber-800"
+                                      : "bg-indigo-100 text-indigo-800"
+                                  }`}
+                                >
+                                  {l.shift_type === "M"
+                                    ? "Morning"
+                                    : l.shift_type === "N"
+                                      ? "Night"
+                                      : l.shift_type}
+                                </span>
+                              </td>
+                              <td className="px-4 py-3">
+                                {l.is_locum ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-black text-white">
+                                    Locum
+                                  </span>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">Roster</span>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                  <Pagination
+                    page={missedPage}
+                    totalPages={missedTotalPages}
+                    pageSize={missedPageSize}
+                    totalItems={filteredMissedLogs.length}
+                    onPage={setMissedPage}
+                    onPageSize={(s) => {
+                      setMissedPageSize(s);
+                      setMissedPage(1);
+                    }}
+                  />
+                </div>
               )}
             </div>
-            <p className="text-sm text-muted-foreground">
-              Shifts where no clock-in was recorded.{" "}
-              <span className="font-medium text-foreground">{filteredMissedLogs.length}</span> missed{" "}
-              {reportFacility ? `in ${reportFacility}` : "across all facilities"}
-              {(missedRange.from || missedRange.to) && (
-                <span>
-                  {" "}(filtered
-                  {missedRange.from ? ` from ${fmtDate(missedRange.from)}` : ""}
-                  {missedRange.to ? ` to ${fmtDate(missedRange.to)}` : ""})
-                </span>
-              )}.
-            </p>
-            {filteredMissedLogs.length === 0 ? (
-              <div className="py-16 text-center text-sm text-muted-foreground">
-                {scopedMissedLogs.length === 0
-                  ? "No missed shifts recorded."
-                  : "No missed shifts found for the selected date range."}
-              </div>
-            ) : (
-              <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/40 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                        <th className="px-4 py-3 text-left">Date</th>
-                        <th className="px-4 py-3 text-left">Nurse</th>
-                        <th className="px-4 py-3 text-left hidden sm:table-cell">Facility</th>
-                        <th className="px-4 py-3 text-left hidden md:table-cell">Ward</th>
-                        <th className="px-4 py-3 text-left">Shift</th>
-                        <th className="px-4 py-3 text-left">Type</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {pagedMissedLogs.map((l, i) => {
-                        const nurse = nurseMap.get(l.nurse_id);
-                        return (
-                          <tr key={i} className="hover:bg-muted/30">
-                            <td className="px-4 py-3 font-medium">{fmtDate(l.shift_date)}</td>
-                            <td className="px-4 py-3">{nurse?.name ?? "Unknown"}</td>
-                            <td className="px-4 py-3 text-muted-foreground hidden sm:table-cell">
-                              {nurse?.facility ?? "—"}
-                            </td>
-                            <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                              {nurse?.ward?.split("|")[0] ?? "—"}
-                            </td>
-                            <td className="px-4 py-3">
-                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
-                                l.shift_type === "M"
-                                  ? "bg-amber-100 text-amber-800"
-                                  : "bg-indigo-100 text-indigo-800"
-                              }`}>
-                                {l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type}
-                              </span>
-                            </td>
-                            <td className="px-4 py-3">
-                              {l.is_locum ? (
-                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-black text-white">
-                                  Locum
-                                </span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground">Roster</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-                <Pagination
-                  page={missedPage}
-                  totalPages={missedTotalPages}
-                  pageSize={missedPageSize}
-                  totalItems={filteredMissedLogs.length}
-                  onPage={setMissedPage}
-                  onPageSize={(s) => { setMissedPageSize(s); setMissedPage(1); }}
-                />
-              </div>
-            )}
-          </div>
-        );
-      })()}
+          );
+        })()}
 
       {/* ── Staff Directory ───────────────────────────────────────────────── */}
       {tab === "staff-dir" && (
@@ -3012,30 +3163,30 @@ ${sections}
                     </div>
                   </div>
                   <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-muted/20 text-xs uppercase tracking-wide text-muted-foreground">
-                      <tr>
-                        <th className="text-left px-4 py-2.5 font-medium w-10">#</th>
-                        <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                        <th className="text-left px-4 py-2.5 font-medium">Role</th>
-                        <th className="text-left px-4 py-2.5 font-medium">Ward(s)</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {wardNurses
-                        .sort((a, b) => a.name.localeCompare(b.name))
-                        .map((n, i) => (
-                          <tr key={n.id} className="border-t hover:bg-muted/20">
-                            <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
-                              {i + 1}
-                            </td>
-                            <td className="px-4 py-2.5 font-medium">{n.name}</td>
-                            <td className="px-4 py-2.5 text-muted-foreground">{n.role}</td>
-                            <td className="px-4 py-2.5 text-muted-foreground">{n.ward ?? "—"}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted/20 text-xs uppercase tracking-wide text-muted-foreground">
+                        <tr>
+                          <th className="text-left px-4 py-2.5 font-medium w-10">#</th>
+                          <th className="text-left px-4 py-2.5 font-medium">Name</th>
+                          <th className="text-left px-4 py-2.5 font-medium">Role</th>
+                          <th className="text-left px-4 py-2.5 font-medium">Ward(s)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wardNurses
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                          .map((n, i) => (
+                            <tr key={n.id} className="border-t hover:bg-muted/20">
+                              <td className="px-4 py-2.5 text-muted-foreground tabular-nums">
+                                {i + 1}
+                              </td>
+                              <td className="px-4 py-2.5 font-medium">{n.name}</td>
+                              <td className="px-4 py-2.5 text-muted-foreground">{n.role}</td>
+                              <td className="px-4 py-2.5 text-muted-foreground">{n.ward ?? "—"}</td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
               ))}
@@ -3155,7 +3306,10 @@ ${sections}
                           >
                             <div>
                               <p className="text-sm font-semibold">
-                                {win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff")}
+                                {win.ward ??
+                                  (win.roleGroup
+                                    ? FW_LABELS[win.roleGroup]
+                                    : "Facility-Wide Staff")}
                               </p>
                               {win.facility && (
                                 <p className="text-xs font-medium text-primary/80 mt-0.5">

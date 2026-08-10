@@ -609,8 +609,7 @@ function scheduleGroup(
     const dateStr = ymd(date);
     for (const nurse of byId) {
       const offset = (nurseBlock.get(nurse.id) ?? 0) * 4;
-      const startPos =
-        phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
+      const startPos = phaseOverrides.get(nurse.id) ?? (((phase + offset) % len) + len) % len;
       const dow = date.getDay(); // 0 = Sun .. 6 = Sat
       const baseShift: ShiftCode = fixedWeekday
         ? dow >= 1 && dow <= 5
@@ -872,6 +871,36 @@ export function summariseViolations(violations: SafetyViolation[]) {
   );
 }
 
+// Same grouping as summariseViolations (per ward/shift/role) but keeps every
+// individual day instead of collapsing to one worst-case row — for reports
+// where someone needs to know exactly which dates fell short, not just the
+// worst number seen across the whole period.
+export function groupViolationsByDay(violations: SafetyViolation[]) {
+  const map = new Map<
+    string,
+    {
+      ward: string;
+      shift: "M" | "N";
+      role: string;
+      required: number;
+      days: { date: string; actual: number }[];
+    }
+  >();
+  for (const v of violations) {
+    const key = `${v.ward}|${v.shift}|${v.role}`;
+    let entry = map.get(key);
+    if (!entry) {
+      entry = { ward: v.ward, shift: v.shift, role: v.role, required: v.required, days: [] };
+      map.set(key, entry);
+    }
+    entry.days.push({ date: v.date, actual: v.actual });
+  }
+  for (const entry of map.values()) entry.days.sort((a, b) => a.date.localeCompare(b.date));
+  return [...map.values()].sort(
+    (a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift),
+  );
+}
+
 export function nextInternWard(currentWard: string | null, wardNames: string[]): string | null {
   if (!wardNames.length) return currentWard;
   if (!currentWard) return wardNames[0];
@@ -954,7 +983,7 @@ function scheduleCoverageNurses(
   // Uses the detected actual position when available (honours manual edits made
   // at the end of the previous period); falls back to the mathematical formula.
   function nurseEffectiveBase(i: number): number {
-    return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
+    return phaseOverrides.get(group[i].id) ?? (periodOffset + nursePhase(i)) % CL;
   }
 
   // ── Continuous NC round-robin ────────────────────────────────────────────

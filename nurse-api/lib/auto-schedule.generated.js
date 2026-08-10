@@ -37,6 +37,7 @@ exports.isWardSupervisor = isWardSupervisor;
 exports.isHeadOrSupervisor = isHeadOrSupervisor;
 exports.enforceMinima = enforceMinima;
 exports.summariseViolations = summariseViolations;
+exports.groupViolationsByDay = groupViolationsByDay;
 exports.nextInternWard = nextInternWard;
 exports.generateSchedule = generateSchedule;
 exports.SHIFT_TIMES = {
@@ -734,6 +735,25 @@ function summariseViolations(violations) {
     }
     return [...map.values()].sort((a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift));
 }
+// Same grouping as summariseViolations (per ward/shift/role) but keeps every
+// individual day instead of collapsing to one worst-case row — for reports
+// where someone needs to know exactly which dates fell short, not just the
+// worst number seen across the whole period.
+function groupViolationsByDay(violations) {
+    const map = new Map();
+    for (const v of violations) {
+        const key = `${v.ward}|${v.shift}|${v.role}`;
+        let entry = map.get(key);
+        if (!entry) {
+            entry = { ward: v.ward, shift: v.shift, role: v.role, required: v.required, days: [] };
+            map.set(key, entry);
+        }
+        entry.days.push({ date: v.date, actual: v.actual });
+    }
+    for (const entry of map.values())
+        entry.days.sort((a, b) => a.date.localeCompare(b.date));
+    return [...map.values()].sort((a, b) => a.ward.localeCompare(b.ward) || a.shift.localeCompare(b.shift));
+}
 function nextInternWard(currentWard, wardNames) {
     if (!wardNames.length)
         return currentWard;
@@ -793,7 +813,7 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
     // Uses the detected actual position when available (honours manual edits made
     // at the end of the previous period); falls back to the mathematical formula.
     function nurseEffectiveBase(i) {
-        return phaseOverrides.get(group[i].id) ?? ((periodOffset + nursePhase(i)) % CL);
+        return phaseOverrides.get(group[i].id) ?? (periodOffset + nursePhase(i)) % CL;
     }
     // ── Continuous NC round-robin ────────────────────────────────────────────
     // NC coverage must never have a gap: the moment one nurse's 4-day block
