@@ -152,6 +152,10 @@ type EntitlementInfo = {
   used: number;
   remaining: number;
   exhausted: boolean;
+  // Set on "Annual" when it's hidden not because the day cap is used up, but
+  // because this nurse has a Pending/Approved Maternity leave request this
+  // year — Annual is blocked for the rest of that year either way.
+  blockedReason?: "maternity" | null;
   period: "year" | "month";
   windowStart: string;
   windowEnd: string;
@@ -1985,12 +1989,34 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               Select a date range first — which types are allowed depends on it.
             </p>
           ) : null}
-          {exhaustedTypes.size > 0 && (
-            <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
-              {[...exhaustedTypes].join(", ")} {exhaustedTypes.size === 1 ? "is" : "are"} hidden —
-              entitlement already used up for {[...exhaustedTypes].some((t) => entitlementUsage?.[t]?.period === "month") ? "this period" : "this year"}.
-            </p>
-          )}
+          {(() => {
+            const maternityBlocked = [...exhaustedTypes].filter(
+              (t) => entitlementUsage?.[t]?.blockedReason === "maternity",
+            );
+            const capExhausted = [...exhaustedTypes].filter(
+              (t) => entitlementUsage?.[t]?.blockedReason !== "maternity",
+            );
+            return (
+              <>
+                {maternityBlocked.length > 0 && (
+                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+                    {maternityBlocked.join(", ")} hidden — an active Maternity leave request this
+                    year blocks Annual leave until next year.
+                  </p>
+                )}
+                {capExhausted.length > 0 && (
+                  <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
+                    {capExhausted.join(", ")} {capExhausted.length === 1 ? "is" : "are"} hidden —
+                    entitlement already used up for{" "}
+                    {capExhausted.some((t) => entitlementUsage?.[t]?.period === "month")
+                      ? "this period"
+                      : "this year"}
+                    .
+                  </p>
+                )}
+              </>
+            );
+          })()}
           {entitlementUsage?.[effectiveType] && (
             <p className="text-xs text-muted-foreground mt-1">
               {effectiveType}: {entitlementUsage[effectiveType].used} of{" "}

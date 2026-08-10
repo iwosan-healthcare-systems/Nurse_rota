@@ -2,7 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
-const { wouldExceedEntitlement } = require("../lib/leave-entitlements");
+const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 function fmtDateRange(from, to) {
@@ -184,6 +184,18 @@ router.post(
           error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} day(s) allowed ${overage.period === "month" ? "this month" : "this year"} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
           code: "LEAVE_ENTITLEMENT_EXCEEDED",
         });
+      }
+
+      // A nurse with a Pending/Approved Maternity leave request this year
+      // can't also take Annual leave for the rest of that same year.
+      if (type === "Annual") {
+        const blocked = await isAnnualBlockedByMaternity(nurse_id, Number(from_date.slice(0, 4)));
+        if (blocked) {
+          return res.status(422).json({
+            error: `${nurse_name} has an active Maternity leave request this year — Annual leave can't be requested until next year.`,
+            code: "ANNUAL_BLOCKED_BY_MATERNITY",
+          });
+        }
       }
     }
 

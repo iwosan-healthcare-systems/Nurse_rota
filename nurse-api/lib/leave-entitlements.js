@@ -85,6 +85,35 @@ function daysBetweenInclusive(fromStr, toStr) {
   return Math.max(0, Math.round((new Date(toStr) - new Date(fromStr)) / 86400000) + 1);
 }
 
+// Once a nurse has a Pending or Approved Maternity leave request starting in
+// a given calendar year, they can't also request Annual leave anywhere in
+// that same year. Checked against the YEAR OF from_date directly from the
+// string (not Date parsing, which is timezone-sensitive around year
+// boundaries) — matches the `type` string, never the request being decided.
+async function isAnnualBlockedByMaternity(nurseId, year) {
+  const { rows } = await pool.query(
+    `SELECT id FROM leave_requests
+      WHERE nurse_id = $1 AND type = 'Maternity' AND status IN ('Pending','Approved')
+        AND EXTRACT(YEAR FROM from_date) = $2
+      LIMIT 1`,
+    [nurseId, year],
+  );
+  return rows.length > 0;
+}
+
+// Bulk version — one query for however many nurses, instead of one query per
+// nurse. Returns a Set of nurse_ids currently blocked for the given year.
+async function annualBlockedByMaternityForNurses(nurseIds, year) {
+  if (nurseIds.length === 0) return new Set();
+  const { rows } = await pool.query(
+    `SELECT DISTINCT nurse_id FROM leave_requests
+      WHERE nurse_id = ANY($1) AND type = 'Maternity' AND status IN ('Pending','Approved')
+        AND EXTRACT(YEAR FROM from_date) = $2`,
+    [nurseIds, year],
+  );
+  return new Set(rows.map((r) => r.nurse_id));
+}
+
 // Effective cap for one nurse/type: individual override beats job-role
 // override beats the system default — see migration 034's header for why
 // this precedence and why it's admin-only to set. `role` is the nurse's
@@ -191,13 +220,15 @@ async function getEntitlementUsage(nurseId) {
     const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end);
     const usedFromAdjustments = await daysUsedFromAdjustments(nurseId, type, period, year, month);
     const used = usedFromRequests + usedFromAdjustments;
+    const maternityBlock = type === "Annual" && (await isAnnualBlockedByMaternity(nurseId, year));
     out[type] = {
       cap,
       used,
       usedFromRequests,
       usedFromAdjustments,
       remaining: Math.max(0, cap - used),
-      exhausted: used >= cap,
+      exhausted: used >= cap || maternityBlock,
+      blockedReason: maternityBlock ? "maternity" : null,
       period,
       windowStart: start,
       windowEnd: end,
@@ -283,18 +314,22 @@ async function getEntitlementUsageForNurses(nurses) {
 
     const reqByNurse = new Map(reqRows.map((r) => [r.nurse_id, Number(r.days)]));
     const adjByNurse = new Map(adjRows.map((r) => [r.nurse_id, Number(r.days)]));
+    const maternityBlocked =
+      type === "Annual" ? await annualBlockedByMaternityForNurses(nurseIds, year) : null;
     for (const id of nurseIds) {
       const cap = caps[id]?.[type] ?? LEAVE_ENTITLEMENTS[type].days;
       const usedFromRequests = reqByNurse.get(id) ?? 0;
       const usedFromAdjustments = adjByNurse.get(id) ?? 0;
       const used = usedFromRequests + usedFromAdjustments;
+      const isBlocked = !!maternityBlocked?.has(id);
       usageByNurse.get(id)[type] = {
         cap,
         used,
         usedFromRequests,
         usedFromAdjustments,
         remaining: Math.max(0, cap - used),
-        exhausted: used >= cap,
+        exhausted: used >= cap || isBlocked,
+        blockedReason: isBlocked ? "maternity" : null,
         period,
         windowStart: start,
         windowEnd: end,
@@ -398,6 +433,7 @@ module.exports = {
   getEntitlementUsage,
   getEntitlementUsageForNurses,
   wouldExceedEntitlement,
+  isAnnualBlockedByMaternity,
   createAdjustment,
   getAdjustmentHistory,
   getOverrides,
