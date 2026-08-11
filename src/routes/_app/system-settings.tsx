@@ -9,13 +9,35 @@ import {
   type GpsSettings,
 } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
-import { Pencil, ShieldAlert, MapPin, Plus, Trash2, KeyRound } from "lucide-react";
+import { Pencil, ShieldAlert, MapPin, Plus, Trash2, KeyRound, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Switch } from "@/components/ui/switch";
 import { LeaveCapsSettings } from "@/components/settings/LeaveCapsSettings";
 import { PermissionsSettings } from "@/components/settings/PermissionsSettings";
 import { MenuAccessSettings } from "@/components/settings/MenuAccessSettings";
 import { SystemRolesSettings } from "@/components/settings/SystemRolesSettings";
+
+type RotaJobsPaused = {
+  auto_generate: boolean;
+  auto_submit: boolean;
+  auto_publish: boolean;
+};
+
+const ROTA_JOB_LABELS: Record<keyof RotaJobsPaused, string> = {
+  auto_generate: "Auto-Generate (T-19)",
+  auto_submit: "Auto-Submit (T-17)",
+  auto_publish: "Auto-Publish (T-14)",
+};
+
+const ROTA_JOB_DESCRIPTIONS: Record<keyof RotaJobsPaused, string> = {
+  auto_generate:
+    "Generates each unit's next draft rota 19 days before its period starts, so a head nurse doesn't have to click Generate.",
+  auto_submit:
+    "Force-submits any unit still sitting in draft 17 days before its period starts, and closes out any still-pending edit-access requests for it.",
+  auto_publish:
+    "Publishes any HR-approved unit 14 days before its period starts, and alerts HR/CNO/admin if a unit is still unapproved at that point.",
+};
 
 export const Route = createFileRoute("/_app/system-settings")({
   head: () => ({
@@ -60,6 +82,17 @@ function SystemSettingsPage() {
   const [pwExpiryDraft, setPwExpiryDraft] = useState(30);
   const [pwExpirySaving, setPwExpirySaving] = useState(false);
 
+  // Rota lifecycle cron job pause switches — read fresh by each job on every
+  // tick (see nurse-api/lib/rota-job-pause.js), so this takes effect within
+  // one 5-minute tick, no deploy needed either direction.
+  const defaultRotaJobsPaused: RotaJobsPaused = {
+    auto_generate: false,
+    auto_submit: false,
+    auto_publish: false,
+  };
+  const [rotaJobsPaused, setRotaJobsPaused] = useState<RotaJobsPaused>(defaultRotaJobsPaused);
+  const [rotaJobSaving, setRotaJobSaving] = useState<keyof RotaJobsPaused | null>(null);
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
@@ -77,7 +110,31 @@ function SystemSettingsPage() {
         if (typeof value === "number") setPwExpiryDays(value);
       })
       .catch(() => {});
+    api
+      .get<{ value: Partial<RotaJobsPaused> }>("/portal-settings/rota_jobs_paused")
+      .then(({ value }) => {
+        if (value) setRotaJobsPaused((prev) => ({ ...prev, ...value }));
+      })
+      .catch(() => {
+        /* no row saved yet — defaults (all unpaused) already in state */
+      });
   }, []);
+
+  async function toggleRotaJob(job: keyof RotaJobsPaused, paused: boolean) {
+    const next = { ...rotaJobsPaused, [job]: paused };
+    setRotaJobSaving(job);
+    try {
+      await api.put("/portal-settings/rota_jobs_paused", { value: next });
+      setRotaJobsPaused(next);
+      toast.success(
+        `${ROTA_JOB_LABELS[job]} ${paused ? "paused" : "resumed"}${paused ? "" : " — will catch up on anything overdue within 5 minutes"}`,
+      );
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setRotaJobSaving(null);
+    }
+  }
 
   // ── GPS helpers ──────────────────────────────────────────────────────────
 
@@ -211,6 +268,7 @@ function SystemSettingsPage() {
           <TabsTrigger value="permissions">Permissions</TabsTrigger>
           <TabsTrigger value="menu-access">Menu Access</TabsTrigger>
           <TabsTrigger value="roles">System Roles</TabsTrigger>
+          <TabsTrigger value="rota-jobs">Rota Jobs</TabsTrigger>
         </TabsList>
 
         <TabsContent value="gps">
@@ -476,6 +534,45 @@ function SystemSettingsPage() {
 
         <TabsContent value="roles">
           <SystemRolesSettings />
+        </TabsContent>
+
+        <TabsContent value="rota-jobs">
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b">
+              <h2 className="text-sm font-semibold">Rota Lifecycle Jobs</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Pause or resume the automatic rota jobs without a deploy. Takes effect within one
+                5-minute tick in either direction.
+              </p>
+            </div>
+            <div className="divide-y">
+              {(Object.keys(ROTA_JOB_LABELS) as (keyof RotaJobsPaused)[]).map((job) => (
+                <div key={job} className="px-5 py-4 flex items-center gap-4">
+                  <Timer className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{ROTA_JOB_LABELS[job]}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {ROTA_JOB_DESCRIPTIONS[job]}
+                    </p>
+                  </div>
+                  <span
+                    className={`text-xs font-medium shrink-0 ${rotaJobsPaused[job] ? "text-amber-600 dark:text-amber-400" : "text-emerald-600 dark:text-emerald-400"}`}
+                  >
+                    {rotaJobsPaused[job] ? "Paused" : "Running"}
+                  </span>
+                  <Switch
+                    checked={!rotaJobsPaused[job]}
+                    disabled={rotaJobSaving === job}
+                    onCheckedChange={(checked) => toggleRotaJob(job, !checked)}
+                  />
+                </div>
+              ))}
+            </div>
+            <p className="px-5 py-3 border-t text-xs text-muted-foreground">
+              Resuming a paused job doesn't "pick up where it left off" — the next tick immediately
+              processes everything that became overdue while it was paused, all at once.
+            </p>
+          </section>
         </TabsContent>
       </Tabs>
     </div>

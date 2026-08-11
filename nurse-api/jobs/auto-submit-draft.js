@@ -12,6 +12,7 @@ const {
   resolveUnitNurseIds,
 } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { isRotaJobPaused } = require("../lib/rota-job-pause");
 
 function fmtPeriodDate(d) {
   return d
@@ -42,6 +43,7 @@ const AUTO_SUBMIT_LOCK_KEY = 729316;
 const DRY_RUN = process.env.DRY_RUN_ROTA_JOBS === "true";
 
 async function autoSubmitDraft(opts = {}) {
+  if (await isRotaJobPaused("auto_submit")) return;
   const lockClient = await pool.connect();
   try {
     const { rows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [

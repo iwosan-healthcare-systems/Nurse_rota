@@ -8,6 +8,7 @@ const pool = require("../db");
 const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const { roleGroupOf, resolveUnitNurseIds } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { isRotaJobPaused } = require("../lib/rota-job-pause");
 
 function fmtPeriodDate(d) {
   return d
@@ -38,6 +39,7 @@ const AUTO_PUBLISH_LOCK_KEY = 729317;
 const DRY_RUN = process.env.DRY_RUN_ROTA_JOBS === "true";
 
 async function autoPublishRota(opts = {}) {
+  if (await isRotaJobPaused("auto_publish")) return;
   const lockClient = await pool.connect();
   try {
     const { rows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [

@@ -21,6 +21,7 @@ const {
   summariseViolations,
 } = require("../lib/auto-schedule.generated.js");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { isRotaJobPaused } = require("../lib/rota-job-pause");
 
 function fmtPeriodDate(d) {
   return d
@@ -84,6 +85,7 @@ function daysBetween(fromStr, toStr) {
 }
 
 async function autoGenerateRota(opts = {}) {
+  if (await isRotaJobPaused("auto_generate")) return;
   const lockClient = await pool.connect();
   try {
     const { rows } = await lockClient.query("SELECT pg_try_advisory_lock($1) AS locked", [
