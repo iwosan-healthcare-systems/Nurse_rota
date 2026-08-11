@@ -2,7 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getWindowForPeriod } = require("../lib/rota-period-dates");
-const { forceSubmitUnit, wasRevertedToDraft } = require("../lib/force-submit-rota");
+const { wasRevertedToDraft } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -194,8 +194,6 @@ router.patch(
     if (!["Approved", "Declined"].includes(status)) {
       return res.status(400).json({ error: "status must be 'Approved' or 'Declined'" });
     }
-    // Declining auto-submits the as-is draft — the requester needs to know
-    // why, so a reason is required here too, not just enforced client-side.
     if (status === "Declined" && !review_note?.trim()) {
       return res.status(400).json({ error: "A reason is required when declining." });
     }
@@ -215,26 +213,16 @@ router.patch(
     const requesterEmail = await profileEmail(updated.requested_by);
 
     if (status === "Declined") {
-      // Declining an edit-access request also force-submits the as-is draft —
-      // if the safety guards block that (pending/unapplied leave), the rota
-      // just stays in draft; the decline itself still succeeds.
-      const result = await forceSubmitUnit({
-        facility: updated.facility,
-        ward: updated.ward,
-        roleGroup: updated.role_group,
-        periodStart: updated.period_start,
-        periodEnd: updated.period_end,
-      });
       await notify(updated.requested_by, `rota_edit_declined_${updated.id}`);
       sendMail({
         to: requesterEmail,
         subject: `Edit access declined — ${unitLabel(updated)}`,
         title: "Edit-access request declined",
-        bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was declined${updated.review_note ? ` — "${updated.review_note}"` : ""}.</p><p>The draft has been auto-submitted as-is for CNO review.</p>`,
+        bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was declined${updated.review_note ? ` — "${updated.review_note}"` : ""}.</p><p>The draft remains open — you may submit a new request if needed.</p>`,
         ctaText: "Open Rota",
         ctaUrl: portalUrl("/rota"),
       }).catch(() => {});
-      return res.json({ ...updated, autoSubmit: result });
+      return res.json(updated);
     }
 
     await notify(updated.requested_by, `rota_edit_approved_${updated.id}`);

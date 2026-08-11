@@ -1344,7 +1344,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
                       <p className="text-xs mt-1">{req.reason}</p>
                       {req.review_note && (
                         <p className="text-xs text-muted-foreground mt-1">
-                          {req.status === "Expired" ? "" : "HR note: "}
+                          {req.status === "Expired" ? "" : "CNO note: "}
                           {req.review_note}
                         </p>
                       )}

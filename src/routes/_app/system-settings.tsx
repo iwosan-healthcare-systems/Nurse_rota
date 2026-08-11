@@ -76,7 +76,7 @@ const ROTA_DEADLINE_FIELDS: {
   {
     key: "publish_deadline_days",
     label: "Auto-publish",
-    description: "An HR-approved rota is auto-published this many days before the next period starts.",
+    description: "A CNO-approved rota is auto-published this many days before the next period starts.",
   },
 ];
 

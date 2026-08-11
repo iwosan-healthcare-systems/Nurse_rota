@@ -444,7 +444,7 @@ function RotaPage() {
         period_end: ymd(endDate),
         reason: editRequestReason.trim(),
       });
-      toast.success("Edit access requested — HR will review it shortly");
+      toast.success("Edit access requested — CNO will review it shortly");
       setShowEditRequestModal(false);
       setEditRequestReason("");
       qc.invalidateQueries({ queryKey: ["my-rota-edit-request"] });
@@ -2084,12 +2084,12 @@ function RotaPage() {
                   Edit access granted — you can make changes until this is submitted.
                 </p>
               ) : myEditRequest?.status === "Pending" ? (
-                <p className="font-medium">Edit access requested — waiting on HR.</p>
+                <p className="font-medium">Edit access requested — waiting on CNO.</p>
               ) : (
                 <>
                   <p className="font-medium">This draft is locked for editing.</p>
                   <p className="mt-0.5 opacity-80">
-                    Request edit access from HR before making changes
+                    Request edit access from CNO before making changes
                     {myEditRequest?.status === "Declined" ? " — your last request was declined." : "."}
                   </p>
                 </>
