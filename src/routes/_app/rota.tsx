@@ -1299,7 +1299,7 @@ function RotaPage() {
         actor_name: user?.email ?? null,
       })
       .catch(() => {});
-    toast.success("Submitted for HR review");
+    toast.success("Submitted for CNO review");
     qc.invalidateQueries({ queryKey: ["assignments"] });
     qc.invalidateQueries({ queryKey: ["approvals"] });
   }
@@ -1879,7 +1879,7 @@ function RotaPage() {
           actor_name: user?.email ?? null,
         })
         .catch(() => {});
-      toast.success(`${labels[key]} schedule submitted for HR review`);
+      toast.success(`${labels[key]} schedule submitted for CNO review`);
       qc.invalidateQueries({ queryKey: ["assignments"] });
       qc.invalidateQueries({ queryKey: ["approvals"] });
     } catch {

@@ -87,7 +87,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
     label: "Submit Rota for Approval",
     roles: ["admin", "head_nurse"],
   },
-  { key: "approve_rota", label: "Approve Rota (HR review step)", roles: ["admin", "hr_admin"] },
+  { key: "approve_rota", label: "Approve Rota (CNO review step)", roles: ["admin", "cno"] },
   { key: "publish_rota", label: "Publish Rota", roles: ["admin", "cno"] },
   { key: "revert_published", label: "Revert Published Rota to Draft", roles: ["admin"] },
   {
@@ -97,8 +97,8 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   },
   {
     key: "grant_rota_edit_access",
-    label: "Grant / Decline Rota Edit Access Requests (HR)",
-    roles: ["admin", "hr_admin"],
+    label: "Grant / Decline Rota Edit Access Requests (CNO)",
+    roles: ["admin", "cno"],
   },
   {
     key: "manage_leave_entitlements",

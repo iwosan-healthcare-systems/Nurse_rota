@@ -230,7 +230,7 @@ router.patch(
         to: requesterEmail,
         subject: `Edit access declined — ${unitLabel(updated)}`,
         title: "Edit-access request declined",
-        bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was declined${updated.review_note ? ` — "${updated.review_note}"` : ""}.</p><p>The draft has been auto-submitted as-is for HR review.</p>`,
+        bodyHtml: `<p>Your request to edit <strong>${unitLabel(updated)}</strong> · ${updated.facility} was declined${updated.review_note ? ` — "${updated.review_note}"` : ""}.</p><p>The draft has been auto-submitted as-is for CNO review.</p>`,
         ctaText: "Open Rota",
         ctaUrl: portalUrl("/rota"),
       }).catch(() => {});

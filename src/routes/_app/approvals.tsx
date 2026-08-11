@@ -1152,7 +1152,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
               <div>
                 <p className="font-medium">Rota approved — ready to publish</p>
                 <p className="mt-0.5 opacity-80">
-                  HR has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
+                  CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
                   so nurses can view their schedule (or it auto-publishes at the T-14 deadline).
                 </p>
               </div>

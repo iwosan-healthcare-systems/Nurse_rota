@@ -926,7 +926,7 @@ function ManagementAlerts() {
   // this banner becomes purely informational for everyone else.
   const canWfGenerate = isAdmin;
   const canWfSubmit = activeRole === "head_nurse" || isAdmin;
-  const canWfApproveRota = activeRole === "hr_admin" || isAdmin;
+  const canWfApproveRota = activeRole === "cno" || isAdmin;
   const canWfPublish = activeRole === "cno" || isAdmin;
   const showWfGenerate =
     wfReady && workflowStatus?.leaveIsClosed && canWfGenerate && stage === "none";

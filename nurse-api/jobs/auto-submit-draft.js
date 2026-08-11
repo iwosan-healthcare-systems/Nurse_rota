@@ -27,7 +27,7 @@ function fmtPeriodDate(d) {
 const EMAIL_COPY = {
   rota_autosubmitted: (facility, unitLabel, periodStart) => ({
     subject: `Rota auto-submitted for review — ${unitLabel}`,
-    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) reached the T-17 deadline still in draft and was automatically submitted for HR review.</p>`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) reached the T-17 deadline still in draft and was automatically submitted for CNO review.</p>`,
     ctaPath: "/approvals",
   }),
   rota_autosubmit_blocked: (facility, unitLabel, periodStart) => ({

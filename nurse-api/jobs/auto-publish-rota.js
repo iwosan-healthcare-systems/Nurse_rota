@@ -173,7 +173,7 @@ async function runAutoPublish({ simulateToday } = {}) {
 
     if (DRY_RUN) {
       console.log(
-        `[DRY-RUN][auto-publish-rota] would NOT publish ${row.facility}/${unitLabel} — HR approval missing, would alert`,
+        `[DRY-RUN][auto-publish-rota] would NOT publish ${row.facility}/${unitLabel} — CNO approval missing, would alert`,
       );
       continue;
     }
