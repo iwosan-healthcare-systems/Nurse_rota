@@ -28,7 +28,7 @@ const EMAIL_COPY = {
   }),
   rota_publish_deadline_missed: (facility, unitLabel, periodStart) => ({
     subject: `Action needed: rota not published — ${unitLabel}`,
-    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) hit the T-14 publish deadline still without HR approval, so it was <strong>not</strong> published automatically. Please review and resolve.</p>`,
+    bodyHtml: `<p>The rota for <strong>${unitLabel}</strong> · ${facility} (period starting ${fmtPeriodDate(periodStart)}) hit the T-14 publish deadline still without CNO approval, so it was <strong>not</strong> published automatically. Please review and resolve.</p>`,
     ctaPath: "/approvals",
   }),
 };
@@ -116,7 +116,6 @@ async function runAutoPublish({ simulateToday } = {}) {
 
     await notifyUnit(row.facility, "rota_autopublished", unitLabel, period.periodStart, [
       "head_nurse",
-      "hr_admin",
       "cno",
       "admin",
     ]);
@@ -180,12 +179,11 @@ async function runAutoPublish({ simulateToday } = {}) {
     }
     await pool
       .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
-        "Rota NOT auto-published — HR approval missing at T-14 deadline",
+        "Rota NOT auto-published — CNO approval missing at T-14 deadline",
         `${row.facility} · ${unitLabel} · ${period.periodStart} → ${period.periodEnd}`,
       ])
       .catch(() => {});
     await notifyUnit(row.facility, "rota_publish_deadline_missed", unitLabel, period.periodStart, [
-      "hr_admin",
       "cno",
       "admin",
     ]);

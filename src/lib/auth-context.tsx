@@ -363,11 +363,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // an admin emergency override, not a normal head_nurse action.
     canAutoGenerate: cap("auto_generate", ["admin"]),
     canSubmitApproval: cap("submit_approval", ["admin", "head_nurse"]),
-    canApproveRota: cap("approve_rota", ["admin", "hr_admin"]),
+    canApproveRota: cap("approve_rota", ["admin", "cno"]),
     canPublishRota: cap("publish_rota", ["admin", "cno"]),
     canRevertPublished: cap("revert_published", ["admin"]),
     canRequestRotaEditAccess: cap("request_rota_edit_access", ["admin", "head_nurse"]),
-    canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "hr_admin"]),
+    canGrantRotaEditAccess: cap("grant_rota_edit_access", ["admin", "cno"]),
     canManageLeaveEntitlements: cap("manage_leave_entitlements", ["admin", "hr_admin"]),
     canManageLeaveEntitlementCaps: cap("manage_leave_entitlement_caps", ["admin"]),
     canApproveLeave: cap("approve_leave", ["admin", "chief_matron"]),

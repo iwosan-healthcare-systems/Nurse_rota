@@ -912,7 +912,7 @@ function ManagementAlerts() {
     const parts: string[] = [];
     if (stageCounts.draft > 0) parts.push(`${stageCounts.draft} still in draft`);
     if (highlight !== "submitted" && stageCounts.submitted > 0)
-      parts.push(`${stageCounts.submitted} submitted, awaiting HR`);
+      parts.push(`${stageCounts.submitted} submitted, awaiting CNO`);
     if (highlight !== "hr_approved" && stageCounts.hr_approved > 0)
       parts.push(`${stageCounts.hr_approved} approved, not yet published`);
     if (highlight !== "published" && stageCounts.published > 0)
@@ -958,16 +958,16 @@ function ManagementAlerts() {
     }
   } else if (stage === "draft") {
     wfTimelineTitle = `Draft rota generated for ${wfPeriodStr}`;
-    wfTimelineDetail = `Open for edits (by request to HR) until ${fmtEditCloseDate} (T-17), when it's automatically submitted for HR review.`;
+    wfTimelineDetail = `Open for edits (by request to CNO) until ${fmtEditCloseDate} (T-17), when it's automatically submitted for CNO review.`;
   } else if (stage === "submitted") {
     wfTimelineTitle = totalUnits
-      ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s) submitted for HR review — ${wfPeriodStr}`
-      : `Rota for ${wfPeriodStr} submitted for HR review`;
-    wfTimelineDetail = `HR approval is due by ${fmtPublishDeadline} (T-14).${unitCountsBreakdown("submitted")}`;
+      ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s) submitted for CNO review — ${wfPeriodStr}`
+      : `Rota for ${wfPeriodStr} submitted for CNO review`;
+    wfTimelineDetail = `CNO approval is due by ${fmtPublishDeadline} (T-14).${unitCountsBreakdown("submitted")}`;
   } else if (stage === "hr_approved") {
     wfTimelineTitle = totalUnits
-      ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s) approved by HR — ${wfPeriodStr}`
-      : `Rota for ${wfPeriodStr} approved by HR`;
+      ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s) approved by CNO — ${wfPeriodStr}`
+      : `Rota for ${wfPeriodStr} approved by CNO`;
     wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.${unitCountsBreakdown("hr_approved")}`;
     wfTimelineDone = true;
   } else if (stage === "published") {
@@ -1067,7 +1067,7 @@ function ManagementAlerts() {
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
               {totalUnits ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s)` : "Draft rota"}{" "}
-              awaiting HR approval
+              awaiting CNO approval
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
               Submitted for {wfPeriodStr}. Go to Approvals to review and approve.
@@ -1085,7 +1085,7 @@ function ManagementAlerts() {
               approved — ready to publish
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
-              HR-approved for {wfPeriodStr}. Go to Approvals to publish (or it auto-publishes at
+              CNO-approved for {wfPeriodStr}. Go to Approvals to publish (or it auto-publishes at
               the T-14 deadline).
               {unitCountsBreakdown("hr_approved")}
             </p>

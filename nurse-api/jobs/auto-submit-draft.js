@@ -129,13 +129,13 @@ async function runAutoSubmit({ simulateToday } = {}) {
         .catch(() => {});
       await notifyUnit(row.facility, "rota_autosubmitted", unitLabel, period.periodStart, [
         "head_nurse",
-        "hr_admin",
+        "cno",
         "admin",
       ]);
     } else if (result.reason !== "NO_NURSES") {
       await notifyUnit(row.facility, "rota_autosubmit_blocked", unitLabel, period.periodStart, [
         "head_nurse",
-        "hr_admin",
+        "cno",
         "admin",
       ]);
     }

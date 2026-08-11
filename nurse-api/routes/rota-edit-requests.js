@@ -161,8 +161,8 @@ router.post(
         ],
       );
       const created = rows[0];
-      await notifyRole("hr_admin", `rota_edit_pending_${created.id}`);
-      const hrProfiles = await activeProfilesWithRole("hr_admin");
+      await notifyRole("cno", `rota_edit_pending_${created.id}`);
+      const hrProfiles = await activeProfilesWithRole("cno");
       for (const { email } of hrProfiles) {
         sendMail({
           to: email,
@@ -188,7 +188,7 @@ router.post(
 
 router.patch(
   "/:id",
-  requireCapability("grant_rota_edit_access", ["admin", "hr_admin"]),
+  requireCapability("grant_rota_edit_access", ["admin", "cno"]),
   wrap(async (req, res) => {
     const { status, review_note } = req.body;
     if (!["Approved", "Declined"].includes(status)) {

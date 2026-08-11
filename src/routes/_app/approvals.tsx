@@ -40,7 +40,7 @@ export const Route = createFileRoute("/_app/approvals")({
       { title: "Approvals — Nurses Rota" },
       {
         name: "description",
-        content: "Rota approval workflow: Draft → Submitted → HR Approved → Published.",
+        content: "Rota approval workflow: Draft → Submitted → CNO Approved → Published.",
       },
     ],
   }),
@@ -75,7 +75,7 @@ type ApprovalStep = { key: string; label: string; status: string };
 const STEPS: ApprovalStep[] = [
   { key: "draft", label: "Draft", status: "draft" },
   { key: "submitted", label: "Submitted", status: "submitted" },
-  { key: "hr_approved", label: "HR", status: "hr_approved" },
+  { key: "hr_approved", label: "CNO", status: "hr_approved" },
   { key: "published", label: "Published", status: "published" },
 ];
 
@@ -229,7 +229,7 @@ const FW_LABELS: Record<FacilityWideGroup, string> = {
 
 const STATUS_LABELS: Record<WindowStatus, string> = {
   draft: "Draft",
-  submitted: "Awaiting HR Approval",
+  submitted: "Awaiting CNO Approval",
   hr_approved: "Awaiting Publication",
   published: "Published",
 };
@@ -283,9 +283,9 @@ function ApprovalsPage() {
         })
       : "";
 
-  // Admin, CNO and HR/Admin see all facilities; other roles are locked to their own.
+  // Admin and CNO see all facilities; other roles are locked to their own.
   const lockedFacility =
-    isAdmin || activeRole === "cno" || activeRole === "hr_admin" ? null : (nurseFacility ?? null);
+    isAdmin || activeRole === "cno" ? null : (nurseFacility ?? null);
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
   const canPublish = canPublishRota;
@@ -917,7 +917,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
     if (win.status === "submitted" && canApproveRota) {
       canApprove = true;
       nextStatus = "hr_approved";
-      approveLabel = "Approve (HR)";
+      approveLabel = "Approve (CNO)";
     } else if (win.status === "hr_approved" && canPublish) {
       canApprove = true;
       nextStatus = "published";
@@ -925,7 +925,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
     }
 
     // Reject-to-draft uses the same capability as approving forward at that
-    // stage — HR (approve_rota) can bounce a submitted OR hr_approved rota
+    // stage — CNO (approve_rota) can bounce a submitted OR hr_approved rota
     // back to draft, matching routes/shift-assignments.js's classification.
     const canReject =
       (win.status === "submitted" || win.status === "hr_approved") && canApproveRota;
@@ -1103,7 +1103,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Approval Workflow" subtitle="Draft → Submitted → HR Approved → Published" />
+      <PageHeader title="Approval Workflow" subtitle="Draft → Submitted → CNO Approved → Published" />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-muted/50 rounded-lg p-1 w-fit flex-wrap">
@@ -1136,7 +1136,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
               <Clock className="mt-0.5 h-4 w-4 shrink-0" />
               <div>
-                <p className="font-medium">Draft rota awaiting HR approval</p>
+                <p className="font-medium">Draft rota awaiting CNO approval</p>
                 <p className="mt-0.5 opacity-80">
                   The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been
                   submitted. Review and approve it below.

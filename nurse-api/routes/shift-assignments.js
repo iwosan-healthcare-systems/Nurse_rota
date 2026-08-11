@@ -314,11 +314,11 @@ router.patch(
         capFallback = ["admin", "head_nurse"];
       } else if (status === "hr_approved" && filterStatus === "submitted") {
         capKey = "approve_rota";
-        capFallback = ["admin", "hr_admin"];
+        capFallback = ["admin", "cno"];
       } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
         // Reject-to-draft — same capability as approving forward at that stage.
         capKey = "approve_rota";
-        capFallback = ["admin", "hr_admin"];
+        capFallback = ["admin", "cno"];
       } else if (status === "published" && filterStatus === "hr_approved") {
         capKey = "publish_rota";
         capFallback = ["admin", "cno"];
@@ -574,15 +574,15 @@ router.patch(
       let bodyHtml = null;
       let ctaPath = "/rota";
       if (status === "submitted" && filterStatus === "draft") {
-        recipientRoles = ["hr_admin"];
+        recipientRoles = ["cno"];
         subject = "Rota submitted for review";
         ctaPath = "/approvals";
       } else if (status === "hr_approved" && filterStatus === "submitted") {
         recipientRoles = ["cno"];
-        subject = "Rota approved by HR — ready to publish";
+        subject = "Rota approved — ready to publish";
         ctaPath = "/approvals";
       } else if (status === "published" && filterStatus === "hr_approved") {
-        recipientRoles = ["head_nurse", "hr_admin", "cno", "admin"];
+        recipientRoles = ["head_nurse", "cno", "admin"];
         subject = "Rota published";
         ctaPath = "/rota";
       } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
@@ -606,12 +606,12 @@ router.patch(
 
           bodyHtml = `<p>The rota for <strong>${unitLabel}</strong> (${facilities.join(", ")}), period starting ${periodLabel}, ${
             status === "submitted"
-              ? "has been submitted and is awaiting HR approval."
+              ? "has been submitted and is awaiting CNO approval."
               : status === "hr_approved"
-                ? "has been approved by HR and is ready to publish."
+                ? "has been approved and is ready to publish."
                 : status === "published"
                   ? "has been published."
-                  : "has been returned to draft by HR — changes are needed before resubmitting."
+                  : "has been returned to draft — changes are needed before resubmitting."
           }</p>`;
 
           for (const role of recipientRoles) {

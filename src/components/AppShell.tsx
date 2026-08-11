@@ -435,11 +435,11 @@ const UNIT_PERIOD_MESSAGES: Record<string, (u: NonNullable<UnitPeriod>) => strin
   rota_autosubmit_blocked_: (u) =>
     `Auto-submit blocked for ${u.unitDisplay} · ${u.facilityDisplay} — unresolved leave still needs review.`,
   rota_hr_rejected_: (u) =>
-    `HR returned ${u.unitDisplay} · ${u.facilityDisplay} to draft — changes are needed before resubmitting.`,
+    `CNO returned ${u.unitDisplay} · ${u.facilityDisplay} to draft — changes are needed before resubmitting.`,
   rota_autopublished_: (u) =>
     `${u.unitDisplay} · ${u.facilityDisplay} was published automatically (T-14 deadline).`,
   rota_publish_deadline_missed_: (u) =>
-    `Publish deadline missed for ${u.unitDisplay} · ${u.facilityDisplay} — HR approval is still outstanding.`,
+    `Publish deadline missed for ${u.unitDisplay} · ${u.facilityDisplay} — CNO approval is still outstanding.`,
 };
 
 function unitPeriodMessage(key: string): string | null {
@@ -1456,7 +1456,7 @@ function RotaReminderBell({
                           : wKind === "submit"
                             ? "Submit Draft Rota"
                             : wKind === "approve"
-                              ? "HR Approval Required"
+                              ? "CNO Approval Required"
                               : isOverdue
                                 ? "Publish Rota — Overdue"
                                 : "Publish Rota Now";
@@ -1467,10 +1467,10 @@ function RotaReminderBell({
                           : wKind === "submit"
                             ? `Leave window is closed. The draft rota for ${fmtDate(workflowItem.nextPeriodStart)} is ready — review and submit it for approval (it auto-submits at the T-17 deadline if you don't).`
                             : wKind === "approve"
-                              ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} has been submitted and is awaiting HR approval.`
+                              ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} has been submitted and is awaiting CNO approval.`
                               : isOverdue
-                                ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is HR-approved — publish it now (deadline has passed).`
-                                : `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is HR-approved — publish it 14 days before the period starts (or it auto-publishes at the deadline).`;
+                                ? `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is CNO-approved — publish it now (deadline has passed).`
+                                : `The rota for ${fmtDate(workflowItem.nextPeriodStart)} is CNO-approved — publish it 14 days before the period starts (or it auto-publishes at the deadline).`;
 
                       const pageHint =
                         wKind === "generate"

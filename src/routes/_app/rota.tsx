@@ -2325,7 +2325,7 @@ function RotaPage() {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                hr_approved: "HR ✓",
+                hr_approved: "CNO ✓",
                 published: "Published",
               };
               return (
@@ -2371,8 +2371,8 @@ function RotaPage() {
                       <Clock className="h-3.5 w-3.5" />
                     )}
                     {windowLockStatus === "published" && "Published — read only"}
-                    {windowLockStatus === "hr_approved" && "HR Approved — awaiting publication"}
-                    {windowLockStatus === "submitted" && "Submitted — awaiting HR approval"}
+                    {windowLockStatus === "hr_approved" && "CNO Approved — awaiting publication"}
+                    {windowLockStatus === "submitted" && "Submitted — awaiting CNO approval"}
                   </span>
                   {/* New/reactivated staff in a published ward — generate their draft first */}
                   {windowLockStatus === "published" &&
@@ -2504,7 +2504,7 @@ function RotaPage() {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                hr_approved: "HR ✓",
+                hr_approved: "CNO ✓",
                 published: "Published",
               };
               return (
@@ -2997,7 +2997,7 @@ function RotaPage() {
                   )}
                   {windowLockStatus === "published" && "Published schedule — read only"}
                   {windowLockStatus === "hr_approved" &&
-                    "Approved (HR) — use Approvals to publish or revert"}
+                    "Approved (CNO) — use Approvals to publish or revert"}
                   {windowLockStatus === "submitted" &&
                     "Submitted for approval — use Approvals to return to draft if edits are needed"}
                 </span>

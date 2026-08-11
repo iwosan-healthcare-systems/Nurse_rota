@@ -137,8 +137,8 @@ async function runSendRotaApprovalReminders() {
         ...unit,
         deadlineField: "editCloseDate",
         notifPrefix: "rota_submit_approval_reminder",
-        role: "hr_admin",
-        subject: `Reminder — rota for ${unit.unitLabel} still awaiting HR approval`,
+        role: "cno",
+        subject: `Reminder — rota for ${unit.unitLabel} still awaiting CNO approval`,
         verb: "awaiting your approval",
       });
     }
@@ -149,8 +149,8 @@ async function runSendRotaApprovalReminders() {
         deadlineField: "publishDeadline",
         notifPrefix: "rota_publish_approval_reminder",
         role: "cno",
-        subject: `Reminder — rota for ${unit.unitLabel} is HR-approved and awaiting publish`,
-        verb: "HR-approved and awaiting publish",
+        subject: `Reminder — rota for ${unit.unitLabel} is CNO-approved and awaiting publish`,
+        verb: "CNO-approved and awaiting publish",
       });
     }
 

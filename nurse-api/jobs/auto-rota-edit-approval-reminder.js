@@ -58,7 +58,7 @@ async function runSendRotaEditApprovalReminders() {
 
     let sentCount = 0;
     if (pending.length) {
-      const hrProfiles = await activeProfilesWithRole("hr_admin");
+      const hrProfiles = await activeProfilesWithRole("cno");
       for (const r of pending) {
         const window = await getWindowForPeriod(r.period_start);
         if (window.editIsClosed) continue; // already past deadline — auto-submit job handles this

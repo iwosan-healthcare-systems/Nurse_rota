@@ -36,7 +36,7 @@ const ROTA_JOB_DESCRIPTIONS: Record<keyof RotaJobsPaused, string> = {
   auto_submit:
     "Force-submits any unit still sitting in draft 17 days before its period starts, and closes out any still-pending edit-access requests for it.",
   auto_publish:
-    "Publishes any HR-approved unit 14 days before its period starts, and alerts HR/CNO/admin if a unit is still unapproved at that point.",
+    "Publishes any CNO-approved unit 14 days before its period starts, and alerts CNO/admin if a unit is still unapproved at that point.",
 };
 
 export const Route = createFileRoute("/_app/system-settings")({
