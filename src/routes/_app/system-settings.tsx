@@ -9,7 +9,7 @@ import {
   type GpsSettings,
 } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
-import { Pencil, ShieldAlert, MapPin, Plus, Trash2, KeyRound, Timer } from "lucide-react";
+import { Pencil, ShieldAlert, MapPin, Plus, Trash2, KeyRound, Timer, CalendarClock } from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -38,6 +38,47 @@ const ROTA_JOB_DESCRIPTIONS: Record<keyof RotaJobsPaused, string> = {
   auto_publish:
     "Publishes any CNO-approved unit 14 days before its period starts, and alerts CNO/admin if a unit is still unapproved at that point.",
 };
+
+type RotaDeadlines = {
+  leave_closure_days: number;
+  generate_days: number;
+  edit_close_days: number;
+  publish_deadline_days: number;
+};
+
+const DEFAULT_ROTA_DEADLINES: RotaDeadlines = {
+  leave_closure_days: 21,
+  generate_days: 19,
+  edit_close_days: 17,
+  publish_deadline_days: 14,
+};
+
+const ROTA_DEADLINE_FIELDS: {
+  key: keyof RotaDeadlines;
+  label: string;
+  description: string;
+}[] = [
+  {
+    key: "leave_closure_days",
+    label: "Leave closure",
+    description: "Non-exempt leave requests are blocked from this many days before the next period starts.",
+  },
+  {
+    key: "generate_days",
+    label: "Auto-generate",
+    description: "The draft rota is auto-generated this many days before the next period starts.",
+  },
+  {
+    key: "edit_close_days",
+    label: "Edit closes / auto-submit",
+    description: "A draft still sitting unsubmitted is force-submitted, and edit-access grants close, this many days before the next period starts.",
+  },
+  {
+    key: "publish_deadline_days",
+    label: "Auto-publish",
+    description: "An HR-approved rota is auto-published this many days before the next period starts.",
+  },
+];
 
 export const Route = createFileRoute("/_app/system-settings")({
   head: () => ({
@@ -93,6 +134,24 @@ function SystemSettingsPage() {
   const [rotaJobsPaused, setRotaJobsPaused] = useState<RotaJobsPaused>(defaultRotaJobsPaused);
   const [rotaJobSaving, setRotaJobSaving] = useState<keyof RotaJobsPaused | null>(null);
 
+  // Rota lifecycle deadlines (T-21/T-19/T-17/T-14) — single source of truth
+  // shared by rpc.js's workflow-status, leave-requests.js's closure check,
+  // and all three cron jobs (see nurse-api/lib/rota-deadline-settings.js).
+  const [rotaDeadlines, setRotaDeadlines] = useState<RotaDeadlines>(DEFAULT_ROTA_DEADLINES);
+  const [rotaDeadlinesEditing, setRotaDeadlinesEditing] = useState(false);
+  const [rotaDeadlinesDraft, setRotaDeadlinesDraft] = useState<RotaDeadlines | null>(null);
+  const [rotaDeadlinesSaving, setRotaDeadlinesSaving] = useState(false);
+
+  // Sick/Emergency max leave span, and idle-session auto-logout.
+  const [sickEmergencyMaxDays, setSickEmergencyMaxDays] = useState(3);
+  const [sickEmergencyDraft, setSickEmergencyDraft] = useState(3);
+  const [sickEmergencyEditing, setSickEmergencyEditing] = useState(false);
+  const [sickEmergencySaving, setSickEmergencySaving] = useState(false);
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(60);
+  const [idleTimeoutDraft, setIdleTimeoutDraft] = useState(60);
+  const [idleTimeoutEditing, setIdleTimeoutEditing] = useState(false);
+  const [idleTimeoutSaving, setIdleTimeoutSaving] = useState(false);
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
@@ -118,6 +177,26 @@ function SystemSettingsPage() {
       .catch(() => {
         /* no row saved yet — defaults (all unpaused) already in state */
       });
+    api
+      .get<{ value: Partial<RotaDeadlines> }>("/portal-settings/rota_deadlines")
+      .then(({ value }) => {
+        if (value) setRotaDeadlines((prev) => ({ ...prev, ...value }));
+      })
+      .catch(() => {
+        /* no row saved yet — defaults already in state */
+      });
+    api
+      .get<{ value: number }>("/portal-settings/sick_emergency_max_days")
+      .then(({ value }) => {
+        if (typeof value === "number" && value > 0) setSickEmergencyMaxDays(value);
+      })
+      .catch(() => {});
+    api
+      .get<{ value: number }>("/portal-settings/idle_timeout_minutes")
+      .then(({ value }) => {
+        if (typeof value === "number" && value > 0) setIdleTimeoutMinutes(value);
+      })
+      .catch(() => {});
   }, []);
 
   async function toggleRotaJob(job: keyof RotaJobsPaused, paused: boolean) {
@@ -133,6 +212,88 @@ function SystemSettingsPage() {
       toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
     } finally {
       setRotaJobSaving(null);
+    }
+  }
+
+  // Rota deadlines must stay in descending order — leave closure is furthest
+  // out, publish deadline is nearest — or the lifecycle steps would fire out
+  // of sequence (e.g. auto-generate running before leave has even closed).
+  function rotaDeadlinesOrderError(d: RotaDeadlines): string | null {
+    if (
+      !Number.isInteger(d.leave_closure_days) ||
+      !Number.isInteger(d.generate_days) ||
+      !Number.isInteger(d.edit_close_days) ||
+      !Number.isInteger(d.publish_deadline_days) ||
+      d.publish_deadline_days < 1
+    ) {
+      return "All four values must be whole numbers, at least 1.";
+    }
+    if (
+      !(
+        d.leave_closure_days >= d.generate_days &&
+        d.generate_days >= d.edit_close_days &&
+        d.edit_close_days >= d.publish_deadline_days
+      )
+    ) {
+      return "Values must stay in descending order: Leave closure ≥ Auto-generate ≥ Edit closes ≥ Auto-publish.";
+    }
+    return null;
+  }
+
+  async function saveRotaDeadlines() {
+    if (!rotaDeadlinesDraft) return;
+    const error = rotaDeadlinesOrderError(rotaDeadlinesDraft);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setRotaDeadlinesSaving(true);
+    try {
+      await api.put("/portal-settings/rota_deadlines", { value: rotaDeadlinesDraft });
+      setRotaDeadlines(rotaDeadlinesDraft);
+      setRotaDeadlinesEditing(false);
+      setRotaDeadlinesDraft(null);
+      toast.success("Rota deadlines saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setRotaDeadlinesSaving(false);
+    }
+  }
+
+  async function saveSickEmergencyMaxDays() {
+    if (!Number.isInteger(sickEmergencyDraft) || sickEmergencyDraft < 1 || sickEmergencyDraft > 90) {
+      toast.error("Must be a whole number between 1 and 90");
+      return;
+    }
+    setSickEmergencySaving(true);
+    try {
+      await api.put("/portal-settings/sick_emergency_max_days", { value: sickEmergencyDraft });
+      setSickEmergencyMaxDays(sickEmergencyDraft);
+      setSickEmergencyEditing(false);
+      toast.success("Sick/Emergency max span saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSickEmergencySaving(false);
+    }
+  }
+
+  async function saveIdleTimeout() {
+    if (!Number.isInteger(idleTimeoutDraft) || idleTimeoutDraft < 5 || idleTimeoutDraft > 480) {
+      toast.error("Must be a whole number between 5 and 480 minutes");
+      return;
+    }
+    setIdleTimeoutSaving(true);
+    try {
+      await api.put("/portal-settings/idle_timeout_minutes", { value: idleTimeoutDraft });
+      setIdleTimeoutMinutes(idleTimeoutDraft);
+      setIdleTimeoutEditing(false);
+      toast.success("Idle session timeout saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setIdleTimeoutSaving(false);
     }
   }
 
@@ -269,6 +430,8 @@ function SystemSettingsPage() {
           <TabsTrigger value="menu-access">Menu Access</TabsTrigger>
           <TabsTrigger value="roles">System Roles</TabsTrigger>
           <TabsTrigger value="rota-jobs">Rota Jobs</TabsTrigger>
+          <TabsTrigger value="rota-deadlines">Rota Deadlines</TabsTrigger>
+          <TabsTrigger value="leave-session">Leave &amp; Session Rules</TabsTrigger>
         </TabsList>
 
         <TabsContent value="gps">
@@ -571,6 +734,226 @@ function SystemSettingsPage() {
             <p className="px-5 py-3 border-t text-xs text-muted-foreground">
               Resuming a paused job doesn't "pick up where it left off" — the next tick immediately
               processes everything that became overdue while it was paused, all at once.
+            </p>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="rota-deadlines">
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold">Rota Lifecycle Deadlines</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Day-offsets counted back from the next period's start date. Single source of
+                  truth for the dashboard, leave closure, and all three rota jobs.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {rotaDeadlinesEditing ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRotaDeadlinesEditing(false);
+                        setRotaDeadlinesDraft(null);
+                      }}
+                      disabled={rotaDeadlinesSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveRotaDeadlines}
+                      disabled={rotaDeadlinesSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {rotaDeadlinesSaving ? "Saving…" : "Save changes"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRotaDeadlinesDraft({ ...rotaDeadlines });
+                      setRotaDeadlinesEditing(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="divide-y">
+              {ROTA_DEADLINE_FIELDS.map(({ key, label, description }) => (
+                <div key={key} className="px-5 py-4 flex items-center gap-4">
+                  <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-sm font-medium">{label}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+                  </div>
+                  {rotaDeadlinesEditing ? (
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        max={90}
+                        value={rotaDeadlinesDraft?.[key] ?? rotaDeadlines[key]}
+                        onChange={(e) =>
+                          setRotaDeadlinesDraft((d) =>
+                            d ? { ...d, [key]: Number(e.target.value) } : d,
+                          )
+                        }
+                        className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                      />
+                      <span className="text-xs text-muted-foreground">days</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm font-semibold tabular-nums">
+                      T-{rotaDeadlines[key]}
+                    </span>
+                  )}
+                </div>
+              ))}
+            </div>
+            {rotaDeadlinesEditing && rotaDeadlinesDraft && rotaDeadlinesOrderError(rotaDeadlinesDraft) && (
+              <p className="px-5 py-3 border-t text-xs text-destructive">
+                {rotaDeadlinesOrderError(rotaDeadlinesDraft)}
+              </p>
+            )}
+            <p className="px-5 py-3 border-t text-xs text-muted-foreground">
+              Values must stay in descending order — Leave closure furthest out, Auto-publish
+              nearest — since each step depends on the one before it having already happened.
+            </p>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="leave-session">
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b">
+              <h2 className="text-sm font-semibold">Leave &amp; Session Rules</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Other admin-configurable limits that used to be hardcoded.
+              </p>
+            </div>
+            <div className="divide-y">
+              <div className="px-5 py-4 flex items-center gap-4">
+                <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Sick/Emergency max span</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    How many days (including the start date) a Sick or Emergency leave request can
+                    cover — can still be booked any time in advance, this only caps the duration.
+                  </p>
+                </div>
+                {sickEmergencyEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={sickEmergencyDraft}
+                      onChange={(e) => setSickEmergencyDraft(Number(e.target.value))}
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">days</span>
+                    <button
+                      type="button"
+                      onClick={() => setSickEmergencyEditing(false)}
+                      disabled={sickEmergencySaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveSickEmergencyMaxDays}
+                      disabled={sickEmergencySaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {sickEmergencySaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">
+                      {sickEmergencyMaxDays} day(s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSickEmergencyDraft(sickEmergencyMaxDays);
+                        setSickEmergencyEditing(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-5 py-4 flex items-center gap-4">
+                <Timer className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Idle session timeout</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Minutes of inactivity before a user is automatically logged out. A warning
+                    always shows 5 minutes before.
+                  </p>
+                </div>
+                {idleTimeoutEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={5}
+                      max={480}
+                      value={idleTimeoutDraft}
+                      onChange={(e) => setIdleTimeoutDraft(Number(e.target.value))}
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">minutes</span>
+                    <button
+                      type="button"
+                      onClick={() => setIdleTimeoutEditing(false)}
+                      disabled={idleTimeoutSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveIdleTimeout}
+                      disabled={idleTimeoutSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {idleTimeoutSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">
+                      {idleTimeoutMinutes} min
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIdleTimeoutDraft(idleTimeoutMinutes);
+                        setIdleTimeoutEditing(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+            <p className="px-5 py-3 border-t text-xs text-muted-foreground">
+              Both take effect immediately for new checks — the idle timeout applies the next time
+              a user's session timer resets (e.g. their next action), not retroactively to an
+              already-running countdown.
             </p>
           </section>
         </TabsContent>

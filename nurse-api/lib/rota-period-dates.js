@@ -1,22 +1,28 @@
 const pool = require("../db");
+const { getRotaDeadlineSettings } = require("./rota-deadline-settings");
 
 // Shared timeline math for the automated rota lifecycle, all relative to the
-// next period's start date (day after the last published shift_date):
-//   T-21 : leave_closure_date — non-exempt leave requests blocked (existing,
-//          also computed independently in routes/rpc.js and
-//          routes/leave-requests.js — this helper doesn't touch those, it's
-//          only for the new T-19/T-17/T-14 jobs so there's one source of
-//          truth for THEM, rather than a fourth/fifth copy of the math).
-//   T-19 : generate_date     — system auto-generates the draft rota
-//   T-17 : edit_close_date   — draft force-submitted; edit-access grants close
-//   T-14 : publish_deadline  — system auto-publishes if HR-approved
+// next period's start date (day after the last published shift_date). Day
+// offsets (T-21/T-19/T-17/T-14 by default) come from getRotaDeadlineSettings
+// — admin-configurable via System Settings, no deploy needed — and are bound
+// as query parameters (`$n * INTERVAL '1 day'`), never string-interpolated,
+// so there's no injection surface even though they're admin-editable.
+//   leave_closure_date — non-exempt leave requests blocked
+//   generate_date       — system auto-generates the draft rota
+//   edit_close_date     — draft force-submitted; edit-access grants close
+//   publish_deadline    — system auto-publishes if HR-approved
 //
-// Each "*_is_due" boolean uses the same day-boundary semantics already
-// established in rpc.js's workflow-status endpoint: due only once the WHOLE
-// milestone day has elapsed in Africa/Lagos time (date + 1 day), not the
-// instant it begins — and uses >= rather than an exact-day match, so a job
-// that was down and catches up later still fires correctly (mirrors every
-// other cron job in this codebase re-running on startup to catch up).
+// Each "*_is_due"/"*_is_closed" boolean uses the same day-boundary
+// semantics: due only once the WHOLE milestone day has elapsed in
+// Africa/Lagos time (date + 1 day), not the instant it begins — and uses >=
+// rather than an exact-day match, so a job that was down and catches up
+// later still fires correctly (mirrors every other cron job in this
+// codebase re-running on startup to catch up).
+//
+// This is the SINGLE source of truth for all four milestones — routes/rpc.js
+// (workflow-status) and routes/leave-requests.js (submission-time leave
+// closure check) both call this instead of independently recomputing the
+// same math, so a deadline change here is guaranteed consistent everywhere.
 async function getNextPeriodDates({ simulateToday } = {}) {
   const { rows: pubRows } = await pool.query(
     `SELECT MAX(shift_date::date) AS last_date FROM shift_assignments WHERE status = 'published'`,
@@ -28,20 +34,26 @@ async function getNextPeriodDates({ simulateToday } = {}) {
   // (pretends it's noon Lagos time on that date — only the calendar day
   // relative to each milestone boundary matters here).
   const now = simulateToday ? new Date(`${simulateToday}T12:00:00+01:00`) : new Date();
+  const { leave_closure_days, generate_days, edit_close_days, publish_deadline_days } =
+    await getRotaDeadlineSettings();
 
   const { rows } = await pool.query(
     `
     SELECT
-      ($1::date + 1)::text                             AS next_period_start,
-      ($1::date + 1 - INTERVAL '21 days')::date::text  AS leave_closure_date,
-      ($1::date + 1 - INTERVAL '19 days')::date::text  AS generate_date,
-      ($1::date + 1 - INTERVAL '17 days')::date::text  AS edit_close_date,
-      ($1::date + 1 - INTERVAL '14 days')::date::text  AS publish_deadline,
-      ($2::timestamptz >= (($1::date + 1 - INTERVAL '19 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
-      ($2::timestamptz >= (($1::date + 1 - INTERVAL '17 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
-      ($2::timestamptz >= (($1::date + 1 - INTERVAL '14 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
+      ($1::date + 1)::text                                              AS next_period_start,
+      ($1::date + 1 - ($3::int * INTERVAL '1 day'))::date::text         AS leave_closure_date,
+      ($1::date + 1 - ($4::int * INTERVAL '1 day'))::date::text         AS generate_date,
+      ($1::date + 1 - ($5::int * INTERVAL '1 day'))::date::text         AS edit_close_date,
+      ($1::date + 1 - ($6::int * INTERVAL '1 day'))::date::text         AS publish_deadline,
+      (
+        ($1::date + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
+        AND $2::timestamptz >= (($1::date + 1 - ($3::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
+      )                                                                  AS leave_is_closed,
+      ($2::timestamptz >= (($1::date + 1 - ($4::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
+      ($2::timestamptz >= (($1::date + 1 - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
+      ($2::timestamptz >= (($1::date + 1 - ($6::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
     `,
-    [lastDate, now.toISOString()],
+    [lastDate, now.toISOString(), leave_closure_days, generate_days, edit_close_days, publish_deadline_days],
   );
 
   const row = rows[0];
@@ -51,6 +63,7 @@ async function getNextPeriodDates({ simulateToday } = {}) {
     generateDate: row.generate_date,
     editCloseDate: row.edit_close_date,
     publishDeadline: row.publish_deadline,
+    leaveIsClosed: row.leave_is_closed,
     generateIsDue: row.generate_is_due,
     editIsClosed: row.edit_is_closed,
     publishIsOverdue: row.publish_is_overdue,
@@ -70,18 +83,19 @@ async function getNextPeriodDates({ simulateToday } = {}) {
 // moved on to.
 async function getWindowForPeriod(periodStart, { simulateToday } = {}) {
   const now = simulateToday ? new Date(`${simulateToday}T12:00:00+01:00`) : new Date();
+  const { generate_days, edit_close_days, publish_deadline_days } = await getRotaDeadlineSettings();
 
   const { rows } = await pool.query(
     `
     SELECT
-      ($1::date - INTERVAL '19 days')::date::text AS generate_date,
-      ($1::date - INTERVAL '17 days')::date::text AS edit_close_date,
-      ($1::date - INTERVAL '14 days')::date::text AS publish_deadline,
-      ($2::timestamptz >= (($1::date - INTERVAL '19 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
-      ($2::timestamptz >= (($1::date - INTERVAL '17 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
-      ($2::timestamptz >= (($1::date - INTERVAL '14 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
+      ($1::date - ($3::int * INTERVAL '1 day'))::date::text AS generate_date,
+      ($1::date - ($4::int * INTERVAL '1 day'))::date::text AS edit_close_date,
+      ($1::date - ($5::int * INTERVAL '1 day'))::date::text AS publish_deadline,
+      ($2::timestamptz >= (($1::date - ($3::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
+      ($2::timestamptz >= (($1::date - ($4::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
+      ($2::timestamptz >= (($1::date - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
     `,
-    [periodStart, now.toISOString()],
+    [periodStart, now.toISOString(), generate_days, edit_close_days, publish_deadline_days],
   );
 
   const row = rows[0];

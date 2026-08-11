@@ -1695,6 +1695,19 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     staleTime: 60 * 1000,
     queryFn: () => api.get<EntitlementUsage>(`/leave-entitlements/${targetNurseId}`),
   });
+
+  // Admin-configurable via System Settings (default 3) — how many days,
+  // inclusive of the start date, a Sick/Emergency request can span.
+  const { data: sickEmergencyMaxDays = 3 } = useQuery({
+    queryKey: ["sick-emergency-max-days"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: () =>
+      api
+        .get<{ value: number }>("/portal-settings/sick_emergency_max_days")
+        .then(({ value }) => (typeof value === "number" && value > 0 ? value : 3))
+        .catch(() => 3),
+  });
+  const sickEmergencyMaxOffset = sickEmergencyMaxDays - 1;
   const exhaustedTypes = new Set(
     isAdmin
       ? []
@@ -1724,15 +1737,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   // changes out from under them once the real constraints are known.
   const typeSelectionBlocked = (staffMode && !targetNurseId) || !datesReady || checkingDates;
 
-  // Sick/Emergency: `to` auto-defaults to from+2 (see the From/Type onChange
-  // handlers below), but the user can still pick something further out —
-  // this flags that case for an inline error instead of the picker silently
-  // refusing the date (submit() below re-checks this as the final guard).
+  // Sick/Emergency: `to` auto-defaults to the configured max span (see the
+  // From/Type onChange handlers below), but the user can still pick
+  // something further out — this flags that case for an inline error
+  // instead of the picker silently refusing the date (submit() below
+  // re-checks this as the final guard).
   const isSickEmergencyRangeExceeded =
     (effectiveType === "Sick" || effectiveType === "Emergency") &&
     !!from &&
     !!to &&
-    to > addDaysLeaveYmd(from, 2);
+    to > addDaysLeaveYmd(from, sickEmergencyMaxOffset);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1749,8 +1763,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       return;
     }
     if (effectiveType === "Sick" || effectiveType === "Emergency") {
-      if (to > addDaysLeaveYmd(from, 2)) {
-        toast.error(`${effectiveType} leave can only be requested for up to 3 days from the start date.`);
+      if (to > addDaysLeaveYmd(from, sickEmergencyMaxOffset)) {
+        toast.error(
+          `${effectiveType} leave can only be requested for up to ${sickEmergencyMaxDays} day(s) from the start date.`,
+        );
         return;
       }
     }
@@ -1887,12 +1903,13 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => {
                 const v = e.target.value;
                 setFrom(v);
-                // Sick/Emergency: default `to` straight to the 3-day span every
-                // time `from` moves — the user can still pick a different `to`
-                // afterwards (isSickEmergencyRangeExceeded below flags it with
-                // an inline error rather than the picker silently refusing it).
+                // Sick/Emergency: default `to` straight to the configured max
+                // span every time `from` moves — the user can still pick a
+                // different `to` afterwards (isSickEmergencyRangeExceeded
+                // below flags it with an inline error rather than the picker
+                // silently refusing it).
                 if (effectiveType === "Sick" || effectiveType === "Emergency") {
-                  setTo(addDaysLeaveYmd(v, 2));
+                  setTo(addDaysLeaveYmd(v, sickEmergencyMaxOffset));
                 } else if (!to || to < v) {
                   setTo(v);
                 }
@@ -1916,11 +1933,13 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             {(effectiveType === "Sick" || effectiveType === "Emergency") &&
               (isSickEmergencyRangeExceeded ? (
                 <p className="text-xs text-destructive mt-1">
-                  {effectiveType} leave can't be more than 3 days from the start date.
+                  {effectiveType} leave can't be more than {sickEmergencyMaxDays} day(s) from the
+                  start date.
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {effectiveType} leave is capped at 3 days from the start date.
+                  {effectiveType} leave is capped at {sickEmergencyMaxDays} day(s) from the start
+                  date.
                 </p>
               ))}
           </div>
@@ -1964,11 +1983,12 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               const v = e.target.value;
               setType(v);
               // Switching TO Sick/Emergency (e.g. from Annual) — default `to`
-              // straight to the 3-day span, same as picking `from` does. The
-              // user can still widen it afterwards; isSickEmergencyRangeExceeded
-              // catches that with an inline error instead of silently blocking.
+              // straight to the configured max span, same as picking `from`
+              // does. The user can still widen it afterwards;
+              // isSickEmergencyRangeExceeded catches that with an inline
+              // error instead of silently blocking.
               if ((v === "Sick" || v === "Emergency") && from) {
-                setTo(addDaysLeaveYmd(from, 2));
+                setTo(addDaysLeaveYmd(from, sickEmergencyMaxOffset));
               }
             }}
             disabled={typeSelectionBlocked}

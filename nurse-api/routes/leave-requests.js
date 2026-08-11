@@ -3,6 +3,8 @@ const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
+const { getNextPeriodDates } = require("../lib/rota-period-dates");
+const { getSickEmergencyMaxDays } = require("../lib/leave-settings");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 function fmtDateRange(from, to) {
@@ -159,13 +161,15 @@ router.post(
       return res.status(400).json({ error: "End date cannot be before the start date" });
     }
     // Sick/Emergency can be booked in advance (e.g. a planned surgery), but
-    // are capped at 3 days duration FROM WHICHEVER START DATE the staff
-    // member picks — not restricted to starting within 3 days of today.
+    // are capped at a set number of days duration (admin-configurable via
+    // System Settings, default 3) FROM WHICHEVER START DATE the staff member
+    // picks — not restricted to starting within N days of today.
     if (type === "Sick" || type === "Emergency") {
-      const maxToDate = addDaysYmd(from_date, 2);
+      const maxDays = await getSickEmergencyMaxDays();
+      const maxToDate = addDaysYmd(from_date, maxDays - 1);
       if (to_date > maxToDate) {
         return res.status(400).json({
-          error: `${type} leave can only be requested for up to 3 days from the start date.`,
+          error: `${type} leave can only be requested for up to ${maxDays} day(s) from the start date.`,
         });
       }
     }
@@ -253,31 +257,25 @@ router.post(
 
     // ── Leave closure window enforcement ──────────────────────────────────
     // Once the first rota has been published, all non-exempt leave types are
-    // blocked for 21 days leading up to the next schedule period start date.
-    // is_closed is computed against NOW() (Africa/Lagos) rather than a JS
-    // date-string compare, so the window stays open through the whole of the
-    // T-21 calendar day and only closes at 23:59:59 Lagos time that day —
-    // not the instant that day begins.
+    // blocked from leave_closure_days (default 21, admin-configurable) before
+    // the next schedule period start date. getNextPeriodDates() is the single
+    // source of truth for this (also used by rpc.js's workflow-status and the
+    // three lifecycle cron jobs) — leaveIsClosed is already computed against
+    // NOW() in Africa/Lagos there, open through the whole closure-date
+    // calendar day and closing only at 23:59:59 Lagos time that day. The
+    // extra condition here — is this request's OWN from_date actually inside
+    // the period that's currently closing — is specific to this endpoint, so
+    // it stays a plain JS date-string comparison against periodEnd.
     if (!EXEMPT_LEAVE_TYPES.includes(type)) {
-      const { rows: pubRows } = await pool.query(
-        `SELECT
-          (MAX(shift_date::date) + 1)::text AS next_start,
-          (
-            (MAX(shift_date::date) + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
-            AND NOW() >= ((MAX(shift_date::date) + 1 - INTERVAL '21 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
-            AND $1::date <= (MAX(shift_date::date) + 28)
-          ) AS is_closed
-        FROM shift_assignments
-        WHERE status = 'published'`,
-        [from_date],
-      );
-      const nextStart = pubRows[0]?.next_start;
-      const isClosed = pubRows[0]?.is_closed;
-      if (isClosed) {
-        return res.status(422).json({
-          error: `Leave requests are closed until the next schedule begins (${nextStart}). Only Sick and Emergency Leave can be submitted now.`,
-          code: "LEAVE_WINDOW_CLOSED",
-        });
+      const periodDates = await getNextPeriodDates();
+      if (periodDates?.leaveIsClosed) {
+        const periodEnd = addDaysYmd(periodDates.nextPeriodStart, 27);
+        if (from_date <= periodEnd) {
+          return res.status(422).json({
+            error: `Leave requests are closed until the next schedule begins (${periodDates.nextPeriodStart}). Only Sick and Emergency Leave can be submitted now.`,
+            code: "LEAVE_WINDOW_CLOSED",
+          });
+        }
       }
     }
 

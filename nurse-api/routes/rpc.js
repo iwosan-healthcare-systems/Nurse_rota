@@ -193,46 +193,26 @@ router.post(
 router.get(
   "/workflow-status",
   wrap(async (req, res) => {
-    // Find the last published shift date across all facilities.
-    const { rows: pubRows } = await pool.query(`
-      SELECT MAX(shift_date::date) AS last_date
-      FROM shift_assignments
-      WHERE status = 'published'
-    `);
-
-    const lastDate = pubRows[0]?.last_date;
-    if (!lastDate) {
+    // Single source of truth for every milestone (T-21 leave closure through
+    // T-14 publish) — day-offsets are admin-configurable via System Settings,
+    // see lib/rota-deadline-settings.js. Also returns null when nothing has
+    // ever been published, which is exactly this endpoint's own "nothing to
+    // report yet" case, so no separate up-front query is needed here either.
+    const periodDates = await getNextPeriodDates();
+    if (!periodDates) {
       return res.json({ firstRotaPublished: false });
     }
-
-    // Compute the next period start and key milestone dates in Postgres so we
-    // never have to worry about JS Date timezone/DST edge cases. leave_is_closed
-    // and publish_is_overdue are computed here too (against NOW(), in Africa/Lagos)
-    // rather than as a JS date-string compare — a plain "today >= closureDate"
-    // trips the moment closureDate's calendar day BEGINS (00:00), cutting the
-    // window a full day short. The +1 day here makes the cutoff 23:59:59 Lagos
-    // time on closureDate itself — closed/overdue only once that day has passed.
-    const { rows: dateRows } = await pool.query(`
-      SELECT
-        ($1::date + 1)::text                                 AS next_period_start,
-        ($1::date + 1 - INTERVAL '21 days')::date::text     AS leave_closure_date,
-        ($1::date + 1 - INTERVAL '14 days')::date::text     AS publish_deadline,
-        (
-          ($1::date + 1) > (NOW() AT TIME ZONE 'Africa/Lagos')::date
-          AND NOW() >= (($1::date + 1 - INTERVAL '21 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
-        )                                                     AS leave_is_closed,
-        (
-          NOW() >= (($1::date + 1 - INTERVAL '14 days') + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos'
-        )                                                     AS publish_is_overdue
-    `, [lastDate]);
-
     const {
-      next_period_start: nextPeriodStart,
-      leave_closure_date: leaveClosureDate,
-      publish_deadline: publishDeadline,
-      leave_is_closed: leaveIsClosed,
-      publish_is_overdue: publishIsOverdue,
-    } = dateRows[0];
+      nextPeriodStart,
+      leaveClosureDate,
+      generateDate,
+      editCloseDate,
+      publishDeadline,
+      leaveIsClosed,
+      generateIsDue,
+      editIsClosed,
+      publishIsOverdue,
+    } = periodDates;
 
     // Determine per-UNIT (ward, or facility-wide role group) approval stage
     // for the next period, then roll that up into both a single "most
@@ -273,22 +253,16 @@ router.get(
       }
     }
 
-    // T-19/T-17 milestone dates + due-flags come from the shared lib (single
-    // source of truth for the auto-generate/auto-submit jobs) — added here so
-    // the dashboard can show the full T-21..T-14 timeline, not just leave
-    // closure and publish deadline.
-    const periodDates = await getNextPeriodDates();
-
     res.json({
       firstRotaPublished: true,
       nextPeriodStart,
       leaveClosureDate,
-      generateDate: periodDates?.generateDate,
-      editCloseDate: periodDates?.editCloseDate,
+      generateDate,
+      editCloseDate,
       publishDeadline,
       leaveIsClosed,
-      generateIsDue: periodDates?.generateIsDue ?? false,
-      editIsClosed: periodDates?.editIsClosed ?? false,
+      generateIsDue,
+      editIsClosed,
       publishIsOverdue,
       nextRotaStage,
       stageCounts,

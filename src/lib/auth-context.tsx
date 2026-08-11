@@ -130,6 +130,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [mustChangePassword, setMustChangePassword] = useState(false);
   const [passwordExpiresInDays, setPasswordExpiresInDays] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  // Admin-configurable via System Settings (default 60) — minutes of
+  // inactivity before auto-logout.
+  const [idleTimeoutMinutes, setIdleTimeoutMinutes] = useState(60);
 
   useEffect(() => {
     if (!getToken()) {
@@ -145,6 +148,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         clearToken();
       })
       .finally(() => setLoading(false));
+  }, []);
+
+  // Pull the idle-logout timeout from DB once on mount.
+  useEffect(() => {
+    if (!getToken()) return;
+    api
+      .get<{ value: number }>("/portal-settings/idle_timeout_minutes")
+      .then(({ value }) => {
+        if (typeof value === "number" && value > 0) setIdleTimeoutMinutes(value);
+      })
+      .catch(() => {
+        /* non-critical — falls back to the 60-minute default already in state */
+      });
   }, []);
 
   // Pull capability overrides from DB once on mount.
@@ -199,12 +215,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("roles-changed", fetchRoles);
   }, [user]);
 
-  // Auto-logout after 1 hour of inactivity. Warns at 55 minutes.
+  // Auto-logout after `idleTimeoutMinutes` of inactivity (admin-configurable
+  // via System Settings, default 60). Always warns 5 minutes before.
   useEffect(() => {
     if (!user) return;
 
-    const IDLE_MS = 60 * 60 * 1000; // 1 hour
-    const WARN_MS = 55 * 60 * 1000; // warn at 55 min
+    const IDLE_MS = idleTimeoutMinutes * 60 * 1000;
+    const WARN_MS = Math.max(0, idleTimeoutMinutes - 5) * 60 * 1000;
 
     function doLogout() {
       toast.dismiss("idle-warn");
@@ -254,7 +271,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       EVENTS.forEach((e) => window.removeEventListener(e, onActivity));
       toast.dismiss("idle-warn");
     };
-  }, [user]);
+  }, [user, idleTimeoutMinutes]);
 
   function applyUser(me: ApiUser) {
     setUser(me);
