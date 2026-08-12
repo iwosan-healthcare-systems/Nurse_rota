@@ -202,15 +202,21 @@ function LocumPage() {
   });
 
   const { data: pendingRequests = [], isLoading: pendingLoading } = useQuery({
-    queryKey: ["locum-pending"],
+    queryKey: ["locum-pending", locumFacility],
     enabled: isCNO,
-    queryFn: () => api.get<LocumRequest[]>("/locum/requests?status=pending"),
+    queryFn: () =>
+      api.get<LocumRequest[]>(
+        `/locum/requests?status=pending${locumFacility ? `&facility=${encodeURIComponent(locumFacility)}` : ""}`,
+      ),
   });
 
   const { data: allRequests = [], isLoading: allLoading } = useQuery({
-    queryKey: ["locum-all"],
+    queryKey: ["locum-all", locumFacility],
     enabled: isCNO,
-    queryFn: () => api.get<LocumRequest[]>("/locum/requests"),
+    queryFn: () =>
+      api.get<LocumRequest[]>(
+        `/locum/requests${locumFacility ? `?facility=${encodeURIComponent(locumFacility)}` : ""}`,
+      ),
   });
 
   // Head nurse: read-only view of all requests for their facility
