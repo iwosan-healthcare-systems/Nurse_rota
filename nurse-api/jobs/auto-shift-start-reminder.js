@@ -1,6 +1,7 @@
 const cron = require("node-cron");
 const pool = require("../db");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { getShiftReminderSettings } = require("../lib/shift-reminder-settings");
 
 // Arbitrary fixed key for this job's mutex — see auto-end-shifts.js for why
 // this is needed (multiple PM2 instances, same wall-clock cron tick).
@@ -48,7 +49,9 @@ async function sendReminderEmails() {
 
 async function runSendReminderEmails() {
   try {
-    // Regular roster assignments starting in the next 15 minutes, not yet clocked in.
+    // Regular roster assignments starting in the next N minutes (default 15,
+    // admin-configurable via System Settings), not yet clocked in.
+    const { upcoming_shift_minutes } = await getShiftReminderSettings();
     const { rows: regular } = await pool.query(
       `SELECT sa.nurse_id, sa.shift, sa.shift_date, sa.ward, n.name, p.id AS profile_id, p.email
        FROM shift_assignments sa
@@ -60,10 +63,11 @@ async function runSendReminderEmails() {
        WHERE sa.status = 'published'
          AND sa.shift IN ('M', 'MWC', 'N', 'NC')
          AND (${startTimeSql("sa")}) > NOW()
-         AND (${startTimeSql("sa")}) <= NOW() + INTERVAL '15 minutes'
+         AND (${startTimeSql("sa")}) <= NOW() + ($1::numeric * INTERVAL '1 minute')
          AND NOT EXISTS (
            SELECT 1 FROM shift_logs sl WHERE sl.nurse_id = sa.nurse_id AND sl.shift_date = sa.shift_date
          )`,
+      [upcoming_shift_minutes],
     );
 
     // Locum-covered shifts — these never get a shift_assignments row (see
@@ -80,10 +84,11 @@ async function runSendReminderEmails() {
        WHERE lr.status = 'filled'
          AND lr.accepted_by_nurse_id IS NOT NULL
          AND (${startTimeSql("lr")}) > NOW()
-         AND (${startTimeSql("lr")}) <= NOW() + INTERVAL '15 minutes'
+         AND (${startTimeSql("lr")}) <= NOW() + ($1::numeric * INTERVAL '1 minute')
          AND NOT EXISTS (
            SELECT 1 FROM shift_logs sl WHERE sl.nurse_id = lr.accepted_by_nurse_id AND sl.shift_date = lr.shift_date
          )`,
+      [upcoming_shift_minutes],
     );
 
     let sentCount = 0;
@@ -106,9 +111,9 @@ async function runSendReminderEmails() {
       const label = SHIFT_LABELS[row.shift] ?? row.shift;
       sendMail({
         to: row.email,
-        subject: `Reminder — your ${label} shift starts in 15 minutes`,
+        subject: `Reminder — your ${label} shift starts in ${upcoming_shift_minutes} minutes`,
         title: "Your shift starts soon",
-        bodyHtml: `<p>Hi ${row.name ?? "there"},</p><p>This is a reminder that your <strong>${label}</strong> shift${row.ward ? ` at <strong>${row.ward}</strong>` : ""} starts in about 15 minutes, on ${fmtShiftDate(row.shift_date)}.</p><p>Please sign in to the portal and start your shift as soon as you arrive.</p>`,
+        bodyHtml: `<p>Hi ${row.name ?? "there"},</p><p>This is a reminder that your <strong>${label}</strong> shift${row.ward ? ` at <strong>${row.ward}</strong>` : ""} starts in about ${upcoming_shift_minutes} minutes, on ${fmtShiftDate(row.shift_date)}.</p><p>Please sign in to the portal and start your shift as soon as you arrive.</p>`,
         ctaText: "Open Shift Page",
         ctaUrl: portalUrl("/shift"),
       }).catch(() => {});

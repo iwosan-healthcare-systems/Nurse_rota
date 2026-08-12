@@ -29,6 +29,7 @@ import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
+import { usePasswordMinLength } from "@/lib/use-password-min-length";
 import * as ExcelJS from "exceljs";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
@@ -1589,6 +1590,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
   const [role, setRole] = useState("nurse");
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
+  const minPasswordLength = usePasswordMinLength();
 
   // Fetch the nurse's current email fresh from the DB on open — the parent
   // list may be serving a cached (stale) row where email is still null.
@@ -1615,8 +1617,8 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
       toast.error("Email address is required");
       return;
     }
-    if (password.length < 8) {
-      toast.error("Password must be at least 8 characters");
+    if (password.length < minPasswordLength) {
+      toast.error(`Password must be at least ${minPasswordLength} characters`);
       return;
     }
     setBusy(true);
@@ -1678,7 +1680,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
               id="login-password"
               type="text"
               required
-              minLength={8}
+              minLength={minPasswordLength}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="flex-1 h-10 px-3 rounded-md border bg-card text-sm font-mono outline-none focus:ring-2 focus:ring-ring"
@@ -1761,6 +1763,7 @@ function ResetPasswordModal({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [copied, setCopied] = useState(false);
+  const minPasswordLength = usePasswordMinLength();
 
   async function copyToClipboard() {
     await navigator.clipboard.writeText(password);
@@ -1770,7 +1773,8 @@ function ResetPasswordModal({
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (password.length < 8) return toast.error("Password must be at least 8 characters");
+    if (password.length < minPasswordLength)
+      return toast.error(`Password must be at least ${minPasswordLength} characters`);
     setBusy(true);
     try {
       await api.patch(`/auth/admin/users/${userId}/reset-password`, { password });
@@ -1843,7 +1847,7 @@ function ResetPasswordModal({
                   type={showPw ? "text" : "password"}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  minLength={8}
+                  minLength={minPasswordLength}
                   required
                   className={cls + " pr-9"}
                 />
@@ -1864,7 +1868,7 @@ function ResetPasswordModal({
                 <RotateCcw className="h-3.5 w-3.5" /> Generate
               </button>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Minimum 8 characters.</p>
+            <p className="text-xs text-muted-foreground mt-1">Minimum {minPasswordLength} characters.</p>
           </div>
 
           <div className="flex gap-2 pt-1">
@@ -1877,7 +1881,7 @@ function ResetPasswordModal({
             </button>
             <button
               type="submit"
-              disabled={busy || password.length < 8}
+              disabled={busy || password.length < minPasswordLength}
               className="flex-1 h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-50 inline-flex items-center justify-center gap-2"
             >
               {busy ? (

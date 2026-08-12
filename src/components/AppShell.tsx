@@ -37,6 +37,7 @@ import { cn } from "@/lib/utils";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { api, getToken } from "@/lib/api";
 import { getEffectiveRoles } from "@/lib/menu-permissions";
+import { usePasswordMinLength } from "@/lib/use-password-min-length";
 
 const ALL: SystemRole[] = [
   "admin",
@@ -1588,11 +1589,12 @@ function ForcePasswordChangeScreen({
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const minPasswordLength = usePasswordMinLength();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (newPassword.length < 8) {
-      toast.error("Password must be at least 8 characters");
+    if (newPassword.length < minPasswordLength) {
+      toast.error(`Password must be at least ${minPasswordLength} characters`);
       return;
     }
     if (newPassword !== confirm) {
@@ -1642,8 +1644,8 @@ function ForcePasswordChangeScreen({
               id="new-pw"
               type="password"
               required
-              minLength={8}
-              placeholder="Min. 8 characters"
+              minLength={minPasswordLength}
+              placeholder={`Min. ${minPasswordLength} characters`}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className={cls + " mt-1"}
@@ -1876,6 +1878,7 @@ function PasswordExpiryModal({
   const [newPassword, setNewPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
+  const minPasswordLength = usePasswordMinLength();
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1883,8 +1886,8 @@ function PasswordExpiryModal({
       toast.error("Current password is required");
       return;
     }
-    if (newPassword.length < 8) {
-      toast.error("Password must be at least 8 characters");
+    if (newPassword.length < minPasswordLength) {
+      toast.error(`Password must be at least ${minPasswordLength} characters`);
       return;
     }
     if (newPassword === currentPassword) {
@@ -1962,8 +1965,8 @@ function PasswordExpiryModal({
               id="ep-new-pw"
               type="password"
               required
-              minLength={8}
-              placeholder="Min. 8 characters"
+              minLength={minPasswordLength}
+              placeholder={`Min. ${minPasswordLength} characters`}
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               className={cls}
@@ -1977,7 +1980,7 @@ function PasswordExpiryModal({
               id="ep-confirm-pw"
               type="password"
               required
-              minLength={8}
+              minLength={minPasswordLength}
               placeholder="Repeat password"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}

@@ -20,7 +20,18 @@ const pool = require("../db");
 // (729312) in jobs/auto-end-shifts.js — see that file for why the lock exists.
 const AUTO_DECLINE_LOCK_KEY = 729313;
 
-const GRACE_TYPES = ["Sick", "Emergency"];
+// Admin-configurable via System Settings — which leave types get one extra
+// day of grace (declined at 00:00 the day AFTER from_date, not the moment
+// from_date arrives) because they can legitimately be filed same-day or
+// after the fact. Default matches what this system shipped with.
+const DEFAULT_GRACE_TYPES = ["Sick", "Emergency"];
+
+async function getGraceTypes() {
+  const { rows } = await pool.query(
+    "SELECT value FROM portal_settings WHERE key = 'grace_leave_types'",
+  );
+  return Array.isArray(rows[0]?.value) && rows[0].value.length ? rows[0].value : DEFAULT_GRACE_TYPES;
+}
 
 async function autoDeclineExpiredRequests() {
   const lockClient = await pool.connect();
@@ -42,6 +53,7 @@ async function autoDeclineExpiredRequests() {
 }
 
 async function runAutoDecline() {
+  const graceTypes = await getGraceTypes();
   const { rows: expired } = await pool.query(
     `
     UPDATE leave_requests
@@ -56,7 +68,7 @@ async function runAutoDecline() {
        )
      RETURNING id, nurse_id, nurse_name, type, from_date, to_date, requested_by, switch_nurse_b
     `,
-    [GRACE_TYPES],
+    [graceTypes],
   );
 
   if (!expired.length) return;

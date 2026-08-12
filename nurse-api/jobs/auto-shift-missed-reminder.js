@@ -1,6 +1,7 @@
 const cron = require("node-cron");
 const pool = require("../db");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { getShiftReminderSettings } = require("../lib/shift-reminder-settings");
 
 // Arbitrary fixed key for this job's mutex — see auto-end-shifts.js for why
 // this is needed (multiple PM2 instances, same wall-clock cron tick).
@@ -48,9 +49,12 @@ async function sendMissedReminderEmails() {
 
 async function runSendMissedReminderEmails() {
   try {
-    // Regular roster assignments whose start time was 3+ hours ago, still not clocked in.
-    // The full is_missed flag (auto-end-shifts.js) only fires at shift END (9-15h later) —
-    // this is an earlier, separate "you're 3 hours late" heads-up, not a replacement for it.
+    // Regular roster assignments whose start time was N+ hours ago (default
+    // 3, admin-configurable via System Settings), still not clocked in. The
+    // full is_missed flag (auto-end-shifts.js) only fires at shift END
+    // (9-15h later) — this is an earlier, separate "you're late" heads-up,
+    // not a replacement for it.
+    const { missed_shift_hours } = await getShiftReminderSettings();
     const { rows: regular } = await pool.query(
       `SELECT sa.nurse_id, sa.shift, sa.shift_date, sa.ward, n.name, p.id AS profile_id, p.email
        FROM shift_assignments sa
@@ -61,10 +65,11 @@ async function runSendMissedReminderEmails() {
        )
        WHERE sa.status = 'published'
          AND sa.shift IN ('M', 'MWC', 'N', 'NC')
-         AND (${startTimeSql("sa")}) + INTERVAL '3 hours' <= NOW()
+         AND (${startTimeSql("sa")}) + ($1::numeric * INTERVAL '1 hour') <= NOW()
          AND NOT EXISTS (
            SELECT 1 FROM shift_logs sl WHERE sl.nurse_id = sa.nurse_id AND sl.shift_date = sa.shift_date
          )`,
+      [missed_shift_hours],
     );
 
     // Locum-covered shifts — never get a shift_assignments row, resolved
@@ -79,10 +84,11 @@ async function runSendMissedReminderEmails() {
        )
        WHERE lr.status = 'filled'
          AND lr.accepted_by_nurse_id IS NOT NULL
-         AND (${startTimeSql("lr")}) + INTERVAL '3 hours' <= NOW()
+         AND (${startTimeSql("lr")}) + ($1::numeric * INTERVAL '1 hour') <= NOW()
          AND NOT EXISTS (
            SELECT 1 FROM shift_logs sl WHERE sl.nurse_id = lr.accepted_by_nurse_id AND sl.shift_date = lr.shift_date
          )`,
+      [missed_shift_hours],
     );
 
     let sentCount = 0;
@@ -107,7 +113,7 @@ async function runSendMissedReminderEmails() {
         to: row.email,
         subject: `You haven't started your ${label} shift`,
         title: "Shift not started",
-        bodyHtml: `<p>Hi ${row.name ?? "there"},</p><p>Your <strong>${label}</strong> shift${row.ward ? ` at <strong>${row.ward}</strong>` : ""} on ${fmtShiftDate(row.shift_date)} was due to start over 3 hours ago, and we don't have a record of you signing in yet.</p><p>If you're on site, please start your shift in the portal now. If you're unable to make this shift, contact your supervisor as soon as possible.</p>`,
+        bodyHtml: `<p>Hi ${row.name ?? "there"},</p><p>Your <strong>${label}</strong> shift${row.ward ? ` at <strong>${row.ward}</strong>` : ""} on ${fmtShiftDate(row.shift_date)} was due to start over ${missed_shift_hours} hour(s) ago, and we don't have a record of you signing in yet.</p><p>If you're on site, please start your shift in the portal now. If you're unable to make this shift, contact your supervisor as soon as possible.</p>`,
         ctaText: "Open Shift Page",
         ctaUrl: portalUrl("/shift"),
       }).catch(() => {});

@@ -1,11 +1,15 @@
 const router = require("express").Router();
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { requireCapability } = require("../middleware/capability");
+const { sendMail } = require("../lib/mailer");
 
 const DEFAULT_INITIAL_PASSWORD = "RotaLogin@123";
+const OTP_TTL_MINUTES = 5;
+const MAX_OTP_ATTEMPTS = 5;
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -16,11 +20,29 @@ async function getPasswordExpiryDays() {
   return rows[0] ? parseInt(rows[0].value, 10) || 30 : 30;
 }
 
+async function getMinPasswordLength() {
+  const { rows } = await pool.query(
+    "SELECT value FROM portal_settings WHERE key = 'min_password_length'",
+  );
+  return rows[0] ? parseInt(rows[0].value, 10) || 8 : 8;
+}
+
 function computeExpiresInDays(passwordChangedAt, expiryDays) {
   const changedAt = new Date(passwordChangedAt);
   const expiresAt = new Date(changedAt.getTime() + expiryDays * 24 * 60 * 60 * 1000);
   return Math.floor((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
 }
+
+// Public (no requireAuth — /api/portal-settings is auth-gated at the mount
+// level, but the logged-out forgot-password flow still needs to show/enforce
+// the real minimum, not a stale hardcoded guess) — just the one number, not
+// sensitive.
+router.get(
+  "/password-policy",
+  wrap(async (req, res) => {
+    res.json({ min_password_length: await getMinPasswordLength() });
+  }),
+);
 
 router.post(
   "/login",
@@ -77,7 +99,9 @@ router.post(
       );
       if (byName[0]) {
         nurseRows = byName;
-        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [user.id, byName[0].id]).catch(() => {});
+        pool
+          .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [user.id, byName[0].id])
+          .catch(() => {});
       }
     }
     const nurse = nurseRows[0] ?? null;
@@ -147,7 +171,9 @@ router.get(
       );
       if (byName[0]) {
         nurseRows = byName;
-        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id]).catch(() => {});
+        pool
+          .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id])
+          .catch(() => {});
       }
     }
     const nurse = nurseRows[0] ?? null;
@@ -172,8 +198,9 @@ router.post(
   requireAuth,
   wrap(async (req, res) => {
     const { current_password, new_password } = req.body;
-    if (!new_password || new_password.length < 8)
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    const minLen = await getMinPasswordLength();
+    if (!new_password || new_password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
 
     const { rows } = await pool.query(
       "SELECT password_hash, must_change_password FROM profiles WHERE id = $1",
@@ -213,8 +240,9 @@ router.post(
   wrap(async (req, res) => {
     const { current_password, new_password } = req.body;
     if (!current_password) return res.status(400).json({ error: "Current password is required" });
-    if (!new_password || new_password.length < 8)
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    const minLen = await getMinPasswordLength();
+    if (!new_password || new_password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
 
     const { rows } = await pool.query("SELECT password_hash FROM profiles WHERE id = $1", [
       req.user.userId,
@@ -225,7 +253,9 @@ router.post(
     if (!valid) return res.status(401).json({ error: "Current password is incorrect" });
 
     if (current_password === new_password)
-      return res.status(400).json({ error: "New password must be different from your current password" });
+      return res
+        .status(400)
+        .json({ error: "New password must be different from your current password" });
 
     const hash = await bcrypt.hash(new_password, 12);
     await pool.query(
@@ -245,6 +275,135 @@ router.post(
         (req.user.roles || [])[0] ?? null,
       ],
     );
+
+    res.json({ success: true });
+  }),
+);
+
+// ── Forgot password (self-service, unauthenticated) ────────────────────────
+
+router.post(
+  "/forgot-password",
+  wrap(async (req, res) => {
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: "Email is required" });
+
+    // Always the same response whether or not the email has an account —
+    // otherwise this endpoint could be used to build a list of valid staff
+    // emails (confirmed intentional trade-off; see conversation history).
+    const genericResponse = {
+      message: "If that email has an account, we've sent a reset code.",
+    };
+
+    const { rows } = await pool.query(
+      "SELECT id, email, full_name, is_active FROM profiles WHERE lower(email) = lower($1) ORDER BY created_at DESC LIMIT 1",
+      [email.trim()],
+    );
+    const user = rows[0];
+    if (!user || !user.is_active) return res.json(genericResponse);
+
+    // Light cooldown — a double-click or rapid retry shouldn't burn a fresh
+    // code (invalidating the one the user might already be typing in) or
+    // spam their inbox with duplicate emails.
+    const { rows: recentRows } = await pool.query(
+      `SELECT id FROM password_reset_otps
+       WHERE user_id = $1 AND used_at IS NULL AND created_at > NOW() - INTERVAL '60 seconds'`,
+      [user.id],
+    );
+    if (recentRows.length) return res.json(genericResponse);
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiresAt = new Date(Date.now() + OTP_TTL_MINUTES * 60 * 1000);
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // Only one live code per user — a fresh request supersedes any earlier one.
+      await client.query("DELETE FROM password_reset_otps WHERE user_id = $1 AND used_at IS NULL", [
+        user.id,
+      ]);
+      await client.query(
+        "INSERT INTO password_reset_otps (user_id, otp_hash, expires_at) VALUES ($1, $2, $3)",
+        [user.id, otpHash, expiresAt],
+      );
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    sendMail({
+      to: user.email,
+      subject: "Your Nurses Rota password reset code",
+      title: "Reset your password",
+      bodyHtml: `<p>Hi ${user.full_name ?? "there"},</p>
+<p>Use this code to reset your password. It expires in ${OTP_TTL_MINUTES} minutes.</p>
+<p style="font-size:28px;font-weight:700;letter-spacing:6px;color:#1b2559;margin:20px 0;">${otp}</p>
+<p>If you didn't request this, you can safely ignore this email — your password won't change unless this code is used.</p>`,
+    }).catch(() => {});
+
+    res.json(genericResponse);
+  }),
+);
+
+router.post(
+  "/reset-password",
+  wrap(async (req, res) => {
+    const { email, otp, new_password } = req.body;
+    if (!email || !otp || !new_password)
+      return res.status(400).json({ error: "Email, code, and new password are required" });
+    const minLen = await getMinPasswordLength();
+    if (new_password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
+
+    // Same generic-feeling error throughout this route — never hint whether
+    // the email itself, the code, or the attempt count was the problem.
+    const invalidError = { error: "Invalid or expired code" };
+
+    const { rows } = await pool.query(
+      "SELECT id, full_name FROM profiles WHERE lower(email) = lower($1) ORDER BY created_at DESC LIMIT 1",
+      [email.trim()],
+    );
+    const user = rows[0];
+    if (!user) return res.status(400).json(invalidError);
+
+    const { rows: otpRows } = await pool.query(
+      `SELECT id, otp_hash, expires_at, attempts FROM password_reset_otps
+       WHERE user_id = $1 AND used_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [user.id],
+    );
+    const record = otpRows[0];
+    if (!record || new Date(record.expires_at) < new Date())
+      return res.status(400).json(invalidError);
+    if (record.attempts >= MAX_OTP_ATTEMPTS)
+      return res.status(400).json({ error: "Too many attempts — request a new code" });
+
+    const valid = await bcrypt.compare(otp, record.otp_hash);
+    if (!valid) {
+      await pool.query("UPDATE password_reset_otps SET attempts = attempts + 1 WHERE id = $1", [
+        record.id,
+      ]);
+      return res.status(400).json(invalidError);
+    }
+
+    const hash = await bcrypt.hash(new_password, 12);
+    await pool.query(
+      `UPDATE profiles SET password_hash = $1, must_change_password = false,
+       password_changed_at = NOW(), updated_at = NOW() WHERE id = $2`,
+      [hash, user.id],
+    );
+    await pool.query("UPDATE password_reset_otps SET used_at = NOW() WHERE id = $1", [record.id]);
+
+    pool
+      .query(
+        "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
+        ["Reset password via email code", user.id, user.full_name, null],
+      )
+      .catch(() => {});
 
     res.json({ success: true });
   }),
@@ -271,14 +430,16 @@ router.post(
     const { email, full_name, role, nurse_id } = req.body;
     const password = req.body.password || DEFAULT_INITIAL_PASSWORD;
     if (!email) return res.status(400).json({ error: "Email is required" });
+    const minLen = await getMinPasswordLength();
+    if (password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
 
     const normalizedEmail = email.trim().toLowerCase();
 
     // Prevent duplicate profiles for the same email
-    const { rows: existing } = await pool.query(
-      "SELECT id FROM profiles WHERE lower(email) = $1",
-      [normalizedEmail],
-    );
+    const { rows: existing } = await pool.query("SELECT id FROM profiles WHERE lower(email) = $1", [
+      normalizedEmail,
+    ]);
     if (existing.length > 0) {
       return res.status(409).json({ error: "An account with this email already exists" });
     }
@@ -303,10 +464,11 @@ router.post(
       }
 
       if (nurse_id) {
-        await client.query(
-          "UPDATE nurses SET email = $1, profile_id = $2 WHERE id = $3",
-          [normalizedEmail, userId, nurse_id],
-        );
+        await client.query("UPDATE nurses SET email = $1, profile_id = $2 WHERE id = $3", [
+          normalizedEmail,
+          userId,
+          nurse_id,
+        ]);
       }
 
       await client.query("COMMIT");
@@ -408,10 +570,12 @@ router.patch(
   wrap(async (req, res) => {
     const { password } = req.body;
     if (!password) return res.status(400).json({ error: "Password required" });
-    const { rows: targetRows } = await pool.query(
-      "SELECT full_name FROM profiles WHERE id = $1",
-      [req.params.id],
-    );
+    const minLen = await getMinPasswordLength();
+    if (password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
+    const { rows: targetRows } = await pool.query("SELECT full_name FROM profiles WHERE id = $1", [
+      req.params.id,
+    ]);
     const hash = await bcrypt.hash(password, 12);
     await pool.query(
       `UPDATE profiles SET password_hash = $1, must_change_password = true,
@@ -481,8 +645,9 @@ router.post(
   requireCapability("bulk_create_users", ["admin"]),
   wrap(async (req, res) => {
     const { default_password = DEFAULT_INITIAL_PASSWORD } = req.body;
-    if (!default_password || default_password.length < 8)
-      return res.status(400).json({ error: "Password must be at least 8 characters" });
+    const minLen = await getMinPasswordLength();
+    if (!default_password || default_password.length < minLen)
+      return res.status(400).json({ error: `Password must be at least ${minLen} characters` });
 
     // Map each nurse's job role (from the staff table) to the appropriate system role.
     function jobRoleToAppRole(jobRole) {

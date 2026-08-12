@@ -1,4 +1,4 @@
-import { createFileRoute, useNavigate, redirect } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, redirect, Link } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, setToken, getToken } from "@/lib/api";
 import { Loader2, Eye, EyeOff } from "lucide-react";
@@ -209,9 +209,17 @@ function LoginPage() {
                   />
                 </div>
                 <div>
-                  <label htmlFor="login-password" className="text-sm font-medium">
-                    Password
-                  </label>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="login-password" className="text-sm font-medium">
+                      Password
+                    </label>
+                    <Link
+                      to="/forgot-password"
+                      className="text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      Forgot password?
+                    </Link>
+                  </div>
                   <div className="relative mt-1">
                     <input
                       id="login-password"

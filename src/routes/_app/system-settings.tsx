@@ -39,6 +39,17 @@ const ROTA_JOB_DESCRIPTIONS: Record<keyof RotaJobsPaused, string> = {
     "Publishes any CNO-approved unit 14 days before its period starts, and alerts CNO/admin if a unit is still unapproved at that point.",
 };
 
+const ALL_LEAVE_TYPES = [
+  "Sick",
+  "Annual",
+  "Emergency",
+  "Maternity",
+  "Public Holiday",
+  "Study Leave",
+  "Compassionate Leave",
+  "Leave of Absence",
+];
+
 type RotaDeadlines = {
   leave_closure_days: number;
   generate_days: number;
@@ -122,6 +133,8 @@ function SystemSettingsPage() {
   const [pwExpiryEditing, setPwExpiryEditing] = useState(false);
   const [pwExpiryDraft, setPwExpiryDraft] = useState(30);
   const [pwExpirySaving, setPwExpirySaving] = useState(false);
+  const [minPasswordLength, setMinPasswordLength] = useState(8);
+  const [minPasswordLengthDraft, setMinPasswordLengthDraft] = useState(8);
 
   // Rota lifecycle cron job pause switches — read fresh by each job on every
   // tick (see nurse-api/lib/rota-job-pause.js), so this takes effect within
@@ -152,6 +165,23 @@ function SystemSettingsPage() {
   const [idleTimeoutEditing, setIdleTimeoutEditing] = useState(false);
   const [idleTimeoutSaving, setIdleTimeoutSaving] = useState(false);
 
+  // Which leave types get one extra grace day before auto-decline (they can
+  // legitimately be filed same-day or after the fact).
+  const [graceTypes, setGraceTypes] = useState<string[]>(["Sick", "Emergency"]);
+  const [graceTypesDraft, setGraceTypesDraft] = useState<string[]>(["Sick", "Emergency"]);
+  const [graceTypesEditing, setGraceTypesEditing] = useState(false);
+  const [graceTypesSaving, setGraceTypesSaving] = useState(false);
+
+  // Shift reminder thresholds.
+  const [missedShiftHours, setMissedShiftHours] = useState(3);
+  const [missedShiftDraft, setMissedShiftDraft] = useState(3);
+  const [missedShiftEditing, setMissedShiftEditing] = useState(false);
+  const [missedShiftSaving, setMissedShiftSaving] = useState(false);
+  const [upcomingShiftMinutes, setUpcomingShiftMinutes] = useState(15);
+  const [upcomingShiftDraft, setUpcomingShiftDraft] = useState(15);
+  const [upcomingShiftEditing, setUpcomingShiftEditing] = useState(false);
+  const [upcomingShiftSaving, setUpcomingShiftSaving] = useState(false);
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
@@ -167,6 +197,12 @@ function SystemSettingsPage() {
       .get<{ value: number }>("/portal-settings/password_expiry_days")
       .then(({ value }) => {
         if (typeof value === "number") setPwExpiryDays(value);
+      })
+      .catch(() => {});
+    api
+      .get<{ value: number }>("/portal-settings/min_password_length")
+      .then(({ value }) => {
+        if (typeof value === "number" && value > 0) setMinPasswordLength(value);
       })
       .catch(() => {});
     api
@@ -195,6 +231,22 @@ function SystemSettingsPage() {
       .get<{ value: number }>("/portal-settings/idle_timeout_minutes")
       .then(({ value }) => {
         if (typeof value === "number" && value > 0) setIdleTimeoutMinutes(value);
+      })
+      .catch(() => {});
+    api
+      .get<{ value: string[] }>("/portal-settings/grace_leave_types")
+      .then(({ value }) => {
+        if (Array.isArray(value) && value.length) setGraceTypes(value);
+      })
+      .catch(() => {});
+    api
+      .get<{ value: Partial<{ missed_shift_hours: number; upcoming_shift_minutes: number }> }>(
+        "/portal-settings/shift_reminder_settings",
+      )
+      .then(({ value }) => {
+        if (typeof value?.missed_shift_hours === "number") setMissedShiftHours(value.missed_shift_hours);
+        if (typeof value?.upcoming_shift_minutes === "number")
+          setUpcomingShiftMinutes(value.upcoming_shift_minutes);
       })
       .catch(() => {});
   }, []);
@@ -297,6 +349,64 @@ function SystemSettingsPage() {
     }
   }
 
+  async function saveGraceTypes() {
+    if (graceTypesDraft.length === 0) {
+      toast.error("Select at least one type, or leave-decline could fire mid-filing for all types");
+      return;
+    }
+    setGraceTypesSaving(true);
+    try {
+      await api.put("/portal-settings/grace_leave_types", { value: graceTypesDraft });
+      setGraceTypes(graceTypesDraft);
+      setGraceTypesEditing(false);
+      toast.success("Grace leave types saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setGraceTypesSaving(false);
+    }
+  }
+
+  async function saveMissedShiftHours() {
+    if (!Number.isInteger(missedShiftDraft) || missedShiftDraft < 1 || missedShiftDraft > 24) {
+      toast.error("Must be a whole number between 1 and 24 hours");
+      return;
+    }
+    setMissedShiftSaving(true);
+    try {
+      await api.put("/portal-settings/shift_reminder_settings", {
+        value: { missed_shift_hours: missedShiftDraft, upcoming_shift_minutes: upcomingShiftMinutes },
+      });
+      setMissedShiftHours(missedShiftDraft);
+      setMissedShiftEditing(false);
+      toast.success("Missed-shift reminder threshold saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setMissedShiftSaving(false);
+    }
+  }
+
+  async function saveUpcomingShiftMinutes() {
+    if (!Number.isInteger(upcomingShiftDraft) || upcomingShiftDraft < 1 || upcomingShiftDraft > 120) {
+      toast.error("Must be a whole number between 1 and 120 minutes");
+      return;
+    }
+    setUpcomingShiftSaving(true);
+    try {
+      await api.put("/portal-settings/shift_reminder_settings", {
+        value: { missed_shift_hours: missedShiftHours, upcoming_shift_minutes: upcomingShiftDraft },
+      });
+      setUpcomingShiftMinutes(upcomingShiftDraft);
+      setUpcomingShiftEditing(false);
+      toast.success("Upcoming-shift reminder threshold saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setUpcomingShiftSaving(false);
+    }
+  }
+
   // ── GPS helpers ──────────────────────────────────────────────────────────
 
   function startGpsEdit() {
@@ -332,12 +442,20 @@ function SystemSettingsPage() {
       toast.error("Expiry must be between 1 and 365 days");
       return;
     }
+    if (!Number.isInteger(minPasswordLengthDraft) || minPasswordLengthDraft < 4 || minPasswordLengthDraft > 64) {
+      toast.error("Minimum password length must be a whole number between 4 and 64");
+      return;
+    }
     setPwExpirySaving(true);
     try {
-      await api.put("/portal-settings/password_expiry_days", { value: pwExpiryDraft });
+      await Promise.all([
+        api.put("/portal-settings/password_expiry_days", { value: pwExpiryDraft }),
+        api.put("/portal-settings/min_password_length", { value: minPasswordLengthDraft }),
+      ]);
       setPwExpiryDays(pwExpiryDraft);
+      setMinPasswordLength(minPasswordLengthDraft);
       setPwExpiryEditing(false);
-      toast.success("Password expiry updated");
+      toast.success("Password security settings updated");
     } catch (e) {
       toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
     } finally {
@@ -432,6 +550,7 @@ function SystemSettingsPage() {
           <TabsTrigger value="rota-jobs">Rota Jobs</TabsTrigger>
           <TabsTrigger value="rota-deadlines">Rota Deadlines</TabsTrigger>
           <TabsTrigger value="leave-session">Leave &amp; Session Rules</TabsTrigger>
+          <TabsTrigger value="shift-reminders">Shift Reminders</TabsTrigger>
         </TabsList>
 
         <TabsContent value="gps">
@@ -638,6 +757,7 @@ function SystemSettingsPage() {
                     type="button"
                     onClick={() => {
                       setPwExpiryDraft(pwExpiryDays);
+                      setMinPasswordLengthDraft(minPasswordLength);
                       setPwExpiryEditing(true);
                     }}
                     className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
@@ -648,7 +768,7 @@ function SystemSettingsPage() {
               </div>
             </div>
 
-            <div className="px-5 py-4 flex items-center gap-4">
+            <div className="px-5 py-4 flex items-center gap-4 border-b">
               <KeyRound className="h-4 w-4 text-muted-foreground shrink-0" />
               <div className="flex-1">
                 <p className="text-sm font-medium">Password expiry period</p>
@@ -671,6 +791,35 @@ function SystemSettingsPage() {
                 </div>
               ) : (
                 <span className="text-sm font-semibold tabular-nums">{pwExpiryDays} days</span>
+              )}
+            </div>
+
+            <div className="px-5 py-4 flex items-center gap-4">
+              <KeyRound className="h-4 w-4 text-muted-foreground shrink-0" />
+              <div className="flex-1">
+                <p className="text-sm font-medium">Minimum password length</p>
+                <p className="text-xs text-muted-foreground">
+                  Enforced on every password-setting endpoint — login password change, admin
+                  reset, and bulk login generation.
+                </p>
+              </div>
+              {pwExpiryEditing ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={4}
+                    max={64}
+                    step={1}
+                    value={minPasswordLengthDraft}
+                    onChange={(e) => setMinPasswordLengthDraft(Number(e.target.value))}
+                    className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <span className="text-xs text-muted-foreground">characters</span>
+                </div>
+              ) : (
+                <span className="text-sm font-semibold tabular-nums">
+                  {minPasswordLength} characters
+                </span>
               )}
             </div>
 
@@ -955,6 +1104,201 @@ function SystemSettingsPage() {
               a user's session timer resets (e.g. their next action), not retroactively to an
               already-running countdown.
             </p>
+          </section>
+
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b flex items-start justify-between gap-4">
+              <div>
+                <h2 className="text-sm font-semibold">Grace Leave Types</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  These types get one extra day of grace before auto-decline — declined at 00:00 the
+                  day AFTER the start date, not the moment the start date arrives — because they can
+                  legitimately be filed same-day or after the fact. Everything else is auto-declined
+                  the moment its start date arrives if still Pending.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                {graceTypesEditing ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setGraceTypesEditing(false)}
+                      disabled={graceTypesSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveGraceTypes}
+                      disabled={graceTypesSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {graceTypesSaving ? "Saving…" : "Save changes"}
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGraceTypesDraft(graceTypes);
+                      setGraceTypesEditing(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="px-5 py-4 flex flex-wrap gap-2">
+              {ALL_LEAVE_TYPES.map((t) => {
+                const checked = (graceTypesEditing ? graceTypesDraft : graceTypes).includes(t);
+                return (
+                  <button
+                    key={t}
+                    type="button"
+                    disabled={!graceTypesEditing}
+                    onClick={() =>
+                      setGraceTypesDraft((prev) =>
+                        prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t],
+                      )
+                    }
+                    className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
+                      checked
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-card text-muted-foreground border-border"
+                    } ${graceTypesEditing ? "cursor-pointer hover:opacity-80" : "cursor-default"}`}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
+            </div>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="shift-reminders">
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b">
+              <h2 className="text-sm font-semibold">Shift Reminders</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                When the "starts soon" and "you haven't clocked in" emails fire, relative to a shift's
+                scheduled start time.
+              </p>
+            </div>
+            <div className="divide-y">
+              <div className="px-5 py-4 flex items-center gap-4">
+                <Timer className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Upcoming-shift reminder</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Sent this many minutes before a shift's scheduled start, if not yet clocked in.
+                  </p>
+                </div>
+                {upcomingShiftEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={120}
+                      value={upcomingShiftDraft}
+                      onChange={(e) => setUpcomingShiftDraft(Number(e.target.value))}
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">minutes</span>
+                    <button
+                      type="button"
+                      onClick={() => setUpcomingShiftEditing(false)}
+                      disabled={upcomingShiftSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveUpcomingShiftMinutes}
+                      disabled={upcomingShiftSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {upcomingShiftSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">
+                      {upcomingShiftMinutes} min
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setUpcomingShiftDraft(upcomingShiftMinutes);
+                        setUpcomingShiftEditing(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-5 py-4 flex items-center gap-4">
+                <Timer className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Missed-shift reminder</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Sent this many hours after a shift's scheduled start if still not clocked in — an
+                    earlier heads-up, separate from the shift being marked fully missed at its end.
+                  </p>
+                </div>
+                {missedShiftEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={24}
+                      value={missedShiftDraft}
+                      onChange={(e) => setMissedShiftDraft(Number(e.target.value))}
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">hours</span>
+                    <button
+                      type="button"
+                      onClick={() => setMissedShiftEditing(false)}
+                      disabled={missedShiftSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveMissedShiftHours}
+                      disabled={missedShiftSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {missedShiftSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">
+                      {missedShiftHours} hr(s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMissedShiftDraft(missedShiftHours);
+                        setMissedShiftEditing(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
           </section>
         </TabsContent>
       </Tabs>
