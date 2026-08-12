@@ -15,7 +15,7 @@ const ROLE_GROUP_LABELS = {
 
 // Notifies head_nurse/chief_matron/admin when a newly-created nurse lands in
 // a ward or facility-wide role group that already has a rota cycle in
-// progress (draft/submitted/hr_approved/published) — otherwise they'd have
+// progress (draft/submitted/cno_approved/published) — otherwise they'd have
 // no shifts until someone happens to notice on the Rota page. Skipped for a
 // facility with no rota history at all yet (getUnitPeriod returns null) —
 // ordinary full-facility generation covers that case already.

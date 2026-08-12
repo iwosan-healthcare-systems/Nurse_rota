@@ -365,17 +365,17 @@ router.patch(
       if (status === "submitted" && filterStatus === "draft") {
         capKey = "submit_approval";
         capFallback = ["admin", "head_nurse"];
-      } else if (status === "hr_approved" && filterStatus === "submitted") {
+      } else if (status === "cno_approved" && filterStatus === "submitted") {
         capKey = "approve_rota";
         capFallback = ["admin", "cno"];
       } else if (
         status === "draft" &&
-        (filterStatus === "submitted" || filterStatus === "hr_approved")
+        (filterStatus === "submitted" || filterStatus === "cno_approved")
       ) {
         // Reject-to-draft — same capability as approving forward at that stage.
         capKey = "approve_rota";
         capFallback = ["admin", "cno"];
-      } else if (status === "published" && filterStatus === "hr_approved") {
+      } else if (status === "published" && filterStatus === "cno_approved") {
         capKey = "publish_rota";
         capFallback = ["admin", "cno"];
       } else if (status === "draft" && filterStatus === "published") {
@@ -600,7 +600,7 @@ router.patch(
     // auto-generated shifts). A fresh request is always required post-publish.
     if (
       status === "published" &&
-      filterStatus === "hr_approved" &&
+      filterStatus === "cno_approved" &&
       nurse_ids &&
       shift_date_from &&
       shift_date_to
@@ -634,7 +634,7 @@ router.patch(
     // that assumed this event existed).
     if (
       status === "draft" &&
-      (filterStatus === "submitted" || filterStatus === "hr_approved") &&
+      (filterStatus === "submitted" || filterStatus === "cno_approved") &&
       nurse_ids
     ) {
       const nurseIdArr = nurse_ids.split(",");
@@ -683,17 +683,17 @@ router.patch(
         recipientRoles = ["cno"];
         subject = "Rota submitted for review";
         ctaPath = "/approvals";
-      } else if (status === "hr_approved" && filterStatus === "submitted") {
+      } else if (status === "cno_approved" && filterStatus === "submitted") {
         recipientRoles = ["cno"];
         subject = "Rota approved — ready to publish";
         ctaPath = "/approvals";
-      } else if (status === "published" && filterStatus === "hr_approved") {
+      } else if (status === "published" && filterStatus === "cno_approved") {
         recipientRoles = ["head_nurse", "cno", "admin"];
         subject = "Rota published";
         ctaPath = "/rota";
       } else if (
         status === "draft" &&
-        (filterStatus === "submitted" || filterStatus === "hr_approved")
+        (filterStatus === "submitted" || filterStatus === "cno_approved")
       ) {
         recipientRoles = ["head_nurse"];
         subject = "Rota returned to draft — changes needed";
@@ -716,7 +716,7 @@ router.patch(
           bodyHtml = `<p>The rota for <strong>${unitLabel}</strong> (${facilities.join(", ")}), period starting ${periodLabel}, ${
             status === "submitted"
               ? "has been submitted and is awaiting CNO approval."
-              : status === "hr_approved"
+              : status === "cno_approved"
                 ? "has been approved and is ready to publish."
                 : status === "published"
                   ? "has been published."

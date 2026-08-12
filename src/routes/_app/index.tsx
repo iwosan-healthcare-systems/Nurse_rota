@@ -113,7 +113,9 @@ type NurseRecord = {
 // variant, porters). Interns are excluded — they DO get a ward via rotation.
 function isFacilityWideRole(role: string | undefined) {
   if (!role) return false;
-  return /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^matron$|^porter(\s*-\s*day)?$/i.test(role);
+  return /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^matron$|^porter(\s*-\s*day)?$/i.test(
+    role,
+  );
 }
 
 type Assignment = {
@@ -359,8 +361,7 @@ function NurseDashboard() {
   const nextWardToken = !isFacilityWideRole(nurseRecord?.role)
     ? (nurseRecord?.ward?.split("|")[0] ?? null)
     : null;
-  const wardChanging =
-    !!currentWardToken && !!nextWardToken && currentWardToken !== nextWardToken;
+  const wardChanging = !!currentWardToken && !!nextWardToken && currentWardToken !== nextWardToken;
 
   // Map of upcoming locum dates (next 7 days) → locum info, for "Next 7 days" bank badge
   const upcomingLocumMap = new Map<string, { shift: "M" | "N"; ward: string; facility: string }>(
@@ -449,8 +450,8 @@ function NurseDashboard() {
             <p className="mt-0.5 text-sky-700 dark:text-sky-400">
               <strong>{currentWardToken}</strong> → <strong>{nextWardToken}</strong>. Your shifts
               will be generated in <strong>{nextWardToken}</strong> starting{" "}
-              <strong>{fmtD(nextPeriodStart)}</strong>. This takes effect automatically — no
-              action needed.
+              <strong>{fmtD(nextPeriodStart)}</strong>. This takes effect automatically — no action
+              needed.
             </p>
           </div>
         </div>
@@ -882,7 +883,7 @@ function ManagementAlerts() {
     leaveIsClosed?: boolean;
     editIsClosed?: boolean;
     nextRotaStage?: string;
-    stageCounts?: { draft: number; submitted: number; hr_approved: number; published: number };
+    stageCounts?: { draft: number; submitted: number; cno_approved: number; published: number };
     totalUnits?: number;
   }>({
     queryKey: ["workflow-status"],
@@ -907,14 +908,14 @@ function ManagementAlerts() {
   // banner is honest about what's actually going on across all units.
   const stageCounts = workflowStatus?.stageCounts;
   const totalUnits = workflowStatus?.totalUnits;
-  function unitCountsBreakdown(highlight: "submitted" | "hr_approved" | "published"): string {
+  function unitCountsBreakdown(highlight: "submitted" | "cno_approved" | "published"): string {
     if (!stageCounts || !totalUnits) return "";
     const parts: string[] = [];
     if (stageCounts.draft > 0) parts.push(`${stageCounts.draft} still in draft`);
     if (highlight !== "submitted" && stageCounts.submitted > 0)
       parts.push(`${stageCounts.submitted} submitted, awaiting CNO`);
-    if (highlight !== "hr_approved" && stageCounts.hr_approved > 0)
-      parts.push(`${stageCounts.hr_approved} approved, not yet published`);
+    if (highlight !== "cno_approved" && stageCounts.cno_approved > 0)
+      parts.push(`${stageCounts.cno_approved} approved, not yet published`);
     if (highlight !== "published" && stageCounts.published > 0)
       parts.push(`${stageCounts.published} already published`);
     return parts.length ? ` · ${parts.join(" · ")}` : "";
@@ -932,7 +933,7 @@ function ManagementAlerts() {
     wfReady && workflowStatus?.leaveIsClosed && canWfGenerate && stage === "none";
   const showWfSubmit = wfReady && stage === "draft" && canWfSubmit;
   const showWfApproveRota = wfReady && stage === "submitted" && canWfApproveRota;
-  const showWfPublish = wfReady && stage === "hr_approved" && canWfPublish;
+  const showWfPublish = wfReady && stage === "cno_approved" && canWfPublish;
   const showWorkflowBanner = showWfGenerate || showWfSubmit || showWfApproveRota || showWfPublish;
   const wfPeriodStr = fmtWD(workflowStatus?.nextPeriodStart);
 
@@ -964,11 +965,11 @@ function ManagementAlerts() {
       ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s) submitted for CNO review — ${wfPeriodStr}`
       : `Rota for ${wfPeriodStr} submitted for CNO review`;
     wfTimelineDetail = `CNO approval is due by ${fmtPublishDeadline} (T-14).${unitCountsBreakdown("submitted")}`;
-  } else if (stage === "hr_approved") {
+  } else if (stage === "cno_approved") {
     wfTimelineTitle = totalUnits
-      ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s) approved by CNO — ${wfPeriodStr}`
+      ? `${stageCounts?.cno_approved ?? 0} of ${totalUnits} unit(s) approved by CNO — ${wfPeriodStr}`
       : `Rota for ${wfPeriodStr} approved by CNO`;
-    wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.${unitCountsBreakdown("hr_approved")}`;
+    wfTimelineDetail = `Ready to publish — auto-publishes ${fmtPublishDeadline} (T-14) if not published sooner.${unitCountsBreakdown("cno_approved")}`;
     wfTimelineDone = true;
   } else if (stage === "published") {
     wfTimelineTitle = totalUnits
@@ -1066,7 +1067,9 @@ function ManagementAlerts() {
           <Clock className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
-              {totalUnits ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s)` : "Draft rota"}{" "}
+              {totalUnits
+                ? `${stageCounts?.submitted ?? 0} of ${totalUnits} unit(s)`
+                : "Draft rota"}{" "}
               awaiting CNO approval
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
@@ -1081,13 +1084,13 @@ function ManagementAlerts() {
           <AlertTriangle className="h-5 w-5 shrink-0 text-amber-600 mt-0.5" />
           <div className="flex-1 min-w-0">
             <p className="font-bold text-amber-800 dark:text-amber-300">
-              {totalUnits ? `${stageCounts?.hr_approved ?? 0} of ${totalUnits} unit(s)` : "Rota"}{" "}
+              {totalUnits ? `${stageCounts?.cno_approved ?? 0} of ${totalUnits} unit(s)` : "Rota"}{" "}
               approved — ready to publish
             </p>
             <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
               CNO-approved for {wfPeriodStr}. Go to Approvals to publish (or it auto-publishes at
               the T-14 deadline).
-              {unitCountsBreakdown("hr_approved")}
+              {unitCountsBreakdown("cno_approved")}
             </p>
           </div>
         </div>
@@ -1488,7 +1491,9 @@ function DailyHoursCard() {
       <div className="flex items-center justify-between mb-4 gap-2">
         <div>
           <h2 className="font-semibold">Hours Worked, Daily</h2>
-          <p className="text-xs text-muted-foreground">Last {DAILY_HOURS_WINDOW} days, by facility</p>
+          <p className="text-xs text-muted-foreground">
+            Last {DAILY_HOURS_WINDOW} days, by facility
+          </p>
         </div>
         {facilities.length > 0 && (
           <div className="flex items-center gap-3 flex-wrap justify-end">

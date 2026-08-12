@@ -228,7 +228,7 @@ router.post(
       const { rows: inApprovalRows } = await pool.query(
         `SELECT 1 FROM shift_assignments
           WHERE nurse_id = $1
-            AND status IN ('submitted', 'hr_approved')
+            AND status IN ('submitted', 'cno_approved')
             AND shift_date BETWEEN $2 AND $3
           LIMIT 1`,
         [nurse_id, from_date, to_date],
@@ -508,7 +508,7 @@ router.patch(
       // there as a defensive backstop). Draft rota status can't itself block
       // this: a leave request can only be Pending against a draft or published
       // rota in the first place (POST / here rejects new requests once the
-      // rota is submitted/hr_approved), so by approval time the rota is either
+      // rota is submitted/cno_approved), so by approval time the rota is either
       // still draft or already published — never mid-review.
       const leave = rows[0];
       let creditsToApply = [];

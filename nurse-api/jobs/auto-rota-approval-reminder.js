@@ -1,7 +1,7 @@
 // Reminds whoever needs to act next on a rota unit sitting in an intermediate
 // stage, once its deadline is within 24 hours:
 //   submitted   → hr_admin, before the T-17 force-submit-is-moot deadline
-//   hr_approved → cno,      before the T-14 auto-publish deadline
+//   cno_approved → cno,      before the T-14 auto-publish deadline
 // Mirrors the per-unit enumeration in auto-submit-draft.js / auto-publish-rota.js.
 const cron = require("node-cron");
 const pool = require("../db");
@@ -82,17 +82,33 @@ async function enumerateUnits(status) {
     const unitKey = `${row.facility}|${row.ward ?? roleGroup}`;
     if (seen.has(unitKey)) continue;
     seen.add(unitKey);
-    units.push({ facility: row.facility, ward: row.ward, roleGroup, unitLabel: row.ward ?? roleGroup });
+    units.push({
+      facility: row.facility,
+      ward: row.ward,
+      roleGroup,
+      unitLabel: row.ward ?? roleGroup,
+    });
   }
   return units;
 }
 
-async function remindUnit({ facility, ward, roleGroup, unitLabel, deadlineField, notifPrefix, role, subject, verb }) {
+async function remindUnit({
+  facility,
+  ward,
+  roleGroup,
+  unitLabel,
+  deadlineField,
+  notifPrefix,
+  role,
+  subject,
+  verb,
+}) {
   const nurseIds = await resolveUnitNurseIds({ facility, ward, roleGroup });
   const period = await getUnitPeriod(nurseIds, ward);
   if (!period) return 0;
   const window = await getWindowForPeriod(period.periodStart);
-  const overdueFlag = deadlineField === "editCloseDate" ? window.editIsClosed : window.publishIsOverdue;
+  const overdueFlag =
+    deadlineField === "editCloseDate" ? window.editIsClosed : window.publishIsOverdue;
   if (overdueFlag) return 0; // already past — the force-submit/auto-publish job handles this
 
   const deadline = deadlineInstant(window[deadlineField]);
@@ -143,7 +159,7 @@ async function runSendRotaApprovalReminders() {
       });
     }
 
-    for (const unit of await enumerateUnits("hr_approved")) {
+    for (const unit of await enumerateUnits("cno_approved")) {
       sentCount += await remindUnit({
         ...unit,
         deadlineField: "publishDeadline",
@@ -155,7 +171,9 @@ async function runSendRotaApprovalReminders() {
     }
 
     if (sentCount > 0) {
-      console.log(`[rota-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`);
+      console.log(
+        `[rota-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`,
+      );
       await pool
         .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
           "Rota approval reminders sent",

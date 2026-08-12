@@ -81,7 +81,7 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
 }
 
 // Returns true when the most recent rota_transitions row for this unit+period
-// is a revert to draft (HR sent a submitted/hr_approved rota back), as
+// is a revert to draft (HR sent a submitted/cno_approved rota back), as
 // opposed to a draft that's freshly generated and never submitted. Used to
 // tell the T-17 auto-submit sweep (jobs/auto-submit-draft.js) not to
 // immediately re-grab a rota HR just rejected, and to let the edit-access

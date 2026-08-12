@@ -1,4 +1,4 @@
-// T-14 deadline: auto-publishes any rota unit that's reached hr_approved.
+// T-14 deadline: auto-publishes any rota unit that's reached cno_approved.
 // A unit still stuck in draft/submitted (HR never got to it) is NOT
 // published — instead this is treated as an exception and hr_admin/cno/admin
 // are alerted so a human resolves it, per the explicit requirement that this
@@ -58,7 +58,7 @@ async function autoPublishRota(opts = {}) {
 }
 
 async function runAutoPublish({ simulateToday } = {}) {
-  // Publish every hr_approved unit whose OWN T-14 deadline has passed —
+  // Publish every cno_approved unit whose OWN T-14 deadline has passed —
   // checked per-unit rather than against one global period, since a unit can
   // be at a different period than the rest of the system (e.g. it fell
   // behind after being reverted by HR while other units already moved on).
@@ -66,7 +66,7 @@ async function runAutoPublish({ simulateToday } = {}) {
     `SELECT DISTINCT n.facility, sa.ward, n.role
        FROM shift_assignments sa
        JOIN nurses n ON n.id = sa.nurse_id
-      WHERE sa.status = 'hr_approved'`,
+      WHERE sa.status = 'cno_approved'`,
   );
   const seenApproved = new Set();
   for (const row of approvedUnits) {
@@ -83,7 +83,7 @@ async function runAutoPublish({ simulateToday } = {}) {
       roleGroup,
     });
     const period = await getUnitPeriod(nurseIds, row.ward);
-    if (!period) continue; // defensive — hr_approved rows exist, so this shouldn't happen
+    if (!period) continue; // defensive — cno_approved rows exist, so this shouldn't happen
     const window = await getWindowForPeriod(period.periodStart, { simulateToday });
     if (!window.publishIsOverdue) continue;
 
@@ -101,7 +101,7 @@ async function runAutoPublish({ simulateToday } = {}) {
       `UPDATE shift_assignments sa
           SET status = 'published', updated_at = NOW()
         WHERE sa.nurse_id = ANY($1) AND sa.shift_date BETWEEN $2 AND $3
-          AND sa.status = 'hr_approved' ${wardClause}`,
+          AND sa.status = 'cno_approved' ${wardClause}`,
       params,
     );
 

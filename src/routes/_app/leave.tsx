@@ -220,15 +220,14 @@ function LeavePage() {
   const facilityScope: string | null = lockedFacility ?? (selectedFacility || null);
 
   // Fetch nurses to build facility + role maps (used for column badges and matron-leave gating).
-  const { data: nurses = [] } = useQuery<{ id: string; name: string; facility: string | null; role: string | null }[]>({
+  const { data: nurses = [] } = useQuery<
+    { id: string; name: string; facility: string | null; role: string | null }[]
+  >({
     queryKey: ["nurses"],
     staleTime: 10 * 60 * 1000,
     queryFn: () => api.get("/nurses"),
   });
-  const nurseToFacility = useMemo(
-    () => new Map(nurses.map((n) => [n.id, n.facility])),
-    [nurses],
-  );
+  const nurseToFacility = useMemo(() => new Map(nurses.map((n) => [n.id, n.facility])), [nurses]);
 
   // Any approval role (leave OR shift-switch OR matron-leave) gets the full list for their scope —
   // as does a pure view-only role (e.g. hr_admin, service_support) via canViewAllLeaveRequests.
@@ -249,7 +248,9 @@ function LeavePage() {
   const isAnyLeaveApprover = canApproveLeave || canApproveMatronLeave;
 
   const { data: rows = [], isLoading } = useQuery({
-    queryKey: canSeeAll ? ["leave", facilityScope] : ["leave", "mine", user?.id, nurseId, facilityScope],
+    queryKey: canSeeAll
+      ? ["leave", facilityScope]
+      : ["leave", "mine", user?.id, nurseId, facilityScope],
     refetchInterval: 30 * 1000,
     queryFn: async () => {
       if (canSeeAll) {
@@ -266,7 +267,9 @@ function LeavePage() {
       const [ownRows, nurseBSwitchRows, beneficiaryRows] = await Promise.all([
         api.get<LeaveRow[]>(`/leave-requests?requested_by=${user!.id}`),
         nurseId
-          ? api.get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`).catch(() => [] as LeaveRow[])
+          ? api
+              .get<LeaveRow[]>(`/leave-requests?switch_nurse_b=${nurseId}`)
+              .catch(() => [] as LeaveRow[])
           : Promise.resolve([] as LeaveRow[]),
         nurseId
           ? api.get<LeaveRow[]>(`/leave-requests?nurse_id=${nurseId}`)
@@ -292,7 +295,12 @@ function LeavePage() {
   const activeRows = activeTab === "leave" ? leaveRows : switchRows;
 
   // Standard credited hours per shift type (matches official shift windows).
-  const LEAVE_SHIFT_HOURS: Record<"M" | "N" | "MWC" | "NC", number> = { M: 9, N: 15, MWC: 9, NC: 15 };
+  const LEAVE_SHIFT_HOURS: Record<"M" | "N" | "MWC" | "NC", number> = {
+    M: 9,
+    N: 15,
+    MWC: 9,
+    NC: 15,
+  };
 
   function buildLeaveShiftLog(
     nurseId: string,
@@ -337,7 +345,11 @@ function LeavePage() {
     if (!profileId || profileId === l.requested_by) return;
     await api
       .post("/notifications/upsert", [
-        { user_id: profileId, notif_key: `leave_${status.toLowerCase()}_${l.id}_staff`, is_read: false },
+        {
+          user_id: profileId,
+          notif_key: `leave_${status.toLowerCase()}_${l.id}_staff`,
+          is_read: false,
+        },
       ])
       .catch(() => {});
   }
@@ -370,7 +382,12 @@ function LeavePage() {
               .post(
                 "/shift-logs/bulk",
                 shiftsToCredit.map((s) =>
-                  buildLeaveShiftLog(l.nurse_id!, l.id, s.shift_date, s.shift as "M" | "N" | "MWC" | "NC"),
+                  buildLeaveShiftLog(
+                    l.nurse_id!,
+                    l.id,
+                    s.shift_date,
+                    s.shift as "M" | "N" | "MWC" | "NC",
+                  ),
                 ),
               )
               .catch(() => {});
@@ -390,8 +407,12 @@ function LeavePage() {
             review_note: note || null,
           });
 
-          const mDates = publishedShifts.filter((s) => s.shift === "M" || s.shift === "MWC").map((s) => s.shift_date);
-          const nDates = publishedShifts.filter((s) => s.shift === "N" || s.shift === "NC").map((s) => s.shift_date);
+          const mDates = publishedShifts
+            .filter((s) => s.shift === "M" || s.shift === "MWC")
+            .map((s) => s.shift_date);
+          const nDates = publishedShifts
+            .filter((s) => s.shift === "N" || s.shift === "NC")
+            .map((s) => s.shift_date);
           const parts: string[] = [];
           if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
           if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
@@ -621,12 +642,14 @@ function LeavePage() {
     Reverted: activeRows.filter((r) => r.status === "Reverted").length,
   };
 
-  const visibleRows = (statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter))
-    .filter((r) => {
-      if (search.trim() && !r.nurse_name.toLowerCase().includes(search.trim().toLowerCase())) return false;
-      if (typeFilter && r.type !== typeFilter) return false;
-      return true;
-    });
+  const visibleRows = (
+    statusFilter === "All" ? activeRows : activeRows.filter((r) => r.status === statusFilter)
+  ).filter((r) => {
+    if (search.trim() && !r.nurse_name.toLowerCase().includes(search.trim().toLowerCase()))
+      return false;
+    if (typeFilter && r.type !== typeFilter) return false;
+    return true;
+  });
 
   const filterActiveStyle = "ring-2 ring-primary";
   const cardStyle = (s: StatusFilter) =>
@@ -688,7 +711,12 @@ function LeavePage() {
       <div className="mb-4">
         <FacilityChips
           value={lockedFacility ?? selectedFacility}
-          onChange={(f) => { setSelectedFacility(f); setStatusFilter("All"); setSearch(""); setTypeFilter(""); }}
+          onChange={(f) => {
+            setSelectedFacility(f);
+            setStatusFilter("All");
+            setSearch("");
+            setTypeFilter("");
+          }}
           locked={!!lockedFacility}
           showAll={canFilterFacility}
         />
@@ -734,7 +762,9 @@ function LeavePage() {
 
       {/* Status filter cards — Reverted only shown once at least one exists, so the
           common case (nobody's ever reverted anything) stays a clean 3-card row. */}
-      <div className={`grid gap-3 sm:gap-4 mb-6 ${counts.Reverted > 0 ? "grid-cols-4" : "grid-cols-3"}`}>
+      <div
+        className={`grid gap-3 sm:gap-4 mb-6 ${counts.Reverted > 0 ? "grid-cols-4" : "grid-cols-3"}`}
+      >
         {(counts.Reverted > 0
           ? (["Pending", "Approved", "Rejected", "Reverted"] as const)
           : (["Pending", "Approved", "Rejected"] as const)
@@ -775,8 +805,19 @@ function LeavePage() {
             className="h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring text-muted-foreground"
           >
             <option value="">All types</option>
-            {["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"].map((t) => (
-              <option key={t} value={t}>{t}</option>
+            {[
+              "Sick",
+              "Annual",
+              "Emergency",
+              "Maternity",
+              "Public Holiday",
+              "Study Leave",
+              "Compassionate Leave",
+              "Leave of Absence",
+            ].map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
           </select>
         )}
@@ -871,7 +912,10 @@ function LeaveTable({
   const [editing, setEditing] = useState<LeaveRow | null>(null);
   const [reverting, setReverting] = useState<LeaveRow | null>(null);
   const [revertReason, setRevertReason] = useState("");
-  const [revertRange, setRevertRange] = useState<{ from: string; to: string }>({ from: "", to: "" });
+  const [revertRange, setRevertRange] = useState<{ from: string; to: string }>({
+    from: "",
+    to: "",
+  });
   const [revertBusy, setRevertBusy] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
@@ -958,173 +1002,175 @@ function LeaveTable({
                     No requests match the current filter.
                   </td>
                 </tr>
-              ) : (() => {
-                // When showing all facilities, group rows by facility with a divider header.
-                const cols = showApproverCols ? 9 : 7;
-                const renderRow = (l: LeaveRow) => {
-                  const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
-                  return (
-                    <tr key={l.id} className="border-t hover:bg-muted/30">
-                      {showApproverCols && (
+              ) : (
+                (() => {
+                  // When showing all facilities, group rows by facility with a divider header.
+                  const cols = showApproverCols ? 9 : 7;
+                  const renderRow = (l: LeaveRow) => {
+                    const { canApprove: rowApprovable, blockedLabel } = rowApprovalInfo(l);
+                    return (
+                      <tr key={l.id} className="border-t hover:bg-muted/30">
+                        {showApproverCols && (
+                          <td className="px-4 py-3">
+                            <p className="font-medium">{l.nurse_name}</p>
+                            {l.requested_by_name && l.requested_by_name !== l.nurse_name && (
+                              <p className="text-xs text-muted-foreground/70 mt-0.5">
+                                Initiated by {l.requested_by_name}
+                              </p>
+                            )}
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
+                        <td className="px-4 py-3 text-muted-foreground max-w-50">
+                          {l.reason ? (
+                            <span className="block truncate" title={l.reason}>
+                              {l.reason}
+                            </span>
+                          ) : (
+                            "—"
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                          {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
+                            ? fmtDateLeave(l.from_date)
+                            : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
+                          {fmtDateLeave(l.created_at)}
+                        </td>
                         <td className="px-4 py-3">
-                          <p className="font-medium">{l.nurse_name}</p>
-                          {l.requested_by_name && l.requested_by_name !== l.nurse_name && (
-                            <p className="text-xs text-muted-foreground/70 mt-0.5">
-                              Initiated by {l.requested_by_name}
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusDisplay(l).className}`}
+                            >
+                              {statusDisplay(l).label}
+                            </span>
+                            {l.status === "Pending" &&
+                              !isShiftSwitch(l) &&
+                              (l.requested_by === user?.id || isAdmin) && (
+                                <button
+                                  type="button"
+                                  aria-label="Edit leave request"
+                                  onClick={() => setEditing(l)}
+                                  className="h-5 w-5 grid place-items-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                >
+                                  <Pencil className="h-3 w-3" />
+                                </button>
+                              )}
+                          </div>
+                          {l.review_note && (
+                            <p
+                              className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
+                              title={l.review_note}
+                            >
+                              {l.review_note}
+                            </p>
+                          )}
+                          {l.status === "Reverted" && l.revert_reason && (
+                            <p
+                              className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-50"
+                              title={l.revert_reason}
+                            >
+                              Reverted: {l.revert_reason}
                             </p>
                           )}
                         </td>
-                      )}
-                      <td className="px-4 py-3 text-muted-foreground">{l.type}</td>
-                      <td className="px-4 py-3 text-muted-foreground max-w-50">
-                        {l.reason ? (
-                          <span className="block truncate" title={l.reason}>
-                            {l.reason}
-                          </span>
-                        ) : (
-                          "—"
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                        {l.from_date.slice(0, 10) === l.to_date.slice(0, 10)
-                          ? fmtDateLeave(l.from_date)
-                          : `${fmtDateLeave(l.from_date)} – ${fmtDateLeave(l.to_date)}`}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground tabular-nums whitespace-nowrap">
-                        {fmtDateLeave(l.created_at)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <span
-                            className={`text-[10px] px-2 py-1 rounded-full font-semibold ${statusDisplay(l).className}`}
-                          >
-                            {statusDisplay(l).label}
-                          </span>
-                          {l.status === "Pending" &&
-                            !isShiftSwitch(l) &&
-                            (l.requested_by === user?.id || isAdmin) && (
-                              <button
-                                type="button"
-                                aria-label="Edit leave request"
-                                onClick={() => setEditing(l)}
-                                className="h-5 w-5 grid place-items-center rounded hover:bg-muted text-muted-foreground hover:text-foreground"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                            )}
-                        </div>
-                        {l.review_note && (
-                          <p
-                            className="text-xs text-muted-foreground/70 mt-0.5 italic truncate max-w-50"
-                            title={l.review_note}
-                          >
-                            {l.review_note}
-                          </p>
-                        )}
-                        {l.status === "Reverted" && l.revert_reason && (
-                          <p
-                            className="text-xs text-violet-700/80 mt-0.5 italic truncate max-w-50"
-                            title={l.revert_reason}
-                          >
-                            Reverted: {l.revert_reason}
-                          </p>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">
-                        {l.reviewed_by_name ?? "—"}
-                      </td>
-                      <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
-                        {l.reviewed_at ? fmtDateLeave(l.reviewed_at) : "—"}
-                      </td>
-                      {showApproverCols && (
-                        <td className="px-4 py-3">
-                          <div className="flex gap-1 justify-end items-center">
-                            {l.status === "Approved" && isAdmin && (
-                              <button
-                                type="button"
-                                aria-label="Revert approved leave"
-                                title="Revert — restore original shift assignment"
-                                onClick={() => {
-                                  setReverting(l);
-                                  setRevertReason("");
-                                  setRevertRange({
-                                    from: l.from_date.slice(0, 10),
-                                    to: l.to_date.slice(0, 10),
-                                  });
-                                }}
-                                className="h-8 w-8 grid place-items-center rounded-md hover:bg-violet-100 text-violet-700"
-                              >
-                                <Undo2 className="h-4 w-4" />
-                              </button>
-                            )}
-                            {!rowApprovable ? (
-                              <p className="text-xs text-muted-foreground text-right italic">
-                                {blockedLabel}
-                              </p>
-                            ) : l.nurse_id && l.nurse_id === nurseId ? (
-                              <p className="text-xs text-muted-foreground text-right italic">
-                                Own request
-                              </p>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  aria-label="Approve leave request"
-                                  onClick={() => {
-                                    setReviewing({ row: l, status: "Approved" });
-                                    setReviewNote("");
-                                  }}
-                                  disabled={l.status !== "Pending"}
-                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
-                                >
-                                  <Check className="h-4 w-4" />
-                                </button>
-                                <button
-                                  type="button"
-                                  aria-label="Reject leave request"
-                                  onClick={() => {
-                                    setReviewing({ row: l, status: "Rejected" });
-                                    setReviewNote("");
-                                  }}
-                                  disabled={l.status !== "Pending"}
-                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              </>
-                            )}
-                          </div>
+                        <td className="px-4 py-3 text-muted-foreground">
+                          {l.reviewed_by_name ?? "—"}
                         </td>
-                      )}
-                    </tr>
-                  );
-                };
+                        <td className="px-4 py-3 tabular-nums text-muted-foreground whitespace-nowrap">
+                          {l.reviewed_at ? fmtDateLeave(l.reviewed_at) : "—"}
+                        </td>
+                        {showApproverCols && (
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1 justify-end items-center">
+                              {l.status === "Approved" && isAdmin && (
+                                <button
+                                  type="button"
+                                  aria-label="Revert approved leave"
+                                  title="Revert — restore original shift assignment"
+                                  onClick={() => {
+                                    setReverting(l);
+                                    setRevertReason("");
+                                    setRevertRange({
+                                      from: l.from_date.slice(0, 10),
+                                      to: l.to_date.slice(0, 10),
+                                    });
+                                  }}
+                                  className="h-8 w-8 grid place-items-center rounded-md hover:bg-violet-100 text-violet-700"
+                                >
+                                  <Undo2 className="h-4 w-4" />
+                                </button>
+                              )}
+                              {!rowApprovable ? (
+                                <p className="text-xs text-muted-foreground text-right italic">
+                                  {blockedLabel}
+                                </p>
+                              ) : l.nurse_id && l.nurse_id === nurseId ? (
+                                <p className="text-xs text-muted-foreground text-right italic">
+                                  Own request
+                                </p>
+                              ) : (
+                                <>
+                                  <button
+                                    type="button"
+                                    aria-label="Approve leave request"
+                                    onClick={() => {
+                                      setReviewing({ row: l, status: "Approved" });
+                                      setReviewNote("");
+                                    }}
+                                    disabled={l.status !== "Pending"}
+                                    className="h-8 w-8 grid place-items-center rounded-md hover:bg-success/15 text-success disabled:opacity-30"
+                                  >
+                                    <Check className="h-4 w-4" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    aria-label="Reject leave request"
+                                    onClick={() => {
+                                      setReviewing({ row: l, status: "Rejected" });
+                                      setReviewNote("");
+                                    }}
+                                    disabled={l.status !== "Pending"}
+                                    className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/15 text-destructive disabled:opacity-30"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  };
 
-                if (showFacility && nurseToFacility) {
-                  // Group by facility, sort facility names, then render with divider rows.
-                  const grouped = new Map<string, LeaveRow[]>();
-                  for (const l of pagedRows) {
-                    const f = (l.nurse_id && nurseToFacility.get(l.nurse_id)) || "Unknown";
-                    if (!grouped.has(f)) grouped.set(f, []);
-                    grouped.get(f)!.push(l);
+                  if (showFacility && nurseToFacility) {
+                    // Group by facility, sort facility names, then render with divider rows.
+                    const grouped = new Map<string, LeaveRow[]>();
+                    for (const l of pagedRows) {
+                      const f = (l.nurse_id && nurseToFacility.get(l.nurse_id)) || "Unknown";
+                      if (!grouped.has(f)) grouped.set(f, []);
+                      grouped.get(f)!.push(l);
+                    }
+                    return [...grouped.entries()]
+                      .sort(([a], [b]) => a.localeCompare(b))
+                      .flatMap(([facility, fRows]) => [
+                        <tr key={`hdr-${facility}`}>
+                          <td
+                            colSpan={cols}
+                            className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
+                          >
+                            {facility}
+                          </td>
+                        </tr>,
+                        ...fRows.map(renderRow),
+                      ]);
                   }
-                  return [...grouped.entries()]
-                    .sort(([a], [b]) => a.localeCompare(b))
-                    .flatMap(([facility, fRows]) => [
-                      <tr key={`hdr-${facility}`}>
-                        <td
-                          colSpan={cols}
-                          className="px-4 py-2 bg-muted/40 text-[10px] font-bold uppercase tracking-widest text-muted-foreground border-t"
-                        >
-                          {facility}
-                        </td>
-                      </tr>,
-                      ...fRows.map(renderRow),
-                    ]);
-                }
 
-                return pagedRows.map(renderRow);
-              })()}
+                  return pagedRows.map(renderRow);
+                })()
+              )}
             </tbody>
           </table>
         </div>
@@ -1228,7 +1274,8 @@ function LeaveTable({
                 </p>
               ) : !revertIsFullRange ? (
                 <p className="text-xs text-muted-foreground mt-1.5">
-                  The rest of the leave ({fmtDateLeave(
+                  The rest of the leave (
+                  {fmtDateLeave(
                     revertRange.from === reverting.from_date.slice(0, 10)
                       ? addDaysLeaveYmd(revertRange.to, 1)
                       : reverting.from_date,
@@ -1267,7 +1314,11 @@ function LeaveTable({
               onClick={submitRevert}
               className="h-9 px-4 rounded-md text-sm font-medium disabled:opacity-40 bg-violet-600 text-white hover:bg-violet-700"
             >
-              {revertBusy ? "Reverting…" : revertIsFullRange ? "Confirm revert" : "Confirm partial revert"}
+              {revertBusy
+                ? "Reverting…"
+                : revertIsFullRange
+                  ? "Confirm revert"
+                  : "Confirm partial revert"}
             </button>
           </div>
         </Modal>
@@ -1505,9 +1556,18 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!from || !to) { toast.error("Please fill in all dates"); return; }
-    if (from < today) { toast.error("Cannot use a past start date"); return; }
-    if (to < from) { toast.error("End date must be on or after start date"); return; }
+    if (!from || !to) {
+      toast.error("Please fill in all dates");
+      return;
+    }
+    if (from < today) {
+      toast.error("Cannot use a past start date");
+      return;
+    }
+    if (to < from) {
+      toast.error("End date must be on or after start date");
+      return;
+    }
     setBusy(true);
     try {
       await api.patch(`/leave-requests/${row.id}`, { type, from_date: from, to_date: to });
@@ -1528,7 +1588,9 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
           <label className="block text-xs font-medium text-muted-foreground mb-1">Leave Type</label>
           <select value={type} onChange={(e) => setType(e.target.value)} className={inputCls}>
             {leaveTypes.map((t) => (
-              <option key={t} value={t}>{t}</option>
+              <option key={t} value={t}>
+                {t}
+              </option>
             ))}
           </select>
         </div>
@@ -1539,7 +1601,10 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
               type="date"
               value={from}
               min={today}
-              onChange={(e) => { setFrom(e.target.value); if (to && e.target.value > to) setTo(e.target.value); }}
+              onChange={(e) => {
+                setFrom(e.target.value);
+                if (to && e.target.value > to) setTo(e.target.value);
+              }}
               className={inputCls}
               required
             />
@@ -1557,7 +1622,11 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
           </div>
         </div>
         <div className="flex justify-end gap-2 pt-1">
-          <button type="button" onClick={onClose} className="h-9 px-4 rounded-md border bg-card text-sm">
+          <button
+            type="button"
+            onClick={onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm"
+          >
             Cancel
           </button>
           <button
@@ -1581,8 +1650,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-min"],
-    queryFn: () =>
-      api.get<{ id: string; name: string; facility: string | null }[]>("/nurses"),
+    queryFn: () => api.get<{ id: string; name: string; facility: string | null }[]>("/nurses"),
   });
 
   const today = todayYmd();
@@ -1615,7 +1683,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     }
     return [...map.entries()]
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([facility, group]) => [facility, [...group].sort((a, b) => a.name.localeCompare(b.name))] as const);
+      .map(
+        ([facility, group]) =>
+          [facility, [...group].sort((a, b) => a.name.localeCompare(b.name))] as const,
+      );
   }, [nurses]);
 
   const chiefMatronStaffOptions = useMemo(
@@ -1636,9 +1707,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     enabled: datesReady && !!targetNurseId,
     queryFn: () =>
       api
-        .get<{ id: string }[]>(
-          `/shift-assignments?nurse_id=${targetNurseId}&status=published&from=${from}&to=${to}&limit=1`,
-        )
+        .get<
+          { id: string }[]
+        >(`/shift-assignments?nurse_id=${targetNurseId}&status=published&from=${from}&to=${to}&limit=1`)
         .then((arr) => arr.length > 0),
   });
 
@@ -1648,9 +1719,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     enabled: datesReady && !!targetNurseId,
     queryFn: () =>
       api
-        .get<{ id: string }[]>(
-          `/shift-assignments?nurse_id=${targetNurseId}&status_in=submitted,hr_approved&from=${from}&to=${to}&limit=1`,
-        )
+        .get<
+          { id: string }[]
+        >(`/shift-assignments?nurse_id=${targetNurseId}&status_in=submitted,cno_approved&from=${from}&to=${to}&limit=1`)
         .then((arr) => arr.length > 0),
   });
 
@@ -1667,9 +1738,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     enabled: datesReady && !!targetNurseId,
     queryFn: () =>
       api
-        .get<{ closed: boolean }>(
-          `/leave-requests/draft-window-check?nurse_id=${targetNurseId}&from=${from}&to=${to}`,
-        )
+        .get<{
+          closed: boolean;
+        }>(`/leave-requests/draft-window-check?nurse_id=${targetNurseId}&from=${from}&to=${to}`)
         .then((r) => r.closed),
   });
 
@@ -1744,7 +1815,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       ? []
       : datesInPublishedRota || leaveWindowClosed || draftWindowClosed
         ? ["Sick", "Emergency"]
-        : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"]
+        : [
+            "Sick",
+            "Annual",
+            "Emergency",
+            "Maternity",
+            "Public Holiday",
+            "Study Leave",
+            "Compassionate Leave",
+            "Leave of Absence",
+          ]
   ).filter((t) => !exhaustedTypes.has(t));
 
   // Keep the selected type valid when the allowed list narrows.
@@ -1791,7 +1871,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       }
     }
     if (datesInApprovalRota) {
-      toast.error("The rota for this period is under review. Leave requests are blocked until it is published.");
+      toast.error(
+        "The rota for this period is under review. Leave requests are blocked until it is published.",
+      );
       return;
     }
 
@@ -1969,7 +2051,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
           <div className="flex items-start gap-2 p-3 rounded-md bg-rose-50 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-400">
             <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>
-              The rota for these dates is currently <strong>under review</strong>. Leave requests are blocked until the rota is published.
+              The rota for these dates is currently <strong>under review</strong>. Leave requests
+              are blocked until the rota is published.
             </span>
           </div>
         )}
@@ -2130,7 +2213,8 @@ function roleCategory(role: string | null | undefined): string {
   const r = role.trim().toLowerCase();
   if (r === "cno" || r.includes("chief nursing officer")) return "cno";
   if (r.includes("chief matron") || r === "matron") return "chief_matron";
-  if (r.includes("coverage nurse") || r.includes("head nurse") || r.includes("night coordinator")) return "head_nurse";
+  if (r.includes("coverage nurse") || r.includes("head nurse") || r.includes("night coordinator"))
+    return "head_nurse";
   if (/^hr/.test(r)) return "hr_admin";
   if (/^porter/.test(r)) return "porter";
   if (/nurs(?:e|ing)\s*assistant/i.test(r)) return "nursing_assistant";
@@ -2148,9 +2232,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const { data: nurses = [] } = useQuery({
     queryKey: ["nurses-switch"],
     queryFn: () =>
-      api.get<{ id: string; name: string; ward: string | null; facility: string | null; role: string }[]>(
-        "/nurses",
-      ),
+      api.get<
+        { id: string; name: string; ward: string | null; facility: string | null; role: string }[]
+      >("/nurses"),
   });
 
   const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
@@ -2178,10 +2262,12 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   // Case-insensitive dedup: "ICU & CathLab" and "ICU & Cathlab" collapse to one entry.
   const allFacilityWards = (() => {
     const seen = new Map<string, string>();
-    facilityNurses.flatMap((n) => splitWards(n.ward)).forEach((w) => {
-      const key = w.trim().toLowerCase();
-      if (!seen.has(key)) seen.set(key, w.trim());
-    });
+    facilityNurses
+      .flatMap((n) => splitWards(n.ward))
+      .forEach((w) => {
+        const key = w.trim().toLowerCase();
+        if (!seen.has(key)) seen.set(key, w.trim());
+      });
     return [...seen.values()].sort();
   })();
   const wardBOptions = allFacilityWards.filter((w) => !nurseAWards.includes(w));
@@ -2221,8 +2307,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     // Exclude nurses on approved leave — swapping with a leave nurse makes no sense.
     const notOnLeave = (n: (typeof switchableNurses)[number]) =>
       assignmentMap.get(n.id) !== "LEAVE";
-    const isNoWardNurse = (n: (typeof switchableNurses)[number]) =>
-      splitWards(n.ward).length === 0;
+    const isNoWardNurse = (n: (typeof switchableNurses)[number]) => splitWards(n.ward).length === 0;
 
     // Direct switch with Nurse A on OFF: Nurse B must be actively on duty.
     // An OFF↔OFF swap is meaningless — nothing changes for either nurse.
@@ -2271,7 +2356,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     const noWardSameRole = switchableNurses.filter((n) => base(n) && isNoWardNurse(n));
     const seen = new Set(wardNurses.map((n) => n.id));
     return [...wardNurses, ...noWardSameRole.filter((n) => !seen.has(n.id))];
-  }, [nurseAId, date, switchType, wardB, switchableNurses, nurseA, nurseAWards, assignmentMap, exchangeMode, shiftA]);
+  }, [
+    nurseAId,
+    date,
+    switchType,
+    wardB,
+    switchableNurses,
+    nurseA,
+    nurseAWards,
+    assignmentMap,
+    exchangeMode,
+    shiftA,
+  ]);
 
   // In leave mode, Nurse A must be a nurse who is actually on approved leave on that date.
   const nurseAList = useMemo(() => {
@@ -2310,9 +2406,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     let waive24hRule = false;
     if (shiftA === "LEAVE") {
       const coveredLeave = await api
-        .get<{ type: string; rota_stage_at_request: string | null }[]>(
-          `/leave-requests?nurse_id=${nurseAId}&status=Approved&from_date_lte=${date}&to_date_gte=${date}&limit=1`,
-        )
+        .get<
+          { type: string; rota_stage_at_request: string | null }[]
+        >(`/leave-requests?nurse_id=${nurseAId}&status=Approved&from_date_lte=${date}&to_date_gte=${date}&limit=1`)
         .catch(() => [] as { type: string; rota_stage_at_request: string | null }[]);
       const covered = coveredLeave[0];
       waive24hRule =
@@ -2412,9 +2508,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     <Modal title="Request shift switch" onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-4">
         Switches are applied to the <strong>published rota</strong> only after CNO approval.
-        Requests must be submitted at least <strong>24 hours</strong> before the shift — except
-        to cover an approved <strong>Sick</strong> or <strong>Emergency</strong> Leave, which can
-        be requested up to the shift itself.
+        Requests must be submitted at least <strong>24 hours</strong> before the shift — except to
+        cover an approved <strong>Sick</strong> or <strong>Emergency</strong> Leave, which can be
+        requested up to the shift itself.
       </p>
       <form onSubmit={submit} className="space-y-4">
         {/* Exchange mode */}
@@ -2642,9 +2738,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             id="sw-nurse-b"
             required
             disabled={
-              loadingAssignments ||
-              (switchType === "inter-ward" ? !wardB : !nurseAId) ||
-              !date
+              loadingAssignments || (switchType === "inter-ward" ? !wardB : !nurseAId) || !date
             }
             value={nurseBId}
             onChange={(e) => {
@@ -2675,15 +2769,19 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               );
             })}
           </select>
-          {nurseAId && date && !loadingAssignments && nurseBList.length === 0 && (switchType === "same-ward" || wardB) && (
-            <p className="mt-1 text-xs text-muted-foreground">
-              {switchType === "inter-ward"
-                ? `No ${nurseA?.role ?? "matching"} nurses found in the selected ward.`
-                : nurseAWards.length === 0
-                  ? `No other ${nurseA?.role ?? "matching"} nurses found in this facility.`
-                  : `No ${nurseA?.role ?? "matching"} nurses found in the same ward.`}
-            </p>
-          )}
+          {nurseAId &&
+            date &&
+            !loadingAssignments &&
+            nurseBList.length === 0 &&
+            (switchType === "same-ward" || wardB) && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {switchType === "inter-ward"
+                  ? `No ${nurseA?.role ?? "matching"} nurses found in the selected ward.`
+                  : nurseAWards.length === 0
+                    ? `No other ${nurseA?.role ?? "matching"} nurses found in this facility.`
+                    : `No ${nurseA?.role ?? "matching"} nurses found in the same ward.`}
+              </p>
+            )}
           {shiftB && (
             <p className="mt-1 text-xs text-muted-foreground">
               Published shift: <span className="font-semibold text-foreground">{shiftB}</span>

@@ -120,7 +120,7 @@ router.post(
     // period_start, which the global inference would otherwise silently
     // replace with the wrong, more-advanced period.
     //
-    // Exception 1: once a unit has moved past draft (submitted, hr_approved,
+    // Exception 1: once a unit has moved past draft (submitted, cno_approved,
     // or published), the normal T-19..T-17 window is long closed and can
     // never reopen on its own for general editing — but a new staff member
     // can still be added mid-cycle at any of those stages, and the head
@@ -148,7 +148,7 @@ router.post(
     );
     const statuses = new Set(statusRows.map((r) => r.status));
     const isPastDraft =
-      statuses.has("submitted") || statuses.has("hr_approved") || statuses.has("published");
+      statuses.has("submitted") || statuses.has("cno_approved") || statuses.has("published");
 
     let hasNewStaffWithDraft = false;
     if (isPastDraft) {

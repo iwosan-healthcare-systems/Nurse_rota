@@ -56,7 +56,7 @@ type PendingRow = {
   shift: string | null;
 };
 
-type WindowStatus = "draft" | "submitted" | "hr_approved" | "published";
+type WindowStatus = "draft" | "submitted" | "cno_approved" | "published";
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 
 type RotaWindow = {
@@ -75,13 +75,13 @@ type ApprovalStep = { key: string; label: string; status: string };
 const STEPS: ApprovalStep[] = [
   { key: "draft", label: "Draft", status: "draft" },
   { key: "submitted", label: "Submitted", status: "submitted" },
-  { key: "hr_approved", label: "CNO", status: "hr_approved" },
+  { key: "cno_approved", label: "CNO", status: "cno_approved" },
   { key: "published", label: "Published", status: "published" },
 ];
 
 function dominantStatus(statuses: string[]): WindowStatus {
   if (statuses.includes("published")) return "published";
-  if (statuses.includes("hr_approved")) return "hr_approved";
+  if (statuses.includes("cno_approved")) return "cno_approved";
   if (statuses.includes("submitted")) return "submitted";
   return "draft";
 }
@@ -230,14 +230,14 @@ const FW_LABELS: Record<FacilityWideGroup, string> = {
 const STATUS_LABELS: Record<WindowStatus, string> = {
   draft: "Draft",
   submitted: "Awaiting CNO Approval",
-  hr_approved: "Awaiting Publication",
+  cno_approved: "Awaiting Publication",
   published: "Published",
 };
 
 const STATUS_COLORS: Record<WindowStatus, string> = {
   draft: "bg-muted text-muted-foreground border-border",
   submitted: "bg-amber-100 text-amber-800 border-amber-200",
-  hr_approved: "bg-violet-100 text-violet-800 border-violet-200",
+  cno_approved: "bg-violet-100 text-violet-800 border-violet-200",
   published: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
@@ -533,7 +533,7 @@ function ApprovalsPage() {
 
   // ── DB actions ─────────────────────────────────────────────────────────────
 
-  type AssignStatus = "draft" | "submitted" | "hr_approved" | "published";
+  type AssignStatus = "draft" | "submitted" | "cno_approved" | "published";
 
   // Scope a status update to nurses who belong to win.facility (+ ward filter).
   async function scopedStatusUpdate(
@@ -566,7 +566,7 @@ function ApprovalsPage() {
     return null;
   }
 
-  type AssignmentStatus = "draft" | "submitted" | "hr_approved" | "published";
+  type AssignmentStatus = "draft" | "submitted" | "cno_approved" | "published";
 
   async function advance(win: RotaWindow, nextStatus: AssignmentStatus) {
     setBusy(winKey(win));
@@ -916,19 +916,19 @@ td.sm{text-align:left;color:#444;min-width:55px}
     let approveLabel = "";
     if (win.status === "submitted" && canApproveRota) {
       canApprove = true;
-      nextStatus = "hr_approved";
+      nextStatus = "cno_approved";
       approveLabel = "Approve (CNO)";
-    } else if (win.status === "hr_approved" && canPublish) {
+    } else if (win.status === "cno_approved" && canPublish) {
       canApprove = true;
       nextStatus = "published";
       approveLabel = "Publish Rota";
     }
 
     // Reject-to-draft uses the same capability as approving forward at that
-    // stage — CNO (approve_rota) can bounce a submitted OR hr_approved rota
+    // stage — CNO (approve_rota) can bounce a submitted OR cno_approved rota
     // back to draft, matching routes/shift-assignments.js's classification.
     const canReject =
-      (win.status === "submitted" || win.status === "hr_approved") && canApproveRota;
+      (win.status === "submitted" || win.status === "cno_approved") && canApproveRota;
 
     const showActions = canApprove || canReject || win.status === "published";
 
@@ -1146,7 +1146,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
           )}
 
           {/* Publish reminder */}
-          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "hr_approved" && (
+          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "cno_approved" && (
             <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
               <div>

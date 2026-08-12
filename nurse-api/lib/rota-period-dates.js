@@ -53,7 +53,14 @@ async function getNextPeriodDates({ simulateToday } = {}) {
       ($2::timestamptz >= (($1::date + 1 - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
       ($2::timestamptz >= (($1::date + 1 - ($6::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
     `,
-    [lastDate, now.toISOString(), leave_closure_days, generate_days, edit_close_days, publish_deadline_days],
+    [
+      lastDate,
+      now.toISOString(),
+      leave_closure_days,
+      generate_days,
+      edit_close_days,
+      publish_deadline_days,
+    ],
   );
 
   const row = rows[0];
@@ -98,7 +105,14 @@ async function getWindowForPeriod(periodStart, { simulateToday } = {}) {
       ($2::timestamptz >= (($1::date - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
       ($2::timestamptz >= (($1::date - ($6::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
     `,
-    [periodStart, now.toISOString(), leave_closure_days, generate_days, edit_close_days, publish_deadline_days],
+    [
+      periodStart,
+      now.toISOString(),
+      leave_closure_days,
+      generate_days,
+      edit_close_days,
+      publish_deadline_days,
+    ],
   );
 
   const row = rows[0];
@@ -142,7 +156,7 @@ function addDays(dateStr, n) {
 //
 // Returns null if this unit has never had a published rota (nothing for the
 // automation to act on yet). hasActive is true when the unit currently has
-// draft/submitted/hr_approved rows (periodStart is that in-progress period);
+// draft/submitted/cno_approved rows (periodStart is that in-progress period);
 // false when periodStart was inferred from the last published rota instead.
 async function getUnitPeriod(nurseIds, ward) {
   if (!nurseIds || !nurseIds.length) return null;
@@ -151,7 +165,7 @@ async function getUnitPeriod(nurseIds, ward) {
 
   const { rows: activeRows } = await pool.query(
     `SELECT MIN(shift_date)::text AS start FROM shift_assignments
-      WHERE nurse_id = ANY($1) ${wardClause} AND status IN ('draft', 'submitted', 'hr_approved')`,
+      WHERE nurse_id = ANY($1) ${wardClause} AND status IN ('draft', 'submitted', 'cno_approved')`,
     params,
   );
   const activeStart = activeRows[0]?.start;

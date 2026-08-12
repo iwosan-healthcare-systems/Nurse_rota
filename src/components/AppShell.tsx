@@ -618,7 +618,7 @@ function RotaReminderBell({
 
     // For admin, evaluate all stages and return the most urgent one.
     // Highest urgency first so admin sees the blocking step.
-    if (isCnoOrAdmin && nextRotaStage === "hr_approved") {
+    if (isCnoOrAdmin && nextRotaStage === "cno_approved") {
       const overdue = !!publishIsOverdue;
       return {
         kind: "publish" as const,

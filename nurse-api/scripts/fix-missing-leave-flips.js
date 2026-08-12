@@ -11,7 +11,7 @@
 //
 // This script finds every shift_assignments row that disagrees with an approved
 // (non-Swap) leave request covering that date, regardless of the row's status
-// (draft/submitted/hr_approved/published) — matching exactly what
+// (draft/submitted/cno_approved/published) — matching exactly what
 // /shift-assignments/reapply-leave already does for a single nurse/date range,
 // just applied system-wide in one pass.
 //
@@ -43,11 +43,15 @@ async function main() {
   const { rows: mismatches } = await pool.query(FIND_MISMATCHES_SQL);
 
   if (!mismatches.length) {
-    console.log("No mismatches found — every approved leave date is already reflected on the rota.");
+    console.log(
+      "No mismatches found — every approved leave date is already reflected on the rota.",
+    );
     return pool.end();
   }
 
-  console.log(`Found ${mismatches.length} rota cell(s) that disagree with an approved leave request:\n`);
+  console.log(
+    `Found ${mismatches.length} rota cell(s) that disagree with an approved leave request:\n`,
+  );
   for (const m of mismatches) {
     console.log(
       `  ${m.nurse_name ?? "Unknown"} (${m.facility ?? "no facility"}) — ${m.shift_date}: ` +

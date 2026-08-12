@@ -792,7 +792,7 @@ function RotaPage() {
     const filteredIds = new Set(filteredNurses.map((n) => n.id));
     const relevant = assignments.filter((a) => filteredIds.has(a.nurse_id));
     if (relevant.some((a) => a.status === "published")) return "published" as const;
-    if (relevant.some((a) => a.status === "hr_approved")) return "hr_approved" as const;
+    if (relevant.some((a) => a.status === "cno_approved")) return "cno_approved" as const;
     if (relevant.some((a) => a.status === "submitted")) return "submitted" as const;
     return "draft" as const;
   }, [assignments, filteredNurses]);
@@ -850,7 +850,7 @@ function RotaPage() {
       const statuses = wardStatuses.get(w.name) ?? [];
       if (statuses.length === 0) map.set(w.name, "none");
       else if (statuses.includes("published")) map.set(w.name, "published");
-      else if (statuses.includes("hr_approved")) map.set(w.name, "hr_approved");
+      else if (statuses.includes("cno_approved")) map.set(w.name, "cno_approved");
       else if (statuses.includes("submitted")) map.set(w.name, "submitted");
       else map.set(w.name, "draft");
     }
@@ -937,7 +937,7 @@ function RotaPage() {
     const dominant = (s: string[]): string => {
       if (!s.length) return "none";
       if (s.includes("published")) return "published";
-      if (s.includes("hr_approved")) return "hr_approved";
+      if (s.includes("cno_approved")) return "cno_approved";
       if (s.includes("submitted")) return "submitted";
       return "draft";
     };
@@ -1085,7 +1085,7 @@ function RotaPage() {
     const inApprovalRows = await api
       .get<
         { status: string }[]
-      >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,hr_approved&limit=1`)
+      >(`/shift-assignments?nurse_ids=${wardIds.join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,cno_approved&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -1664,7 +1664,7 @@ function RotaPage() {
     const inApprovalRows = await api
       .get<
         { status: string }[]
-      >(`/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,hr_approved&limit=1`)
+      >(`/shift-assignments?nurse_ids=${targetNurses.map((n) => n.id).join(",")}&from=${ymd(genStart)}&to=${ymd(genEnd)}&status_in=submitted,cno_approved&limit=1`)
       .catch(() => []);
     if (inApprovalRows?.length) {
       toast.error(
@@ -2339,7 +2339,7 @@ function RotaPage() {
                   "border-amber-200 bg-amber-50 text-amber-800 dark:bg-amber-950/30 dark:border-amber-700 dark:text-amber-300",
                 submitted:
                   "border-sky-200 bg-sky-50 text-sky-800 dark:bg-sky-950/30 dark:border-sky-700 dark:text-sky-300",
-                hr_approved:
+                cno_approved:
                   "border-violet-200 bg-violet-50 text-violet-800 dark:bg-violet-950/30 dark:border-violet-700 dark:text-violet-300",
                 published:
                   "border-emerald-200 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/30 dark:border-emerald-700 dark:text-emerald-300",
@@ -2348,14 +2348,14 @@ function RotaPage() {
                 none: "bg-muted-foreground/30",
                 draft: "bg-amber-400",
                 submitted: "bg-sky-400",
-                hr_approved: "bg-violet-400",
+                cno_approved: "bg-violet-400",
                 published: "bg-emerald-500",
               };
               const statusLabel: Record<string, string> = {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                hr_approved: "CNO ✓",
+                cno_approved: "CNO ✓",
                 published: "Published",
               };
               return (
@@ -2390,7 +2390,7 @@ function RotaPage() {
                       "inline-flex items-center gap-1.5 h-9 px-3 rounded-md border text-xs font-medium",
                       windowLockStatus === "published"
                         ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-300"
-                        : windowLockStatus === "hr_approved"
+                        : windowLockStatus === "cno_approved"
                           ? "border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-700 dark:bg-violet-950/30 dark:text-violet-300"
                           : "border-sky-300 bg-sky-50 text-sky-700 dark:border-sky-700 dark:bg-sky-950/30 dark:text-sky-300",
                     )}
@@ -2401,7 +2401,7 @@ function RotaPage() {
                       <Clock className="h-3.5 w-3.5" />
                     )}
                     {windowLockStatus === "published" && "Published — read only"}
-                    {windowLockStatus === "hr_approved" && "CNO Approved — awaiting publication"}
+                    {windowLockStatus === "cno_approved" && "CNO Approved — awaiting publication"}
                     {windowLockStatus === "submitted" && "Submitted — awaiting CNO approval"}
                   </span>
                   {/* New/reactivated staff in a published ward — generate their draft first */}
@@ -2515,26 +2515,26 @@ function RotaPage() {
             {facilityWideCardGroups.map(({ key, label, count }) => {
               const status = facilityWideStatusMap[key];
               const isSelected = selectedFacilityWide === key;
-              const isLocked = ["submitted", "hr_approved", "published"].includes(status);
+              const isLocked = ["submitted", "cno_approved", "published"].includes(status);
               const chipCls: Record<string, string> = {
                 none: "border-border",
                 draft: "border-amber-200 dark:border-amber-700",
                 submitted: "border-sky-200 dark:border-sky-700",
-                hr_approved: "border-violet-200 dark:border-violet-700",
+                cno_approved: "border-violet-200 dark:border-violet-700",
                 published: "border-emerald-200 dark:border-emerald-700",
               };
               const dotCls: Record<string, string> = {
                 none: "bg-muted-foreground/30",
                 draft: "bg-amber-400",
                 submitted: "bg-sky-400",
-                hr_approved: "bg-violet-400",
+                cno_approved: "bg-violet-400",
                 published: "bg-emerald-500",
               };
               const statusLabel: Record<string, string> = {
                 none: "No draft",
                 draft: "Draft",
                 submitted: "Submitted",
-                hr_approved: "CNO ✓",
+                cno_approved: "CNO ✓",
                 published: "Published",
               };
               return (
@@ -3015,7 +3015,7 @@ function RotaPage() {
                     "inline-flex items-center gap-1",
                     windowLockStatus === "published"
                       ? "text-emerald-600 dark:text-emerald-400"
-                      : windowLockStatus === "hr_approved"
+                      : windowLockStatus === "cno_approved"
                         ? "text-violet-600 dark:text-violet-400"
                         : "text-amber-600 dark:text-amber-400",
                   )}
@@ -3026,7 +3026,7 @@ function RotaPage() {
                     <Clock className="h-3 w-3" />
                   )}
                   {windowLockStatus === "published" && "Published schedule — read only"}
-                  {windowLockStatus === "hr_approved" &&
+                  {windowLockStatus === "cno_approved" &&
                     "Approved (CNO) — use Approvals to publish or revert"}
                   {windowLockStatus === "submitted" &&
                     "Submitted for approval — use Approvals to return to draft if edits are needed"}

@@ -189,7 +189,7 @@ router.post(
 //   T-17  : edit_close_date     — draft force-submitted; edit-access grants close
 //   T-14  : publish_deadline    — system auto-publishes if HR-approved
 //
-// nextRotaStage: 'none' | 'draft' | 'submitted' | 'hr_approved' | 'published'
+// nextRotaStage: 'none' | 'draft' | 'submitted' | 'cno_approved' | 'published'
 router.get(
   "/workflow-status",
   wrap(async (req, res) => {
@@ -229,7 +229,7 @@ router.get(
         WHERE sa.shift_date >= $1`,
       [nextPeriodStart],
     );
-    const STAGE_RANK = { published: 1, hr_approved: 2, submitted: 3, draft: 4 };
+    const STAGE_RANK = { published: 1, cno_approved: 2, submitted: 3, draft: 4 };
     const unitStage = new Map(); // "facility|ward-or-roleGroup" -> most-advanced status for that unit
     for (const row of unitRows) {
       const group = row.ward ? null : roleGroupOf(row.role);
@@ -241,12 +241,12 @@ router.get(
       if (!current || rank < STAGE_RANK[current]) unitStage.set(key, row.status);
     }
 
-    const stageCounts = { draft: 0, submitted: 0, hr_approved: 0, published: 0 };
+    const stageCounts = { draft: 0, submitted: 0, cno_approved: 0, published: 0 };
     for (const status of unitStage.values()) stageCounts[status]++;
     const totalUnits = unitStage.size;
 
-    let nextRotaStage = 'none';
-    for (const s of ['published', 'hr_approved', 'submitted', 'draft']) {
+    let nextRotaStage = "none";
+    for (const s of ["published", "cno_approved", "submitted", "draft"]) {
       if (stageCounts[s] > 0) {
         nextRotaStage = s;
         break;
@@ -317,7 +317,8 @@ router.post(
     const { period_start, period_end } = periodRows[0];
 
     // Aggregate completed shift hours per nurse for this period.
-    const { rows: hoursRows } = await pool.query(`
+    const { rows: hoursRows } = await pool.query(
+      `
       SELECT
         nurse_id,
         ROUND(SUM(hours_logged) * 100) / 100            AS total_hours,
@@ -330,7 +331,9 @@ router.post(
         AND hours_logged   IS NOT NULL
       GROUP BY nurse_id
       HAVING SUM(hours_logged) > 0
-    `, [period_start, period_end]);
+    `,
+      [period_start, period_end],
+    );
 
     if (!hoursRows.length) {
       return res.json({ closed: false, period_start: null, period_end: null });
@@ -341,7 +344,8 @@ router.post(
       await client.query("BEGIN");
 
       for (const row of hoursRows) {
-        await client.query(`
+        await client.query(
+          `
           INSERT INTO nurse_period_hours
             (nurse_id, period_start, period_end, total_hours, total_shifts)
           VALUES ($1, $2, $3, $4, $5)
@@ -349,13 +353,15 @@ router.post(
           SET period_end   = EXCLUDED.period_end,
               total_hours  = EXCLUDED.total_hours,
               total_shifts = EXCLUDED.total_shifts
-        `, [
-          row.nurse_id,
-          period_start,
-          period_end,
-          parseFloat(row.total_hours),
-          parseInt(row.total_shifts, 10),
-        ]);
+        `,
+          [
+            row.nurse_id,
+            period_start,
+            period_end,
+            parseFloat(row.total_hours),
+            parseInt(row.total_shifts, 10),
+          ],
+        );
       }
 
       const nurseIds = hoursRows.map((r) => r.nurse_id);

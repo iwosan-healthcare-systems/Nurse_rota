@@ -59,9 +59,11 @@ router.post(
     } = req.body;
 
     if (!facility || !period_start || !period_end || !status)
-      return res.status(400).json({ error: "facility, period_start, period_end, and status required" });
+      return res
+        .status(400)
+        .json({ error: "facility, period_start, period_end, and status required" });
 
-    const VALID_STATUSES = ["draft", "submitted", "hr_approved", "published"];
+    const VALID_STATUSES = ["draft", "submitted", "cno_approved", "published"];
     if (!VALID_STATUSES.includes(status))
       return res.status(400).json({ error: `status must be one of: ${VALID_STATUSES.join(", ")}` });
 
