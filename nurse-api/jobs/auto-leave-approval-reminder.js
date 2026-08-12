@@ -26,6 +26,34 @@ function leaveDeadlineInstant(fromDate, isGrace) {
   return new Date(`${base}T00:00:00+01:00`);
 }
 
+// Shift switch requests are leave_requests rows with type="Swap" — there's
+// no dedicated column for which shift (M/N) is being switched, it's baked
+// into `reason` by the frontend. Mirrors src/routes/_app/leave.tsx's
+// parseSwitch()/SWITCH_PREFIX exactly (parts[2] = shiftA, the shift actually
+// being switched — coverShift already substituted in if the nurse was on
+// LEAVE, see that file's effectiveShiftA).
+const SWITCH_PREFIX = "SHIFT_SWITCH|";
+function parseSwitchShift(reason) {
+  if (!reason?.startsWith(SWITCH_PREFIX)) return null;
+  return reason.slice(SWITCH_PREFIX.length).split("|")[2] || null;
+}
+
+// Mirrors SHIFT_TIMES.M/N.start in src/lib/auto-schedule.ts.
+const SHIFT_START_HOUR = { M: 8, N: 17 };
+
+// For a shift switch specifically, the deadline that actually matters is the
+// SHIFT's own start time, not midnight of shift_date (the generic leave
+// deadline below) — a Night shift starts at 17:00, so a "24 hours before"
+// reminder anchored on midnight would already be too late to be useful by
+// the time it's within a day of firing. Returns null (falls back to the
+// generic midnight deadline) if the shift code can't be parsed — e.g. an
+// unexpected reason format.
+function swapDeadlineInstant(fromDate, shiftCode) {
+  const startHour = SHIFT_START_HOUR[shiftCode];
+  if (startHour === undefined) return null;
+  return new Date(`${fromDate}T${String(startHour).padStart(2, "0")}:00:00+01:00`);
+}
+
 // Mirrors the approver-routing logic in routes/leave-requests.js's POST /
 // handler exactly: CNO for a shift switch or for leave belonging to a chief
 // matron; chief matron(s) at the nurse's own facility for everything else.
@@ -90,7 +118,12 @@ async function runSendLeaveApprovalReminders() {
     let sentCount = 0;
     for (const r of pending) {
       const isGrace = GRACE_TYPES.includes(r.type);
-      const deadline = leaveDeadlineInstant(r.from_date, isGrace);
+      // Swap: anchor on the actual shift start time (24h-before that) when
+      // parseable, since that's the deadline that actually matters for a
+      // shift switch — falls back to the generic midnight deadline otherwise.
+      const swapShiftCode = r.type === "Swap" ? parseSwitchShift(r.reason) : null;
+      const swapDeadline = swapShiftCode ? swapDeadlineInstant(r.from_date, swapShiftCode) : null;
+      const deadline = swapDeadline ?? leaveDeadlineInstant(r.from_date, isGrace);
       const msUntilDeadline = deadline.getTime() - Date.now();
       if (msUntilDeadline <= 0 || msUntilDeadline > 24 * 3600 * 1000) continue;
 
@@ -114,7 +147,9 @@ async function runSendLeaveApprovalReminders() {
           to: email,
           subject: `Reminder — ${typeLabel} request from ${r.nurse_name} still awaiting approval`,
           title: "Approval reminder",
-          bodyHtml: `<p>The ${typeLabel} request from <strong>${r.nurse_name}</strong> (${r.from_date} → ${r.to_date}) is still <strong>Pending</strong> and will be automatically declined if not reviewed soon.</p>`,
+          bodyHtml: swapDeadline
+            ? `<p>The shift switch request from <strong>${r.nurse_name}</strong> for ${r.from_date} is still <strong>Pending</strong>, and the shift starts in less than 24 hours. If it isn't approved before the shift starts, the request will be automatically declined and the shift will not be swapped.</p>`
+            : `<p>The ${typeLabel} request from <strong>${r.nurse_name}</strong> (${r.from_date} → ${r.to_date}) is still <strong>Pending</strong> and will be automatically declined if not reviewed soon.</p>`,
           ctaText: "Review Request",
           ctaUrl: portalUrl("/leave"),
         }).catch(() => {});

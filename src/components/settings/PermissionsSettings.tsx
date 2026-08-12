@@ -30,7 +30,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "edit_rota",
     label: "Edit Rota (manual cell changes)",
-    roles: ["admin", "chief_matron", "head_nurse"],
+    roles: ["admin", "head_nurse"],
   },
   {
     key: "auto_generate",
@@ -229,7 +229,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   {
     key: "manage_shift_assignments",
     label: "Bulk-Manage Shift Assignments",
-    roles: ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"],
+    roles: ["admin", "cno", "head_nurse", "hr_admin"],
   },
 ];
 

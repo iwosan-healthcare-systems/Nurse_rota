@@ -799,6 +799,26 @@ function RotaPage() {
 
   const isWindowLocked = windowLockStatus !== "draft";
 
+  // True when the currently-selected unit has a nurse with draft-only
+  // (not-yet-published) shifts — i.e. Generate was already clicked for a
+  // new/unscheduled nurse — regardless of what the REST of the unit's
+  // status is. Drives the edit-access panel's visibility once the unit has
+  // moved past draft overall: matches the backend's own narrow exception in
+  // routes/rota-edit-requests.js, so the option to request access only ever
+  // shows when a request would actually be allowed to succeed.
+  const unitHasNewStaffDraft = useMemo(() => {
+    const filteredIds = new Set(filteredNurses.map((n) => n.id));
+    const draftIds = new Set<string>();
+    const publishedIds = new Set<string>();
+    for (const a of assignments) {
+      if (!filteredIds.has(a.nurse_id)) continue;
+      if (a.status === "draft") draftIds.add(a.nurse_id);
+      else if (a.status === "published") publishedIds.add(a.nurse_id);
+    }
+    for (const id of draftIds) if (!publishedIds.has(id)) return true;
+    return false;
+  }, [assignments, filteredNurses]);
+
   // Per-ward dominant status — used by the ward chip strip.
   // Only ward-specific nurses contribute (global heads, matrons, porters have ward = null
   // and would otherwise pollute every ward's status reading).
@@ -1407,7 +1427,7 @@ function RotaPage() {
         .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
 
       for (let i = 0; i < toInsert.length; i += 500) {
-        await api.post("/shift-assignments/upsert", toInsert.slice(i, i + 500));
+        await api.post("/shift-assignments/new-staff-upsert", toInsert.slice(i, i + 500));
       }
 
       const names = unscheduledWardNurses.map((n) => n.name).join(", ");
@@ -1437,7 +1457,7 @@ function RotaPage() {
         (a) => a.status === "draft" && nurseIds.has(a.nurse_id),
       );
       await api.post(
-        "/shift-assignments/upsert",
+        "/shift-assignments/new-staff-upsert",
         draftAssignments.map((a) => ({ ...a, status: "published" as const })),
       );
       const names = newStaffWithDraft.map((n) => n.name).join(", ");
@@ -1548,7 +1568,7 @@ function RotaPage() {
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
         .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
       for (let i = 0; i < toInsert.length; i += 500) {
-        await api.post("/shift-assignments/upsert", toInsert.slice(i, i + 500));
+        await api.post("/shift-assignments/new-staff-upsert", toInsert.slice(i, i + 500));
       }
 
       const names = targetNurses.map((n) => n.name).join(", ");
@@ -1574,7 +1594,7 @@ function RotaPage() {
         (a) => a.status === "draft" && nurseIds.has(a.nurse_id),
       );
       await api.post(
-        "/shift-assignments/upsert",
+        "/shift-assignments/new-staff-upsert",
         draftAssignments.map((a) => ({ ...a, status: "published" as const })),
       );
       const names = targetNurses.map((n) => n.name).join(", ");
@@ -1896,12 +1916,14 @@ function RotaPage() {
     ward: string | null,
   ) {
     if (!canEdit) return;
-    // Head nurses (not admin) need an active, HR-granted edit-access request
+    // Head nurses (not admin) need an active, CNO-granted edit-access request
     // for this specific ward/period before they can touch a draft cell — see
     // the requestEditAccess panel above and the matching server-side check in
-    // nurse-api/routes/shift-assignments.js.
+    // nurse-api/routes/shift-assignments.js. Open the request panel directly
+    // instead of just telling them to go find it — one less thing to hunt for.
     if (activeRole === "head_nurse" && !isAdmin && !hasActiveEditGrant) {
-      toast.error("Request edit access for this ward before making changes.");
+      toast.error("You'll need edit access from the CNO for this ward/period first.");
+      setShowEditRequestModal(true);
       return;
     }
     const existing = cellMap.get(`${nurseId}|${dateStr}`);
@@ -2061,12 +2083,16 @@ function RotaPage() {
           </div>
         )}
 
-      {/* Edit-access panel — head nurses need an HR-granted request to edit a
-          draft ward/facility-wide unit; admin and other roles are unaffected. */}
+      {/* Edit-access panel — head nurses need a CNO-granted request to edit a
+          draft ward/facility-wide unit; admin and other roles are unaffected.
+          Also shown once the unit's moved past draft, but ONLY when a new/
+          unscheduled nurse already has a generated (draft) schedule in it —
+          matches the backend's narrow post-draft exception exactly, so this
+          never invites a request that would just get rejected. */}
       {activeRole === "head_nurse" &&
         canRequestRotaEditAccess &&
         editUnit &&
-        windowLockStatus === "draft" && (
+        (windowLockStatus === "draft" || unitHasNewStaffDraft) && (
           <div
             className={cn(
               "flex items-start gap-3 rounded-lg border px-4 py-3 mb-2 text-sm",
@@ -2087,7 +2113,11 @@ function RotaPage() {
                 <p className="font-medium">Edit access requested — waiting on CNO.</p>
               ) : (
                 <>
-                  <p className="font-medium">This draft is locked for editing.</p>
+                  <p className="font-medium">
+                    {windowLockStatus === "draft"
+                      ? "This draft is locked for editing."
+                      : "A new staff member's generated schedule here is locked for editing."}
+                  </p>
                   <p className="mt-0.5 opacity-80">
                     Request edit access from CNO before making changes
                     {myEditRequest?.status === "Declined" ? " — your last request was declined." : "."}

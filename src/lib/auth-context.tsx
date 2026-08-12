@@ -375,7 +375,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canDelete: cap("delete_staff", ["admin"]),
     canManageStaff: cap("manage_staff", ["admin", "hr_admin"]),
     canManageWards: cap("manage_wards", ["admin", "cno"]),
-    canEditRota: cap("edit_rota", ["admin", "chief_matron", "head_nurse"]),
+    canEditRota: cap("edit_rota", ["admin", "head_nurse"]),
     // Rota generation is now automatic (T-19) — a manual trigger is only ever
     // an admin emergency override, not a normal head_nurse action.
     canAutoGenerate: cap("auto_generate", ["admin"]),

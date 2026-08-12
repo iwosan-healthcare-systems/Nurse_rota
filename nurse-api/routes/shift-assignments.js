@@ -16,7 +16,12 @@ function roleGroupOf(role) {
   return null;
 }
 
-const ROLE_GROUP_LABELS = { matron: "Matron", head: "Coverage Nurse", porter: "Porter", intern: "Nurse Intern" };
+const ROLE_GROUP_LABELS = {
+  matron: "Matron",
+  head: "Coverage Nurse",
+  porter: "Porter",
+  intern: "Nurse Intern",
+};
 
 function fmtPeriodDate(d) {
   return d
@@ -31,8 +36,10 @@ function fmtPeriodDate(d) {
 // A head_nurse (not admin) may only create/update draft cells within a
 // ward/facility-wide-group + period they currently hold an active edit-access
 // grant for (see routes/rota-edit-requests.js). Admin bypasses (usual
-// override); chief_matron is intentionally left ungated here — only
-// head_nurse editing was asked to be gated behind requests. `cells` is an
+// override); chief_matron isn't checked by name here, but no longer needs to
+// be — they no longer hold the edit_rota/manage_shift_assignments
+// capabilities this function's callers are gated behind in the first place,
+// so they can't reach here at all. `cells` is an
 // array of { nurse_id, ward, shift_date } — every cell must be covered by an
 // active grant, or the whole request is rejected (no partial writes).
 async function headNurseHasEditGrantForAll(req, cells) {
@@ -164,6 +171,75 @@ router.post(
   }),
 );
 
+// Shared by both /upsert (normal draft editing, grant-checked) and
+// /new-staff-upsert (grant-free — see that route for why) — same upsert +
+// leave-reapply logic either way, they only differ in what's checked before
+// this runs.
+async function upsertAssignments(rows) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const row of rows) {
+      await client.query(
+        `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift, leave_type)
+       VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7, $8)
+       ON CONFLICT (nurse_id, shift_date)
+       DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
+         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
+        [
+          row.nurse_id,
+          row.shift,
+          row.shift_date,
+          row.ward || null,
+          row.status || "draft",
+          row.created_by || null,
+          row.pre_leave_shift || null,
+          row.leave_type || null,
+        ],
+      );
+    }
+
+    // Re-apply approved leave over the freshly upserted shifts.
+    // Approved leave may have been granted before this rota period existed, so
+    // the approval's shift-flip found no rows to update at approval time.
+    const nurseIds = [...new Set(rows.map((r) => r.nurse_id).filter(Boolean))];
+    const dates = rows
+      .map((r) => r.shift_date)
+      .filter(Boolean)
+      .sort();
+    const minDate = dates[0];
+    const maxDate = dates[dates.length - 1];
+    await client.query(
+      `UPDATE shift_assignments sa
+          SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
+              leave_type = (
+                SELECT lr.type FROM leave_requests lr
+                WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
+                  AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+                LIMIT 1
+              )
+        WHERE sa.nurse_id = ANY($1)
+          AND sa.shift_date BETWEEN $2 AND $3
+          AND sa.shift != 'LEAVE'
+          AND EXISTS (
+            SELECT 1 FROM leave_requests lr
+            WHERE lr.nurse_id = sa.nurse_id
+              AND lr.status = 'Approved'
+              AND lr.type != 'Swap'
+              AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+          )`,
+      [nurseIds, minDate, maxDate],
+    );
+
+    await client.query("COMMIT");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 // Batch upsert (onConflict: nurse_id, shift_date)
 router.post(
   "/upsert",
@@ -182,72 +258,49 @@ router.post(
       return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
     }
 
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-      for (const row of rows) {
-        await client.query(
-          `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift, leave_type)
-         VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7, $8)
-         ON CONFLICT (nurse_id, shift_date)
-         DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
-           pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
-          [
-            row.nurse_id,
-            row.shift,
-            row.shift_date,
-            row.ward || null,
-            row.status || "draft",
-            row.created_by || null,
-            row.pre_leave_shift || null,
-            row.leave_type || null,
-          ],
-        );
-      }
+    await upsertAssignments(rows);
+    res.json({ success: true, count: rows.length });
+  }),
+);
 
-      // Re-apply approved leave over the freshly upserted shifts.
-      // Approved leave may have been granted before this rota period existed, so
-      // the approval's shift-flip found no rows to update at approval time.
-      const nurseIds = [...new Set(rows.map((r) => r.nurse_id).filter(Boolean))];
-      const dates = rows.map((r) => r.shift_date).filter(Boolean).sort();
-      const minDate = dates[0];
-      const maxDate = dates[dates.length - 1];
-      await client.query(
-        `UPDATE shift_assignments sa
-            SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
-                leave_type = (
-                  SELECT lr.type FROM leave_requests lr
-                  WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
-                    AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
-                  LIMIT 1
-                )
-          WHERE sa.nurse_id = ANY($1)
-            AND sa.shift_date BETWEEN $2 AND $3
-            AND sa.shift != 'LEAVE'
-            AND EXISTS (
-              SELECT 1 FROM leave_requests lr
-              WHERE lr.nurse_id = sa.nurse_id
-                AND lr.status = 'Approved'
-                AND lr.type != 'Swap'
-                AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
-            )`,
-        [nurseIds, minDate, maxDate],
-      );
+// Grant-free counterpart to /upsert, scoped strictly to staff who don't have
+// a real schedule yet — the "new/reactivated staff mid-cycle" flow on the
+// Rota page (Generate + Submit for one nurse). Accepting the auto-generated
+// draft for someone who currently has nothing isn't "editing" in the sense
+// the CNO edit-access-request system exists to gate (that's for hand-tuning
+// an existing draft) — so it only needs the base edit_shift_assignments
+// capability, same as /reapply-leave. The safety boundary that keeps this
+// from becoming a backdoor around the grant check on everyone else's cells:
+// every target (nurse_id, shift_date) must not already have a published row.
+router.post(
+  "/new-staff-upsert",
+  requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
+  wrap(async (req, res) => {
+    const rows = req.body;
+    if (!Array.isArray(rows) || !rows.length)
+      return res.status(400).json({ error: "Array of assignments required" });
 
-      await client.query("COMMIT");
-      res.json({ success: true, count: rows.length });
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
+    const nurseIds = [...new Set(rows.map((r) => r.nurse_id).filter(Boolean))];
+    const dates = rows.map((r) => r.shift_date).filter(Boolean);
+    const { rows: publishedRows } = await pool.query(
+      `SELECT nurse_id, shift_date::text FROM shift_assignments
+        WHERE nurse_id = ANY($1) AND shift_date = ANY($2::date[]) AND status = 'published'`,
+      [nurseIds, dates],
+    );
+    if (publishedRows.length) {
+      return res.status(409).json({
+        error: "One or more of these cells already has a published shift — can't touch it here.",
+      });
     }
+
+    await upsertAssignments(rows);
+    res.json({ success: true, count: rows.length });
   }),
 );
 
 router.patch(
   "/:id",
-  requireCapability("manage_shift_assignments", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+  requireCapability("manage_shift_assignments", ["admin", "cno", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
     const allowed = ["shift", "ward", "status", "shift_date"];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
@@ -315,7 +368,10 @@ router.patch(
       } else if (status === "hr_approved" && filterStatus === "submitted") {
         capKey = "approve_rota";
         capFallback = ["admin", "cno"];
-      } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
+      } else if (
+        status === "draft" &&
+        (filterStatus === "submitted" || filterStatus === "hr_approved")
+      ) {
         // Reject-to-draft — same capability as approving forward at that stage.
         capKey = "approve_rota";
         capFallback = ["admin", "cno"];
@@ -402,7 +458,13 @@ router.patch(
     }
 
     // ── Pre-submission: block if pending leaves exist for this period ────────
-    if (status === "submitted" && filterStatus === "draft" && nurse_ids && shift_date_from && shift_date_to) {
+    if (
+      status === "submitted" &&
+      filterStatus === "draft" &&
+      nurse_ids &&
+      shift_date_from &&
+      shift_date_to
+    ) {
       const nurseIdArr = nurse_ids.split(",");
       const { rows: pendingLeaves } = await pool.query(
         `SELECT lr.nurse_name, lr.type, lr.from_date::text, lr.to_date::text
@@ -478,7 +540,13 @@ router.patch(
     // notification) and nothing stopped the rota from being submitted with the
     // stale shift still showing, which is how approved leave silently failed to
     // reach the rota in the first place.
-    if (status === "submitted" && filterStatus === "draft" && nurse_ids && shift_date_from && shift_date_to) {
+    if (
+      status === "submitted" &&
+      filterStatus === "draft" &&
+      nurse_ids &&
+      shift_date_from &&
+      shift_date_to
+    ) {
       const nurseIdArr = nurse_ids.split(",");
       const { rows: unflippedLeaves } = await pool.query(
         `SELECT DISTINCT lr.id, lr.nurse_name, lr.type, lr.from_date::text, lr.to_date::text
@@ -525,12 +593,50 @@ router.patch(
     const where = "WHERE " + conditions.join(" AND ");
     await pool.query(`UPDATE shift_assignments SET ${sets.join(", ")} ${where}`, params);
 
+    // Publishing spends any edit-access grant that was open for this unit —
+    // a grant that was live pre-publish (e.g. for finishing the original
+    // draft) shouldn't silently keep working for something that comes up
+    // after the rota is already live (e.g. hand-tuning a new staff member's
+    // auto-generated shifts). A fresh request is always required post-publish.
+    if (
+      status === "published" &&
+      filterStatus === "hr_approved" &&
+      nurse_ids &&
+      shift_date_from &&
+      shift_date_to
+    ) {
+      const nurseIdArr = nurse_ids.split(",");
+      const { rows: nurseRows } = await pool.query(
+        `SELECT DISTINCT facility, role FROM nurses WHERE id = ANY($1) AND facility IS NOT NULL`,
+        [nurseIdArr],
+      );
+      const facilities = [...new Set(nurseRows.map((n) => n.facility))];
+      const roleGroup = ward ? null : roleGroupOf(nurseRows[0]?.role);
+      for (const facility of facilities) {
+        pool
+          .query(
+            `UPDATE rota_edit_requests
+                SET revoked_at = NOW()
+              WHERE facility = $1
+                AND status = 'Approved' AND revoked_at IS NULL
+                AND (($2::text IS NOT NULL AND ward = $2) OR ($2::text IS NULL AND ward IS NULL AND role_group = $3))
+                AND period_start <= $5 AND period_end >= $4`,
+            [facility, ward || null, roleGroup, shift_date_from, shift_date_to],
+          )
+          .catch(() => {});
+      }
+    }
+
     // HR reject-to-draft: notify the head_nurse/admin for this unit. Was a
     // gap before — this transition wrote nothing, so a returned submission
     // gave no bell notification at all (the exception-carve-out in
     // rota-edit-requests.js for re-requesting edit access is the only place
     // that assumed this event existed).
-    if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved") && nurse_ids) {
+    if (
+      status === "draft" &&
+      (filterStatus === "submitted" || filterStatus === "hr_approved") &&
+      nurse_ids
+    ) {
       const nurseIdArr = nurse_ids.split(",");
       const { rows: nurseRows } = await pool.query(
         `SELECT DISTINCT facility, role FROM nurses WHERE id = ANY($1) AND facility IS NOT NULL`,
@@ -585,7 +691,10 @@ router.patch(
         recipientRoles = ["head_nurse", "cno", "admin"];
         subject = "Rota published";
         ctaPath = "/rota";
-      } else if (status === "draft" && (filterStatus === "submitted" || filterStatus === "hr_approved")) {
+      } else if (
+        status === "draft" &&
+        (filterStatus === "submitted" || filterStatus === "hr_approved")
+      ) {
         recipientRoles = ["head_nurse"];
         subject = "Rota returned to draft — changes needed";
         ctaPath = "/rota";
@@ -705,7 +814,7 @@ router.delete(
 
 router.delete(
   "/:id",
-  requireCapability("manage_shift_assignments", ["admin", "cno", "chief_matron", "head_nurse", "hr_admin"]),
+  requireCapability("manage_shift_assignments", ["admin", "cno", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
     await pool.query("DELETE FROM shift_assignments WHERE id = $1", [req.params.id]);
     res.json({ success: true });

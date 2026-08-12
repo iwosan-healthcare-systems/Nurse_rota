@@ -105,6 +105,21 @@ async function runAutoPublish({ simulateToday } = {}) {
       params,
     );
 
+    // Same reasoning as the manual-publish path in routes/shift-assignments.js:
+    // publishing spends any open edit-access grant for this unit — a fresh
+    // request is always required for anything that comes up post-publish.
+    await pool
+      .query(
+        `UPDATE rota_edit_requests
+            SET revoked_at = NOW()
+          WHERE facility = $1
+            AND status = 'Approved' AND revoked_at IS NULL
+            AND (($2::text IS NOT NULL AND ward = $2) OR ($2::text IS NULL AND ward IS NULL AND role_group = $3))
+            AND period_start <= $5 AND period_end >= $4`,
+        [row.facility, row.ward || null, roleGroup, period.periodStart, period.periodEnd],
+      )
+      .catch(() => {});
+
     await pool
       .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
         "Rota auto-published (T-14 deadline)",

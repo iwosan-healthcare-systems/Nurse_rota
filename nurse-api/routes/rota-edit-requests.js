@@ -2,7 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getWindowForPeriod } = require("../lib/rota-period-dates");
-const { wasRevertedToDraft } = require("../lib/force-submit-rota");
+const { wasRevertedToDraft, resolveUnitNurseIds } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -43,7 +43,12 @@ async function profileEmail(userId) {
 
 // Mirrors FW_LABELS on the frontend (approvals.tsx/rota.tsx) — kept as its
 // own small copy here, matching this codebase's existing convention.
-const ROLE_GROUP_LABELS = { matron: "Matron", head: "Coverage Nurse", porter: "Porter", intern: "Nurse Intern" };
+const ROLE_GROUP_LABELS = {
+  matron: "Matron",
+  head: "Coverage Nurse",
+  porter: "Porter",
+  intern: "Nurse Intern",
+};
 function unitLabel(row) {
   return row.ward ?? ROLE_GROUP_LABELS[row.role_group] ?? row.role_group ?? "the rota";
 }
@@ -101,9 +106,9 @@ router.post(
   wrap(async (req, res) => {
     const { facility, ward, role_group, period_start, period_end, reason } = req.body;
     if (!facility || (!ward && !role_group) || !period_start || !period_end || !reason?.trim()) {
-      return res
-        .status(400)
-        .json({ error: "facility, ward or role_group, period_start, period_end and reason are required" });
+      return res.status(400).json({
+        error: "facility, ward or role_group, period_start, period_end and reason are required",
+      });
     }
 
     // The edit-access window is only open from T-19 (auto-generate) to T-17
@@ -115,32 +120,92 @@ router.post(
     // period_start, which the global inference would otherwise silently
     // replace with the wrong, more-advanced period.
     //
-    // Exception: if HR reviewed this unit after T-17 and sent it back to
-    // draft (reject), the normal window is already closed and can never
-    // reopen on its own — the head_nurse would have no way to fix what HR
-    // flagged. In that specific case only, allow a fresh request even though
-    // we're past editCloseDate. wasRevertedToDraft() confirms the unit's
-    // most recent transition really is that revert (not just any old draft).
-    const dates = await getWindowForPeriod(period_start);
-    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
-    if (today < dates.generateDate) {
+    // Exception 1: once a unit has moved past draft (submitted, hr_approved,
+    // or published), the normal T-19..T-17 window is long closed and can
+    // never reopen on its own for general editing — but a new staff member
+    // can still be added mid-cycle at any of those stages, and the head
+    // nurse can already Generate a draft schedule for them with no request
+    // needed (see /shift-assignments/new-staff-upsert). If they then want to
+    // hand-tune those specific auto-generated shifts before submitting, THAT
+    // needs a fresh request — narrowly scoped to "does this unit/period
+    // currently have a nurse with draft rows but no published row yet" (i.e.
+    // Generate was already clicked for them). Without that check, "not
+    // draft" alone would reopen edit access to any submitted/published rota
+    // for any reason, which is a much bigger door than intended.
+    const nurseIdsForUnit = await resolveUnitNurseIds({
+      facility,
+      ward: ward || null,
+      roleGroup: ward ? null : role_group,
+    });
+    const wardClause = ward ? "AND ward = $4" : "AND ward IS NULL";
+    const statusParams = ward
+      ? [nurseIdsForUnit, period_start, period_end, ward]
+      : [nurseIdsForUnit, period_start, period_end];
+    const { rows: statusRows } = await pool.query(
+      `SELECT DISTINCT status FROM shift_assignments
+        WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3 ${wardClause}`,
+      statusParams,
+    );
+    const statuses = new Set(statusRows.map((r) => r.status));
+    const isPastDraft =
+      statuses.has("submitted") || statuses.has("hr_approved") || statuses.has("published");
+
+    let hasNewStaffWithDraft = false;
+    if (isPastDraft) {
+      const { rows: newStaffRows } = await pool.query(
+        `SELECT 1 FROM (
+           SELECT nurse_id,
+                  bool_or(status = 'draft') AS has_draft,
+                  bool_or(status = 'published') AS has_published
+             FROM shift_assignments
+            WHERE nurse_id = ANY($1) AND shift_date BETWEEN $2 AND $3 ${wardClause}
+            GROUP BY nurse_id
+         ) t
+         WHERE has_draft AND NOT has_published
+         LIMIT 1`,
+        statusParams,
+      );
+      hasNewStaffWithDraft = newStaffRows.length > 0;
+    }
+
+    if (isPastDraft && !hasNewStaffWithDraft) {
       return res.status(422).json({
-        error: "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
+        error:
+          "This rota has already moved past draft. Edit access can only be requested here for a new or unscheduled staff member whose shifts have already been generated (via Generate on the Rota page) but not yet published — not for general changes to a submitted or published rota.",
         code: "OUTSIDE_EDIT_WINDOW",
       });
     }
-    if (dates.editIsClosed) {
-      const reopened = await wasRevertedToDraft({
-        facility,
-        ward: ward || null,
-        roleGroup: ward ? null : role_group,
-        periodStart: period_start,
-      });
-      if (!reopened) {
+
+    if (!isPastDraft) {
+      // Exception 2: if HR reviewed this unit after T-17 and sent it back to
+      // draft (reject), the normal window is already closed and can never
+      // reopen on its own — the head_nurse would have no way to fix what HR
+      // flagged. In that specific case only, allow a fresh request even though
+      // we're past editCloseDate. wasRevertedToDraft() confirms the unit's
+      // most recent transition really is that revert (not just any old draft).
+      const dates = await getWindowForPeriod(period_start);
+      const today = new Date().toLocaleDateString("en-CA", { timeZone: "Africa/Lagos" });
+      if (today < dates.generateDate) {
         return res.status(422).json({
-          error: "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
+          error:
+            "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
           code: "OUTSIDE_EDIT_WINDOW",
         });
+      }
+      if (dates.editIsClosed) {
+        const reopened = await wasRevertedToDraft({
+          facility,
+          ward: ward || null,
+          roleGroup: ward ? null : role_group,
+          periodStart: period_start,
+        });
+        if (!reopened) {
+          return res.status(422).json({
+            error:
+              "Edit-access requests can only be raised between the rota's generate date and its edit-close deadline.",
+            code: "OUTSIDE_EDIT_WINDOW",
+          });
+        }
       }
     }
 

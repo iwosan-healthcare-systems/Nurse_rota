@@ -1,7 +1,80 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
+const { resolveUnitNurseIds, roleGroupOf } = require("../lib/force-submit-rota");
+const { getUnitPeriod } = require("../lib/rota-period-dates");
+const { sendMail, portalUrl } = require("../lib/mailer");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+
+const ROLE_GROUP_LABELS = {
+  matron: "Matron",
+  head: "Coverage Nurse",
+  porter: "Porter",
+  intern: "Nurse Intern",
+};
+
+// Notifies head_nurse/chief_matron/admin when a newly-created nurse lands in
+// a ward or facility-wide role group that already has a rota cycle in
+// progress (draft/submitted/hr_approved/published) — otherwise they'd have
+// no shifts until someone happens to notice on the Rota page. Skipped for a
+// facility with no rota history at all yet (getUnitPeriod returns null) —
+// ordinary full-facility generation covers that case already.
+async function notifyNewStaff(nurse) {
+  if (!nurse.facility) return;
+  const group = roleGroupOf(nurse.role);
+  const ward = nurse.ward && !group ? nurse.ward : null;
+
+  const nurseIds = await resolveUnitNurseIds({ facility: nurse.facility, ward, roleGroup: group });
+  if (!nurseIds.length) return;
+
+  const period = await getUnitPeriod(nurseIds, ward);
+  if (!period) return;
+
+  const unitLabel = ward ?? (group ? ROLE_GROUP_LABELS[group] : null) ?? "Facility-wide staff";
+  const unitSlug = ward ? ward.toLowerCase().replace(/\s+/g, "_") : (group ?? "facility_wide");
+  const facilitySlug = nurse.facility.toLowerCase().replace(/\s+/g, "_");
+  // "|" separator, same reason as notifyUnit() in auto-generate-rota.js — a
+  // plain "_" join can't be split back apart reliably since facility and
+  // ward names can themselves contain "_".
+  const notifKey = `rota_new_staff_${facilitySlug}|${unitSlug}|${period.periodStart}`;
+
+  const { rows: recipients } = await pool.query(
+    `SELECT DISTINCT p.id, p.email, ur.role
+       FROM profiles p
+       JOIN user_roles ur ON ur.user_id = p.id
+      WHERE ur.role IN ('head_nurse', 'chief_matron', 'admin')
+        AND p.is_active = true`,
+  );
+  if (!recipients.length) return;
+
+  const headNurseAction = period.hasActive
+    ? "Generate a draft schedule for them from the Rota page — it'll go through the normal review process with the rest of the ward."
+    : "Click Generate for them on the Rota page, then Submit — this publishes directly since the rest of the ward is already live.";
+
+  for (const { id, email, role: recipientRole } of recipients) {
+    pool
+      .query(
+        `INSERT INTO notification_state (user_id, notif_key, is_read)
+         VALUES ($1, $2, false)
+         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+        [id, notifKey],
+      )
+      .catch(() => {});
+
+    if (!email) continue;
+    const isHeadNurse = recipientRole === "head_nurse";
+    sendMail({
+      to: email,
+      subject: `New staff added — ${unitLabel} · ${nurse.facility}`,
+      title: "New staff added to the rota",
+      bodyHtml: isHeadNurse
+        ? `<p><strong>${nurse.name}</strong> was added to <strong>${unitLabel} · ${nurse.facility}</strong> mid-cycle (period starting ${period.periodStart}). They have no shifts scheduled yet.</p><p>${headNurseAction}</p>`
+        : `<p><strong>${nurse.name}</strong> was added to <strong>${unitLabel} · ${nurse.facility}</strong> mid-cycle (period starting ${period.periodStart}). They have no shifts scheduled yet — the head nurse has been notified to generate and submit their schedule.</p>`,
+      ctaText: "Open Rota",
+      ctaUrl: portalUrl("/rota"),
+    }).catch(() => {});
+  }
+}
 
 router.get(
   "/",
@@ -58,6 +131,7 @@ router.post(
       [name, email || null, role || "nurse", facility || null, ward || null, employee_id || null],
     );
     res.status(201).json(rows[0]);
+    notifyNewStaff(rows[0]).catch(() => {});
   }),
 );
 
@@ -184,7 +258,7 @@ router.patch(
              updated_at = NOW()
          WHERE id = $3`,
         [
-          fields.includes("name")  ? nurse.name  : null,
+          fields.includes("name") ? nurse.name : null,
           fields.includes("email") ? nurse.email : null,
           nurse.profile_id,
         ],
@@ -239,14 +313,15 @@ router.post(
         // Ward is stored as plain string or pipe-separated; use first segment.
         const currentWard = intern.ward ? intern.ward.split("|")[0] : null;
         const idx = wardNames.indexOf(currentWard);
-        const nextWard = currentWard === null
-          ? wardNames[0]
-          : wardNames[(idx === -1 ? 0 : idx + 1) % wardNames.length];
+        const nextWard =
+          currentWard === null
+            ? wardNames[0]
+            : wardNames[(idx === -1 ? 0 : idx + 1) % wardNames.length];
         if (nextWard !== intern.ward) {
-          await client.query(
-            "UPDATE nurses SET ward = $1, updated_at = NOW() WHERE id = $2",
-            [nextWard, intern.id],
-          );
+          await client.query("UPDATE nurses SET ward = $1, updated_at = NOW() WHERE id = $2", [
+            nextWard,
+            intern.id,
+          ]);
           updated++;
         }
       }
