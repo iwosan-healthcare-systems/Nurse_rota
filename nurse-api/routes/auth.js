@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/auth");
 const { requireCapability } = require("../middleware/capability");
-const { sendMail } = require("../lib/mailer");
+const { sendMail, portalUrl } = require("../lib/mailer");
 
 const DEFAULT_INITIAL_PASSWORD = "RotaLogin@123";
 const OTP_TTL_MINUTES = 5;
@@ -343,6 +343,8 @@ router.post(
 <p>Use this code to reset your password. It expires in ${OTP_TTL_MINUTES} minutes.</p>
 <p style="font-size:28px;font-weight:700;letter-spacing:6px;color:#1b2559;margin:20px 0;">${otp}</p>
 <p>If you didn't request this, you can safely ignore this email — your password won't change unless this code is used.</p>`,
+      ctaText: "Enter Reset Code",
+      ctaUrl: portalUrl("/forgot-password"),
     }).catch(() => {});
 
     res.json(genericResponse);
