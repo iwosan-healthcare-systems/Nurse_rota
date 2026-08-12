@@ -441,6 +441,8 @@ const UNIT_PERIOD_MESSAGES: Record<string, (u: NonNullable<UnitPeriod>) => strin
     `${u.unitDisplay} · ${u.facilityDisplay} was published automatically (T-14 deadline).`,
   rota_publish_deadline_missed_: (u) =>
     `Publish deadline missed for ${u.unitDisplay} · ${u.facilityDisplay} — CNO approval is still outstanding.`,
+  rota_leave_applied_: (u) =>
+    `A leave request was approved and the not-yet-published rota for ${u.unitDisplay} · ${u.facilityDisplay} was updated automatically — review it before submitting/publishing.`,
 };
 
 function unitPeriodMessage(key: string): string | null {
@@ -758,6 +760,7 @@ function RotaReminderBell({
     "rota_hr_rejected_",
     "rota_autopublished_",
     "rota_publish_deadline_missed_",
+    "rota_leave_applied_",
   ];
   const rotaLifecycleKeys =
     allNotifs

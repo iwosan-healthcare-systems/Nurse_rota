@@ -103,7 +103,9 @@ router.get(
     }
     // Filter to only leave requests belonging to nurses at a specific facility.
     if (req.query.facility) {
-      conditions.push(`lr.nurse_id IN (SELECT id FROM nurses WHERE facility = $${params.length + 1})`);
+      conditions.push(
+        `lr.nurse_id IN (SELECT id FROM nurses WHERE facility = $${params.length + 1})`,
+      );
       params.push(req.query.facility);
     }
 
@@ -276,10 +278,9 @@ router.post(
         if (!own || !userRoles.includes("chief_matron")) {
           return res.status(403).json({ error: "Forbidden" });
         }
-        const { rows: targetRows } = await pool.query(
-          "SELECT facility FROM nurses WHERE id = $1",
-          [nurse_id],
-        );
+        const { rows: targetRows } = await pool.query("SELECT facility FROM nurses WHERE id = $1", [
+          nurse_id,
+        ]);
         if (!targetRows[0] || targetRows[0].facility !== own.facility) {
           return res.status(403).json({ error: "Forbidden" });
         }
@@ -314,7 +315,9 @@ router.post(
     // Swap-type shift switches are exempt — a nurse may legitimately have multiple switch rows.
     if (type !== "Swap" && nurse_name) {
       const overlapParams = [nurse_name, from_date, to_date];
-      const idClause = nurse_id ? ` AND (nurse_id = $4 OR nurse_name = $1)` : ` AND nurse_name = $1`;
+      const idClause = nurse_id
+        ? ` AND (nurse_id = $4 OR nurse_name = $1)`
+        : ` AND nurse_name = $1`;
       if (nurse_id) overlapParams.push(nurse_id);
       const { rows: existing } = await pool.query(
         `SELECT id FROM leave_requests
@@ -326,7 +329,8 @@ router.post(
       );
       if (existing.length > 0) {
         return res.status(409).json({
-          error: "A leave request already exists for those dates. Cancel or update the existing request first.",
+          error:
+            "A leave request already exists for those dates. Cancel or update the existing request first.",
         });
       }
     }
@@ -604,10 +608,7 @@ router.patch(
 
       // After committing: if leave was approved or rejected, notify rota generators
       // (head_nurse / admin) when there are draft assignments in the same facility & period.
-      if (
-        (leave.status === "Approved" || leave.status === "Rejected") &&
-        leave.nurse_id
-      ) {
+      if ((leave.status === "Approved" || leave.status === "Rejected") && leave.nurse_id) {
         pool
           .query("SELECT facility, role FROM nurses WHERE id = $1", [leave.nurse_id])
           .then(async ({ rows: nurseRows }) => {
@@ -616,57 +617,11 @@ router.patch(
             if (!facility) return;
             const facilitySlug = facility.toLowerCase().replace(/\s+/g, "_");
 
-            // Approved leave is now flipped to LEAVE automatically above — no
-            // "regenerate" prompt needed. A Rejected leave leaves the draft's
-            // existing shift exactly as it was (nothing was ever flipped for a
-            // Pending request), but the head_nurse may still want to know a
-            // decision landed, e.g. to re-arrange cover they'd informally
-            // planned around — so that ping stays for Rejected only.
-            if (leave.status === "Rejected") {
-              // Find draft assignments for THIS specific nurse, grouped by ward.
-              // A nurse may appear in multiple wards (rare) or in facility-wide (ward = null).
-              const { rows: draftRows } = await pool.query(
-                `SELECT sa.ward, MIN(sa.shift_date)::text AS period_start
-                   FROM shift_assignments sa
-                  WHERE sa.nurse_id = $1
-                    AND sa.status = 'draft'
-                    AND EXISTS (
-                      SELECT 1 FROM shift_assignments sa2
-                       WHERE sa2.nurse_id = sa.nurse_id
-                         AND sa2.status = 'draft'
-                         AND sa2.ward IS NOT DISTINCT FROM sa.ward
-                         AND sa2.shift_date BETWEEN $2 AND $3
-                    )
-                  GROUP BY sa.ward`,
-                [leave.nurse_id, leave.from_date, leave.to_date],
-              );
-              if (draftRows.length) {
-                // Notify all head_nurse and admin profiles
-                const { rows: generators } = await pool.query(
-                  `SELECT DISTINCT p.id
-                     FROM profiles p
-                     JOIN user_roles ur ON ur.user_id = p.id
-                    WHERE ur.role IN ('head_nurse', 'admin')
-                      AND p.is_active = true`,
-                );
-                for (const draftRow of draftRows) {
-                  const wardSlug = draftRow.ward
-                    ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
-                    : facilityWideGroupSlug(nurseRole);
-                  const notifKey = `rota_regenerate_needed_${facilitySlug}_${draftRow.period_start}_${wardSlug}`;
-                  for (const { id } of generators) {
-                    pool
-                      .query(
-                        `INSERT INTO notification_state (user_id, notif_key, is_read)
-                         VALUES ($1, $2, false)
-                         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
-                        [id, notifKey],
-                      )
-                      .catch(() => {});
-                  }
-                }
-              }
-            }
+            // A Rejected leave leaves the draft's existing shift exactly as it
+            // was (nothing was ever flipped for a Pending request) — there's
+            // nothing to regenerate, so no notification fires here for that
+            // case. (This used to prompt a manual "Regenerate" click on the
+            // Rota page; removed as unnecessary — see conversation history.)
 
             // Approved leave already flipped the shift to LEAVE above — but if
             // that touched a not-yet-published rota (draft or submitted), the
@@ -795,7 +750,8 @@ router.patch(
             "SELECT email FROM profiles WHERE id = ANY($1)",
             [[...recipientIds]],
           );
-          const typeLabel = leave.type === "Swap" ? "shift switch" : `${leave.type.toLowerCase()} leave`;
+          const typeLabel =
+            leave.type === "Swap" ? "shift switch" : `${leave.type.toLowerCase()} leave`;
           const approved = leave.status === "Approved";
           for (const { email } of recipients) {
             sendMail({
@@ -849,7 +805,14 @@ router.post(
       return res.status(400).json({ error: "A reason is required to revert an approved leave" });
 
     const client = await pool.connect();
-    let leave, restoredCount, hoursToReverse, isFullRevert, newFromDate, newToDate, revertFrom, revertTo;
+    let leave,
+      restoredCount,
+      hoursToReverse,
+      isFullRevert,
+      newFromDate,
+      newToDate,
+      revertFrom,
+      revertTo;
     try {
       await client.query("BEGIN");
 
@@ -868,9 +831,9 @@ router.post(
       }
       if (leave.type === "Swap") {
         await client.query("ROLLBACK");
-        return res
-          .status(400)
-          .json({ error: "Shift switches can't be reverted from here — reject and re-request instead" });
+        return res.status(400).json({
+          error: "Shift switches can't be reverted from here — reject and re-request instead",
+        });
       }
 
       const leaveFrom = leave.from_date.toString().slice(0, 10);
@@ -880,9 +843,9 @@ router.post(
 
       if (revertFrom > revertTo || revertFrom < leaveFrom || revertTo > leaveTo) {
         await client.query("ROLLBACK");
-        return res
-          .status(400)
-          .json({ error: `Revert range must fall within the approved leave (${leaveFrom} to ${leaveTo})` });
+        return res.status(400).json({
+          error: `Revert range must fall within the approved leave (${leaveFrom} to ${leaveTo})`,
+        });
       }
       isFullRevert = revertFrom === leaveFrom && revertTo === leaveTo;
       const isPrefix = revertFrom === leaveFrom; // reverting the start, leave stays for the tail
@@ -970,7 +933,9 @@ router.post(
           req.user.full_name || "Admin",
           req.user.roles?.[0] ?? null,
           `${leave.nurse_name} · ${leave.type} · reverted ${fmtDateRange(revertFrom, revertTo)}` +
-            (isFullRevert ? "" : ` (of approved ${fmtDateRange(leave.from_date, leave.to_date)}; remaining leave now ${fmtDateRange(newFromDate, newToDate)})`) +
+            (isFullRevert
+              ? ""
+              : ` (of approved ${fmtDateRange(leave.from_date, leave.to_date)}; remaining leave now ${fmtDateRange(newFromDate, newToDate)})`) +
             ` · ${restoredCount} shift(s) restored${hoursToReverse > 0 ? `, ${hoursToReverse}h reversed` : ""} · ` +
             `Reason: ${reason.trim()}`,
         ],
