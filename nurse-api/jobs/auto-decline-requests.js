@@ -15,7 +15,7 @@
 // picks these up with no frontend changes needed.
 const cron = require("node-cron");
 const pool = require("../db");
-const { getWindowForPeriod } = require("../lib/rota-period-dates");
+const { checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
 
 // Mirrors leave-requests.js's own EXEMPT_LEAVE_TYPES (kept as a separate
 // local copy — this job only needs it for the one check below, not the full
@@ -133,21 +133,8 @@ async function runAutoDeclineDraftClosedLeave() {
 
   let declinedCount = 0;
   for (const r of candidates) {
-    const { rows: draftRows } = await pool.query(
-      `SELECT MIN(shift_date)::text AS period_start, MAX(shift_date)::text AS period_end
-         FROM shift_assignments WHERE nurse_id = $1 AND status = 'draft'`,
-      [r.nurse_id],
-    );
-    const draft = draftRows[0];
-    // Only a draft whose date range actually overlaps THIS request's dates
-    // is relevant — a request for some other, later, not-yet-drafted period
-    // must not be declined just because the nurse's CURRENT draft is closed.
-    const overlaps =
-      draft?.period_start && r.from_date <= draft.period_end && r.to_date >= draft.period_start;
-    if (!overlaps) continue;
-
-    const window = await getWindowForPeriod(draft.period_start);
-    if (!window.leaveIsClosed) continue;
+    const draftCheck = await checkDraftPeriodLeaveClosed(r.nurse_id, r.from_date, r.to_date);
+    if (!draftCheck.closed) continue;
 
     await pool
       .query(

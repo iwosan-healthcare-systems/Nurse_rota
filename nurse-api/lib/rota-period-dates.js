@@ -183,4 +183,34 @@ async function getUnitPeriod(nurseIds, ward) {
   return { periodStart, periodEnd: addDays(periodStart, 27), hasActive: false };
 }
 
-module.exports = { getNextPeriodDates, getWindowForPeriod, getUnitPeriod };
+// For one nurse + a requested leave date range: if their ward/unit currently
+// has a DRAFT rota overlapping these dates, AND that draft's own period has
+// already passed ITS leave-closure deadline, returns { closed: true,
+// periodStart }. A unit that's fallen behind the rest of the system (see
+// getUnitPeriod's header comment above) can have its own closure boundary
+// pass well after — or well before — the globally-inferred "next period"
+// used elsewhere (getNextPeriodDates), which is exactly the gap this closes.
+// Shared by leave-requests.js (submission-time hard block AND the read-only
+// pre-check the leave-request form uses to decide which types to even show)
+// and jobs/auto-decline-requests.js (cleans up anything already Pending).
+async function checkDraftPeriodLeaveClosed(nurseId, fromDate, toDate) {
+  const { rows: draftRows } = await pool.query(
+    `SELECT MIN(shift_date)::text AS period_start, MAX(shift_date)::text AS period_end
+       FROM shift_assignments WHERE nurse_id = $1 AND status = 'draft'`,
+    [nurseId],
+  );
+  const draft = draftRows[0];
+  const overlaps =
+    draft?.period_start && fromDate <= draft.period_end && toDate >= draft.period_start;
+  if (!overlaps) return { closed: false, periodStart: null };
+
+  const window = await getWindowForPeriod(draft.period_start);
+  return { closed: !!window.leaveIsClosed, periodStart: draft.period_start };
+}
+
+module.exports = {
+  getNextPeriodDates,
+  getWindowForPeriod,
+  getUnitPeriod,
+  checkDraftPeriodLeaveClosed,
+};

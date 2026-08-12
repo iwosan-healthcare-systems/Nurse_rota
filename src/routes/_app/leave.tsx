@@ -1654,6 +1654,25 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
         .then((arr) => arr.length > 0),
   });
 
+  // A unit that's fallen behind the rest of the system can have a DRAFT rota
+  // for these exact dates whose OWN leave-closure window has already passed,
+  // independent of the globally-inferred "next period" leaveWindowClosed
+  // below checks — see checkDraftPeriodLeaveClosed's header comment
+  // (nurse-api/lib/rota-period-dates.js) for why relying on the global check
+  // alone isn't enough. Same check the backend hard-blocks the submission
+  // with, called here read-only so the type dropdown reflects the truth
+  // instead of only failing at submit time.
+  const { data: draftWindowClosed = false } = useQuery({
+    queryKey: ["leave-draft-window-closed", from, to, targetNurseId],
+    enabled: datesReady && !!targetNurseId,
+    queryFn: () =>
+      api
+        .get<{ closed: boolean }>(
+          `/leave-requests/draft-window-check?nurse_id=${targetNurseId}&from=${from}&to=${to}`,
+        )
+        .then((r) => r.closed),
+  });
+
   // Check the leave closure window — shared cache with LeavePage so no extra network call.
   const { data: workflowStatus } = useQuery<WorkflowStatus>({
     queryKey: ["workflow-status"],
@@ -1717,12 +1736,13 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   );
 
   // In-approval rota: all leave blocked for those dates.
-  // Published / closure window: only 3 exempt types allowed.
+  // Published / closure window / this unit's own draft period already
+  // closed: only 3 exempt types allowed.
   // Exhausted-entitlement types are then dropped from whatever's left.
   const allowedTypes = (
     datesInApprovalRota
       ? []
-      : datesInPublishedRota || leaveWindowClosed
+      : datesInPublishedRota || leaveWindowClosed || draftWindowClosed
         ? ["Sick", "Emergency"]
         : ["Sick", "Annual", "Emergency", "Maternity", "Public Holiday", "Study Leave", "Compassionate Leave", "Leave of Absence"]
   ).filter((t) => !exhaustedTypes.has(t));
@@ -1968,6 +1988,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               Leave window is closed — the next schedule starts{" "}
               <strong>{fmtDateLeave(workflowStatus!.nextPeriodStart!)}</strong>. Only{" "}
               <strong>Sick</strong> and <strong>Emergency</strong> can be requested.
+            </span>
+          </div>
+        )}
+
+        {!datesInPublishedRota && !leaveWindowClosed && datesReady && draftWindowClosed && (
+          <div className="flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 text-xs text-amber-700 dark:text-amber-400">
+            <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <span>
+              The draft schedule for this period is already locked in and its leave window has
+              closed. Only <strong>Sick</strong> and <strong>Emergency</strong> can be requested.
             </span>
           </div>
         )}

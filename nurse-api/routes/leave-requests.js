@@ -3,7 +3,7 @@ const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
-const { getNextPeriodDates, getWindowForPeriod } = require("../lib/rota-period-dates");
+const { getNextPeriodDates, checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
 const { getSickEmergencyMaxDays } = require("../lib/leave-settings");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -143,6 +143,24 @@ router.get(
 // Sick and Emergency can always be submitted; Swap is a shift switch (not leave).
 const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap"];
 
+// Read-only pre-check the leave-request FORM uses to decide which types to
+// even show — same check the POST /:below hard-blocks with, exposed here so
+// the frontend doesn't have to fail a real submission just to find out a
+// specific unit's draft period (which can be closed independently of the
+// globally-inferred "next period" — see checkDraftPeriodLeaveClosed's header
+// comment) has already closed its leave window.
+router.get(
+  "/draft-window-check",
+  wrap(async (req, res) => {
+    const { nurse_id, from, to } = req.query;
+    if (!nurse_id || !from || !to) {
+      return res.status(400).json({ error: "nurse_id, from, and to are required" });
+    }
+    const result = await checkDraftPeriodLeaveClosed(nurse_id, from, to);
+    res.json({ closed: result.closed, periodStart: result.periodStart });
+  }),
+);
+
 // Roles allowed to create a shift-switch (type "Swap") on someone else's behalf.
 // Mirrors canRequestShiftSwitch in auth-context.tsx (admin bypass is implicit via requireRole-style check below).
 const SWITCH_INITIATOR_ROLES = ["admin", "cno", "chief_matron"];
@@ -228,29 +246,14 @@ router.post(
       // 'draft' — never even submitted — well past the point its OWN leave
       // window should have closed, even though the GLOBAL leave-closure check
       // above (workflow-status-derived, via leaveWindowClosed on the frontend)
-      // only looks at the system-wide "next period" and can miss this. If a
-      // draft already exists AND the requested dates actually fall within it
-      // (a request for some other, later, not-yet-drafted period must NOT be
-      // blocked just because THIS draft's window happens to be closed), check
-      // leave closure against that draft's own true period_start, not the
-      // global one, before allowing a non-exempt type through.
+      // only looks at the system-wide "next period" and can miss this.
       if (!EXEMPT_LEAVE_TYPES.includes(type)) {
-        const { rows: draftRows } = await pool.query(
-          `SELECT MIN(shift_date)::text AS period_start, MAX(shift_date)::text AS period_end
-             FROM shift_assignments WHERE nurse_id = $1 AND status = 'draft'`,
-          [nurse_id],
-        );
-        const draft = draftRows[0];
-        const overlaps =
-          draft?.period_start && from_date <= draft.period_end && to_date >= draft.period_start;
-        if (overlaps) {
-          const unitWindow = await getWindowForPeriod(draft.period_start);
-          if (unitWindow.leaveIsClosed) {
-            return res.status(422).json({
-              error: `Leave requests are closed until the next schedule begins (${draft.period_start}). Only Sick and Emergency Leave can be submitted now.`,
-              code: "LEAVE_WINDOW_CLOSED",
-            });
-          }
+        const draftCheck = await checkDraftPeriodLeaveClosed(nurse_id, from_date, to_date);
+        if (draftCheck.closed) {
+          return res.status(422).json({
+            error: `Leave requests are closed until the next schedule begins (${draftCheck.periodStart}). Only Sick and Emergency Leave can be submitted now.`,
+            code: "LEAVE_WINDOW_CLOSED",
+          });
         }
       }
     }
