@@ -3,7 +3,7 @@ const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
-const { getNextPeriodDates } = require("../lib/rota-period-dates");
+const { getNextPeriodDates, getWindowForPeriod } = require("../lib/rota-period-dates");
 const { getSickEmergencyMaxDays } = require("../lib/leave-settings");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -219,6 +219,37 @@ router.post(
             "The rota for this period is currently under review. Leave requests cannot be submitted until after the rota is published.",
           code: "ROTA_IN_APPROVAL",
         });
+      }
+
+      // A unit that fell behind the rest of the system (see getUnitPeriod's
+      // header comment in lib/rota-period-dates.js) can still be sitting in
+      // 'draft' — never even submitted — well past the point its OWN leave
+      // window should have closed, even though the GLOBAL leave-closure check
+      // above (workflow-status-derived, via leaveWindowClosed on the frontend)
+      // only looks at the system-wide "next period" and can miss this. If a
+      // draft already exists AND the requested dates actually fall within it
+      // (a request for some other, later, not-yet-drafted period must NOT be
+      // blocked just because THIS draft's window happens to be closed), check
+      // leave closure against that draft's own true period_start, not the
+      // global one, before allowing a non-exempt type through.
+      if (!EXEMPT_LEAVE_TYPES.includes(type)) {
+        const { rows: draftRows } = await pool.query(
+          `SELECT MIN(shift_date)::text AS period_start, MAX(shift_date)::text AS period_end
+             FROM shift_assignments WHERE nurse_id = $1 AND status = 'draft'`,
+          [nurse_id],
+        );
+        const draft = draftRows[0];
+        const overlaps =
+          draft?.period_start && from_date <= draft.period_end && to_date >= draft.period_start;
+        if (overlaps) {
+          const unitWindow = await getWindowForPeriod(draft.period_start);
+          if (unitWindow.leaveIsClosed) {
+            return res.status(422).json({
+              error: `Leave requests are closed until the next schedule begins (${draft.period_start}). Only Sick and Emergency Leave can be submitted now.`,
+              code: "LEAVE_WINDOW_CLOSED",
+            });
+          }
+        }
       }
     }
 
@@ -632,6 +663,71 @@ router.patch(
                         [id, notifKey],
                       )
                       .catch(() => {});
+                  }
+                }
+              }
+            }
+
+            // Approved leave already flipped the shift to LEAVE above — but if
+            // that touched a not-yet-published rota (draft or submitted), the
+            // head_nurse who's building/reviewing it has no way to know their
+            // rota just changed under them unless they happen to reopen the
+            // Rota page. Bell + email, reusing the same rota-lifecycle notif
+            // family (and key format) the T-19/T-17/T-14 auto-generate jobs
+            // use, so it renders through that existing bell bucket for free.
+            if (leave.status === "Approved") {
+              const { rows: draftRows } = await pool.query(
+                `SELECT sa.ward, MIN(sa.shift_date)::text AS period_start
+                   FROM shift_assignments sa
+                  WHERE sa.nurse_id = $1
+                    AND sa.status IN ('draft', 'submitted')
+                    AND EXISTS (
+                      SELECT 1 FROM shift_assignments sa2
+                       WHERE sa2.nurse_id = sa.nurse_id
+                         AND sa2.status IN ('draft', 'submitted')
+                         AND sa2.ward IS NOT DISTINCT FROM sa.ward
+                         AND sa2.shift_date BETWEEN $2 AND $3
+                    )
+                  GROUP BY sa.ward`,
+                [leave.nurse_id, leave.from_date, leave.to_date],
+              );
+              if (draftRows.length) {
+                const { rows: generators } = await pool.query(
+                  `SELECT DISTINCT p.id, p.email
+                     FROM profiles p
+                     JOIN user_roles ur ON ur.user_id = p.id
+                    WHERE ur.role IN ('head_nurse', 'admin')
+                      AND p.is_active = true`,
+                );
+                for (const draftRow of draftRows) {
+                  const unitSlug = draftRow.ward
+                    ? draftRow.ward.toLowerCase().replace(/\s+/g, "_")
+                    : facilityWideGroupSlug(nurseRole);
+                  const unitLabel = draftRow.ward ?? unitSlug;
+                  // "|" separates the payload segments, same reason as
+                  // notifyUnit() in auto-generate-rota.js — a plain "_" join
+                  // can't be split back apart reliably since facility and
+                  // ward names can themselves contain "_".
+                  const notifKey = `rota_leave_applied_${facilitySlug}|${unitSlug}|${draftRow.period_start}`;
+                  for (const { id, email } of generators) {
+                    pool
+                      .query(
+                        `INSERT INTO notification_state (user_id, notif_key, is_read)
+                         VALUES ($1, $2, false)
+                         ON CONFLICT (user_id, notif_key) DO UPDATE SET is_read = false, updated_at = NOW()`,
+                        [id, notifKey],
+                      )
+                      .catch(() => {});
+                    if (email) {
+                      sendMail({
+                        to: email,
+                        subject: `Rota updated automatically — ${unitLabel} · ${facility}`,
+                        title: "Rota updated automatically",
+                        bodyHtml: `<p><strong>${leave.nurse_name}</strong>'s leave request for ${fmtDateRange(leave.from_date, leave.to_date)} was approved, and their shifts were automatically updated to LEAVE in the not-yet-published rota for <strong>${unitLabel} · ${facility}</strong> (period starting ${draftRow.period_start}).</p><p>Please review the rota before submitting/publishing.</p>`,
+                        ctaText: "Open Rota",
+                        ctaUrl: portalUrl("/rota"),
+                      }).catch(() => {});
+                    }
                   }
                 }
               }

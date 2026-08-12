@@ -15,6 +15,12 @@
 // picks these up with no frontend changes needed.
 const cron = require("node-cron");
 const pool = require("../db");
+const { getWindowForPeriod } = require("../lib/rota-period-dates");
+
+// Mirrors leave-requests.js's own EXEMPT_LEAVE_TYPES (kept as a separate
+// local copy — this job only needs it for the one check below, not the full
+// submission-time validation that file does).
+const EXEMPT_LEAVE_TYPES = ["Sick", "Emergency", "Swap"];
 
 // Arbitrary fixed key for this job's mutex, distinct from AUTO_END_LOCK_KEY
 // (729312) in jobs/auto-end-shifts.js — see that file for why the lock exists.
@@ -42,6 +48,7 @@ async function autoDeclineExpiredRequests() {
     if (!lockRows[0].locked) return; // another instance already holds the lock this tick
 
     await runAutoDecline();
+    await runAutoDeclineDraftClosedLeave();
   } catch (err) {
     console.error("[auto-decline] Error:", err.message);
   } finally {
@@ -101,6 +108,79 @@ async function runAutoDecline() {
       const profileBId = await findProfileId(r.switch_nurse_b, null);
       if (profileBId) await notify(profileBId, `switch_rejected_${r.id}_b`);
     }
+  }
+}
+
+// Second pass: a Pending non-exempt-type leave request whose nurse's ward
+// already has a DRAFT rota covering the requested dates, and that draft's
+// OWN leave-closure window has already passed, is now permanently stale —
+// the draft was (or should have been) generated without this leave factored
+// in, and nobody reviewing it late can retroactively fix that. This is the
+// same per-unit-period check leave-requests.js does at submission time (see
+// its header comment for why the GLOBAL leave-closure check alone isn't
+// enough for a unit that's fallen behind the rest of the system) — this pass
+// exists so a request that slipped through some other path (or was Pending
+// before that submit-time check existed) still gets cleaned up, not just
+// prevented from happening again.
+async function runAutoDeclineDraftClosedLeave() {
+  const { rows: candidates } = await pool.query(
+    `SELECT id, nurse_id, nurse_name, type, from_date, to_date, requested_by
+       FROM leave_requests
+      WHERE status = 'Pending' AND type::text != ALL($1::text[])`,
+    [EXEMPT_LEAVE_TYPES],
+  );
+  if (!candidates.length) return;
+
+  let declinedCount = 0;
+  for (const r of candidates) {
+    const { rows: draftRows } = await pool.query(
+      `SELECT MIN(shift_date)::text AS period_start, MAX(shift_date)::text AS period_end
+         FROM shift_assignments WHERE nurse_id = $1 AND status = 'draft'`,
+      [r.nurse_id],
+    );
+    const draft = draftRows[0];
+    // Only a draft whose date range actually overlaps THIS request's dates
+    // is relevant — a request for some other, later, not-yet-drafted period
+    // must not be declined just because the nurse's CURRENT draft is closed.
+    const overlaps =
+      draft?.period_start && r.from_date <= draft.period_end && r.to_date >= draft.period_start;
+    if (!overlaps) continue;
+
+    const window = await getWindowForPeriod(draft.period_start);
+    if (!window.leaveIsClosed) continue;
+
+    await pool
+      .query(
+        `UPDATE leave_requests
+            SET status = 'Rejected', reviewed_at = NOW(),
+                review_note = 'Automatically declined — the rota draft for this period is already locked in and the leave window has closed.'
+          WHERE id = $1 AND status = 'Pending'`,
+        [r.id],
+      )
+      .catch((err) => {
+        console.error("[auto-decline] draft-closed decline failed:", err.message);
+        return null;
+      });
+    declinedCount++;
+
+    await pool
+      .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
+        "Leave request auto-declined (draft period leave window closed)",
+        `${r.nurse_name} · ${r.type} · ${r.from_date} → ${r.to_date}`,
+      ])
+      .catch((err) => console.error("[auto-decline] audit log failed:", err.message));
+
+    await notify(r.requested_by, `leave_rejected_${r.id}`);
+    const profileId = await findProfileId(r.nurse_id, r.nurse_name);
+    if (profileId && profileId !== r.requested_by) {
+      await notify(profileId, `leave_rejected_${r.id}_staff`);
+    }
+  }
+
+  if (declinedCount > 0) {
+    console.log(
+      `[auto-decline] ${new Date().toISOString()} — auto-declined ${declinedCount} request(s) (draft period leave window closed)`,
+    );
   }
 }
 

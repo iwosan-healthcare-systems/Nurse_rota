@@ -83,26 +83,31 @@ async function getNextPeriodDates({ simulateToday } = {}) {
 // moved on to.
 async function getWindowForPeriod(periodStart, { simulateToday } = {}) {
   const now = simulateToday ? new Date(`${simulateToday}T12:00:00+01:00`) : new Date();
-  const { generate_days, edit_close_days, publish_deadline_days } = await getRotaDeadlineSettings();
+  const { leave_closure_days, generate_days, edit_close_days, publish_deadline_days } =
+    await getRotaDeadlineSettings();
 
   const { rows } = await pool.query(
     `
     SELECT
-      ($1::date - ($3::int * INTERVAL '1 day'))::date::text AS generate_date,
-      ($1::date - ($4::int * INTERVAL '1 day'))::date::text AS edit_close_date,
-      ($1::date - ($5::int * INTERVAL '1 day'))::date::text AS publish_deadline,
-      ($2::timestamptz >= (($1::date - ($3::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
-      ($2::timestamptz >= (($1::date - ($4::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
-      ($2::timestamptz >= (($1::date - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
+      ($1::date - ($3::int * INTERVAL '1 day'))::date::text AS leave_closure_date,
+      ($1::date - ($4::int * INTERVAL '1 day'))::date::text AS generate_date,
+      ($1::date - ($5::int * INTERVAL '1 day'))::date::text AS edit_close_date,
+      ($1::date - ($6::int * INTERVAL '1 day'))::date::text AS publish_deadline,
+      ($2::timestamptz >= (($1::date - ($3::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS leave_is_closed,
+      ($2::timestamptz >= (($1::date - ($4::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS generate_is_due,
+      ($2::timestamptz >= (($1::date - ($5::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS edit_is_closed,
+      ($2::timestamptz >= (($1::date - ($6::int * INTERVAL '1 day')) + INTERVAL '1 day')::timestamp AT TIME ZONE 'Africa/Lagos') AS publish_is_overdue
     `,
-    [periodStart, now.toISOString(), generate_days, edit_close_days, publish_deadline_days],
+    [periodStart, now.toISOString(), leave_closure_days, generate_days, edit_close_days, publish_deadline_days],
   );
 
   const row = rows[0];
   return {
+    leaveClosureDate: row.leave_closure_date,
     generateDate: row.generate_date,
     editCloseDate: row.edit_close_date,
     publishDeadline: row.publish_deadline,
+    leaveIsClosed: row.leave_is_closed,
     generateIsDue: row.generate_is_due,
     editIsClosed: row.edit_is_closed,
     publishIsOverdue: row.publish_is_overdue,
