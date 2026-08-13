@@ -14,11 +14,14 @@ async function getSickEmergencyMaxDays() {
 }
 
 // Minimum hours' notice required before a shift-switch (Swap) request's
-// start date — admin-configurable via System Settings. Defaults to 0 (no
-// minimum) since this is a new opt-in restriction, not a pre-existing rule
-// being made configurable — before this setting existed, a shift switch
-// could be requested for any future date with no notice requirement at all.
-const DEFAULT_SHIFT_SWITCH_MIN_NOTICE_HOURS = 0;
+// shift start — admin-configurable via System Settings. Defaults to 24 to
+// match the rule this system already enforced (previously hardcoded,
+// frontend-only, in leave.tsx's submit() — see the shared waiver logic
+// there and in leave-requests.js). This is a pre-existing rule being made
+// configurable and backend-enforced, not a new restriction, so the default
+// must match what was already in effect — 0 would silently remove the
+// 24-hour protection the moment this setting went live.
+const DEFAULT_SHIFT_SWITCH_MIN_NOTICE_HOURS = 24;
 
 async function getShiftSwitchMinNoticeHours() {
   const { rows } = await pool.query(

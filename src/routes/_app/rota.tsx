@@ -542,6 +542,27 @@ function RotaPage() {
     return s;
   }, [locumFilled]);
 
+  const { data: switchFilled = [] } = useQuery({
+    queryKey: ["switch-filled-rota", ymd(startDate), ymd(endDate)],
+    queryFn: () =>
+      api.get<{ nurse_id: string | null; switch_nurse_b: string | null; from_date: string }[]>(
+        `/leave-requests?type=Swap&status=Approved&from=${ymd(startDate)}&to=${ymd(endDate)}`,
+      ),
+  });
+
+  // "nurseId|date" keys for every nurse on either side of an approved shift
+  // switch in this window — both the original nurse and the covering one,
+  // so either cell involved is visually distinguishable on the grid.
+  const switchCellSet = useMemo(() => {
+    const s = new Set<string>();
+    switchFilled.forEach((sw) => {
+      const date = sw.from_date.slice(0, 10);
+      if (sw.nurse_id) s.add(`${sw.nurse_id}|${date}`);
+      if (sw.switch_nurse_b) s.add(`${sw.switch_nurse_b}|${date}`);
+    });
+    return s;
+  }, [switchFilled]);
+
   // Scheduled hours per nurse for the current period, split into worked vs
   // leave-credited so the UI can show both the actual hours the nurse is to
   // work and the total including the hours leave replaced — not just a
@@ -2885,6 +2906,7 @@ function RotaPage() {
                           const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
                           const cell = cellMap.get(`${n.id}|${dateStr}`);
                           const isLocum = locumCellSet.has(`${n.id}|${dateStr}`);
+                          const isSwitch = switchCellSet.has(`${n.id}|${dateStr}`);
                           // Visual-only: uses state (safe to lag one render behind)
                           const isDragOver =
                             dragging && cell && dragging.id !== cell.id && cell.status === "draft";
@@ -2964,6 +2986,10 @@ function RotaPage() {
                                       ? "bg-black text-white border-black"
                                       : shiftStyles[cell.shift]
                                     : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
+                                  // Switch-covered cells keep their normal shift color (still a
+                                  // real, legible M/N/etc.) but get a distinct ring so a switch
+                                  // is visible at a glance without hiding what shift it actually is.
+                                  cell && isSwitch && !isLocum && "ring-2 ring-inset ring-sky-500 dark:ring-sky-400",
                                   isDragOver &&
                                     cell?.status === "draft" &&
                                     "ring-2 ring-primary scale-105",
@@ -2983,9 +3009,11 @@ function RotaPage() {
                                       ? `Approved ${cell.leave_type ?? ""} leave — regenerate the rota to update`
                                       : isLocum
                                         ? "Accepted locum shift — cannot be manually edited"
-                                        : canEdit
-                                          ? "Click to cycle · drag to swap with same-day shift"
-                                          : "View only"
+                                        : isSwitch
+                                          ? "Shift switch — covers or replaces this nurse's original assignment"
+                                          : canEdit
+                                            ? "Click to cycle · drag to swap with same-day shift"
+                                            : "View only"
                                 }
                               >
                                 {cell
@@ -2995,6 +3023,9 @@ function RotaPage() {
                                       ? (cell.leave_type && LEAVE_TYPE_ABBR[cell.leave_type]) || "LEAVE"
                                       : cell.shift
                                   : "—"}
+                                {cell && isSwitch && !isLocum && (
+                                  <span className="ml-0.5 text-sky-600 dark:text-sky-300">⇄</span>
+                                )}
                               </button>
                             </td>
                           );

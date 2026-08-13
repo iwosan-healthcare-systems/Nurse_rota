@@ -194,21 +194,50 @@ router.post(
       }
     }
 
-    // Shift switches need at least this many hours' notice before the switch
-    // date — admin-configurable, defaults to 0 (no restriction). Measured
-    // from now to the start of from_date in Africa/Lagos, not to a specific
-    // shift's clock-in time — the request only carries a date, not which
-    // shift (M/N) is being switched.
-    if (type === "Swap") {
+    // Shift switches need at least this many hours' notice before the actual
+    // shift start (admin-configurable, default 24) — this is the backend
+    // enforcement of the same rule leave.tsx's submit() already checks
+    // client-side, closing the gap that it was only ever enforced in the
+    // browser. Waived unconditionally when covering an approved Sick/
+    // Emergency leave — a nurse can fall sick (or have an emergency) mid-
+    // shift with zero notice, and the whole point of allowing the switch
+    // request right after that leave is approved is to let someone else
+    // cover it, so the notice rule can't be the thing standing in the way.
+    if (type === "Swap" && nurse_id) {
       const minNoticeHours = await getShiftSwitchMinNoticeHours();
       if (minNoticeHours > 0) {
-        const switchDateStart = new Date(`${from_date}T00:00:00+01:00`);
-        const hoursUntilSwitch = (switchDateStart.getTime() - Date.now()) / 3600000;
-        if (hoursUntilSwitch < minNoticeHours) {
-          return res.status(422).json({
-            error: `Shift switch requests need at least ${minNoticeHours} hour(s) notice before the switch date.`,
-            code: "SWITCH_MIN_NOTICE_NOT_MET",
-          });
+        const { rows: coveredLeaveRows } = await pool.query(
+          `SELECT type FROM leave_requests
+            WHERE nurse_id = $1 AND status = 'Approved'
+              AND from_date <= $2 AND to_date >= $2
+            LIMIT 1`,
+          [nurse_id, from_date],
+        );
+        const covered = coveredLeaveRows[0];
+        const waived = !!covered && ["Sick", "Emergency"].includes(covered.type);
+
+        if (!waived) {
+          // Use the nurse's actual scheduled shift where one's on file
+          // (Morning = 08:00, Night = 17:00, Africa/Lagos) — falls back to
+          // midnight (the stricter option) otherwise. This is the backstop
+          // for anyone bypassing the frontend's own precise version of this
+          // check, not the primary UX gate, so erring stricter here is the
+          // safe direction.
+          const { rows: shiftRows } = await pool.query(
+            "SELECT shift FROM shift_assignments WHERE nurse_id = $1 AND shift_date = $2 LIMIT 1",
+            [nurse_id, from_date],
+          );
+          const shiftHour = shiftRows[0]?.shift === "N" ? 17 : shiftRows[0]?.shift === "M" ? 8 : 0;
+          const shiftStart = new Date(
+            `${from_date}T${String(shiftHour).padStart(2, "0")}:00:00+01:00`,
+          );
+          const hoursUntilShift = (shiftStart.getTime() - Date.now()) / 3600000;
+          if (hoursUntilShift < minNoticeHours) {
+            return res.status(422).json({
+              error: `Shift switch requests need at least ${minNoticeHours} hour(s) notice before the shift (${Math.max(0, Math.floor(hoursUntilShift))}h remaining).`,
+              code: "SWITCH_MIN_NOTICE_NOT_MET",
+            });
+          }
         }
       }
     }

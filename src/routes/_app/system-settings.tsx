@@ -199,8 +199,8 @@ function SystemSettingsPage() {
   const [idleTimeoutDraft, setIdleTimeoutDraft] = useState(60);
   const [idleTimeoutEditing, setIdleTimeoutEditing] = useState(false);
   const [idleTimeoutSaving, setIdleTimeoutSaving] = useState(false);
-  const [switchMinNoticeHours, setSwitchMinNoticeHours] = useState(0);
-  const [switchMinNoticeDraft, setSwitchMinNoticeDraft] = useState(0);
+  const [switchMinNoticeHours, setSwitchMinNoticeHours] = useState(24);
+  const [switchMinNoticeDraft, setSwitchMinNoticeDraft] = useState(24);
   const [switchMinNoticeEditing, setSwitchMinNoticeEditing] = useState(false);
   const [switchMinNoticeSaving, setSwitchMinNoticeSaving] = useState(false);
 
@@ -1150,8 +1150,10 @@ function SystemSettingsPage() {
                 <div className="flex-1">
                   <p className="text-sm font-medium">Shift switch minimum notice</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    How many hours before the switch date a shift switch request must be raised. Set
-                    to 0 to allow requests with no minimum notice.
+                    How many hours before the shift a switch request must be raised (default 24,
+                    matching this system's original rule). Waived for a switch covering approved
+                    Sick/Emergency leave requested after the rota was published. Set to 0 to allow
+                    requests with no minimum notice.
                   </p>
                 </div>
                 {switchMinNoticeEditing ? (

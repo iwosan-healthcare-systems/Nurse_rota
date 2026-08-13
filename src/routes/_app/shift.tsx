@@ -257,7 +257,9 @@ function ShiftPage() {
     queryKey: ["my-shift-log", nurseId, assignmentShiftDate],
     enabled: !!nurseId,
     queryFn: () =>
-      api.get<ShiftLog | null>(`/shift-logs/current?nurse_id=${nurseId}&shift_date=${assignmentShiftDate}`),
+      api.get<ShiftLog | null>(
+        `/shift-logs/current?nurse_id=${nurseId}&shift_date=${assignmentShiftDate}`,
+      ),
     refetchInterval: 30000,
   });
 
@@ -422,7 +424,9 @@ function ShiftPage() {
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
       const winRows = await api
-        .get<{ shift_date: string }[]>(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
+        .get<
+          { shift_date: string }[]
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
         .catch(() => []);
       const periodStart = winRows[0]?.shift_date ?? today;
       await api
@@ -447,7 +451,9 @@ function ShiftPage() {
           swap_note: null,
           is_missed: true,
         })
-        .catch(() => { missedRecordedRef.current = false; });
+        .catch(() => {
+          missedRecordedRef.current = false;
+        });
       qc.invalidateQueries({ queryKey: ["my-shift-log"] });
       qc.invalidateQueries({ queryKey: ["my-period-logs"] });
     })();
@@ -525,9 +531,10 @@ function ShiftPage() {
         is_locum: !!todayLocum,
         locum_request_id: todayLocum?.id ?? null,
         is_swap: !!todaySwap && !todaySwap.isDirect,
-        swap_note: todaySwap && !todaySwap.isDirect
-          ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
-          : null,
+        swap_note:
+          todaySwap && !todaySwap.isDirect
+            ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
+            : null,
       });
 
       void logAudit(
@@ -633,12 +640,15 @@ function ShiftPage() {
 
   // Button is visible from 15 minutes before official start.
   const canStartShift = minutesSinceStart >= -15;
-  // Late = any moment after the official start — except for a switch-coverage
-  // shift (todaySwap), where the nurse is stepping in for someone else and was
-  // only just approved to; "lateness" against the original 08:00/17:00 start
-  // doesn't apply to them, and their hours are correctly captured starting from
-  // whenever they actually click Start regardless of this flag.
-  const isLate = !todaySwap && minutesSinceStart > 0;
+  // Late = any moment after the official start — except for Leave-mode
+  // switch coverage (todaySwap && !todaySwap.isDirect), where the nurse is
+  // stepping in for someone's sick/emergency leave and was only just
+  // approved to; "lateness" against the original 08:00/17:00 start doesn't
+  // apply to them, and their hours are correctly captured starting from
+  // whenever they actually click Start regardless of this flag. A Direct
+  // Switch is a pre-arranged trade, not an emergency mid-shift handoff, so
+  // the normal late flag/reason capture still applies to it.
+  const isLate = (!todaySwap || todaySwap.isDirect) && minutesSinceStart > 0;
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -651,7 +661,12 @@ function ShiftPage() {
   // Shift window closed without a log being started → missed.
   // Guard against the loading state: never show missed while shiftLog is still fetching.
   const isShiftMissed =
-    !shiftLogLoading && !shiftLog && hasShiftToday && isSchedulePublished && !!shiftEndTime && now >= shiftEndTime;
+    !shiftLogLoading &&
+    !shiftLog &&
+    hasShiftToday &&
+    isSchedulePublished &&
+    !!shiftEndTime &&
+    now >= shiftEndTime;
   const isMissedLog = !!shiftLog && shiftLog.is_missed;
   const elapsed = isActive
     ? fmtDuration(Math.max(0, now.getTime() - new Date(shiftLog.started_at).getTime()))
@@ -768,7 +783,8 @@ function ShiftPage() {
           <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 mb-3 text-sm">
             <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
             <p className="text-red-700">
-              Missed shift — this shift was not started before the scheduled end time. No hours have been logged for this shift.
+              Missed shift — this shift was not started before the scheduled end time. No hours have
+              been logged for this shift.
             </p>
           </div>
         )}
@@ -813,7 +829,8 @@ function ShiftPage() {
           <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5 text-sm">
             <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
             <p className="text-red-700">
-              Missed shift — this shift was not started before the scheduled end time. No hours have been logged for this shift.
+              Missed shift — this shift was not started before the scheduled end time. No hours have
+              been logged for this shift.
             </p>
           </div>
         )}
@@ -849,7 +866,8 @@ function ShiftPage() {
                     disabled={!lateDialog.reason.trim() || starting}
                     className="flex-1 h-9 rounded-md bg-amber-600 text-white text-sm font-semibold inline-flex items-center justify-center gap-1.5 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed transition"
                   >
-                    <PlayCircle className="h-4 w-4" /> {starting ? "Starting…" : "Confirm & Start Shift"}
+                    <PlayCircle className="h-4 w-4" />{" "}
+                    {starting ? "Starting…" : "Confirm & Start Shift"}
                   </button>
                   <button
                     type="button"
@@ -959,7 +977,8 @@ function ShiftPage() {
           </div>
           <p className="text-3xl font-bold">{fmtHours(currentPeriodHours - swapPeriodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">
-            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap && !l.is_missed).length} shifts completed
+            {currentPeriodLogs.filter((l) => l.ended_at && !l.is_swap && !l.is_missed).length}{" "}
+            shifts completed
             {missedPeriodCount > 0 && ` · ${missedPeriodCount} missed`}
           </p>
           {(swapPeriodHours > 0 || leavePeriodHours > 0) && (
@@ -1019,72 +1038,72 @@ function ShiftHistory({ logs }: { logs: ShiftLog[] }) {
           No shifts logged this period yet.
         </p>
       ) : (
-      <div className="divide-y">
-        {visible.map((log) => (
-          <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
-            <div className="flex items-center gap-3">
-              <span
-                className={cn(
-                  "h-7 w-7 rounded-full grid place-items-center text-xs font-bold",
-                  log.shift_type === "M"
-                    ? "bg-amber-100 text-amber-700"
-                    : "bg-indigo-100 text-indigo-700",
-                )}
-              >
-                {log.shift_type}
-              </span>
-              <div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-medium">{fmtDate(log.shift_date)}</p>
-                  {log.is_leave && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-full">
-                      Leave (credited)
-                    </span>
+        <div className="divide-y">
+          {visible.map((log) => (
+            <div key={log.id} className="px-5 py-3 flex items-center justify-between text-sm">
+              <div className="flex items-center gap-3">
+                <span
+                  className={cn(
+                    "h-7 w-7 rounded-full grid place-items-center text-xs font-bold",
+                    log.shift_type === "M"
+                      ? "bg-amber-100 text-amber-700"
+                      : "bg-indigo-100 text-indigo-700",
                   )}
-                  {log.is_swap && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-100 border border-sky-200 px-1.5 py-0.5 rounded-full">
-                      <ArrowLeftRight className="h-2.5 w-2.5" /> Additional Shift
-                    </span>
+                >
+                  {log.shift_type}
+                </span>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-medium">{fmtDate(log.shift_date)}</p>
+                    {log.is_leave && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 bg-emerald-100 border border-emerald-200 px-1.5 py-0.5 rounded-full">
+                        Leave (credited)
+                      </span>
+                    )}
+                    {log.is_swap && (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-sky-700 bg-sky-100 border border-sky-200 px-1.5 py-0.5 rounded-full">
+                        <ArrowLeftRight className="h-2.5 w-2.5" /> Additional Shift
+                      </span>
+                    )}
+                    {log.late_reason === "Missed shift" ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        Missed
+                      </span>
+                    ) : log.is_late ? (
+                      <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
+                        <AlertTriangle className="h-2.5 w-2.5" />
+                        {log.late_minutes}m late
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {log.late_reason === "Missed shift"
+                      ? "Not started"
+                      : `${fmtTime(log.started_at)} → ${log.ended_at ? fmtTime(log.ended_at) : "in progress"}`}
+                  </p>
+                  {log.is_swap && log.swap_note && (
+                    <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
                   )}
-                  {log.late_reason === "Missed shift" ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">
-                      <AlertTriangle className="h-2.5 w-2.5" />
-                      Missed
-                    </span>
-                  ) : log.is_late ? (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100 border border-amber-200 px-1.5 py-0.5 rounded-full">
-                      <AlertTriangle className="h-2.5 w-2.5" />
-                      {log.late_minutes}m late
-                    </span>
-                  ) : null}
+                  {log.is_late && log.late_reason && log.late_reason !== "Missed shift" && (
+                    <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
+                  )}
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  {log.late_reason === "Missed shift"
-                    ? "Not started"
-                    : `${fmtTime(log.started_at)} → ${log.ended_at ? fmtTime(log.ended_at) : "in progress"}`}
-                </p>
-                {log.is_swap && log.swap_note && (
-                  <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
-                )}
-                {log.is_late && log.late_reason && log.late_reason !== "Missed shift" && (
-                  <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
+              </div>
+              <div className="text-right">
+                {log.late_reason === "Missed shift" ? (
+                  <span className="text-red-500 text-xs font-medium">0h logged</span>
+                ) : log.hours_logged != null ? (
+                  <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>
+                ) : (
+                  <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">
+                    <Clock className="h-3 w-3" /> Running
+                  </span>
                 )}
               </div>
             </div>
-            <div className="text-right">
-              {log.late_reason === "Missed shift" ? (
-                <span className="text-red-500 text-xs font-medium">0h logged</span>
-              ) : log.hours_logged != null ? (
-                <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>
-              ) : (
-                <span className="text-emerald-600 text-xs font-medium flex items-center gap-1">
-                  <Clock className="h-3 w-3" /> Running
-                </span>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
       )}
       <Link
         to="/shift-history"
@@ -1160,7 +1179,10 @@ function AllNursesShiftView() {
   // Build per-nurse totals
   const hoursMap = new Map<string, number>();
   const shiftsMap = new Map<string, number>();
-  const activeMap = new Map<string, { logId: string; startedAt: string; expectedEnd: string; isLocum: boolean; isSwap: boolean }>();
+  const activeMap = new Map<
+    string,
+    { logId: string; startedAt: string; expectedEnd: string; isLocum: boolean; isSwap: boolean }
+  >();
   const lateMap = new Map<string, number>();
   for (const l of logs) {
     if (l.hours_logged != null) {
@@ -1357,91 +1379,91 @@ function AllNursesShiftView() {
       {/* Table */}
       <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
         <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
-            <tr>
-              <th className="text-left px-4 py-3 font-semibold">Nurse</th>
-              <th className="text-left px-4 py-3 font-semibold">Ward</th>
-              <th className="text-left px-4 py-3 font-semibold">Facility</th>
-              <th className="text-right px-4 py-3 font-semibold">Shifts</th>
-              <th className="text-right px-4 py-3 font-semibold">Current Period Hours</th>
-              <th className="text-left px-4 py-3 font-semibold w-40">Progress</th>
-              <th className="text-right px-4 py-3 font-semibold">Late</th>
-              <th className="text-left px-4 py-3 font-semibold">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((n) => {
-              const hrs = hoursMap.get(n.id) ?? 0;
-              const shifts = shiftsMap.get(n.id) ?? 0;
-              const lateCount = lateMap.get(n.id) ?? 0;
-              // Total hours this nurse is actually rostered for this period, computed
-              // from her own shift_assignments (9h per M/MWC, 15h per N/NC — including
-              // LEAVE cells via pre_leave_shift) — not the manually-set target_hours,
-              // which is a fixed figure that doesn't reflect what she's really scheduled.
-              const target = scheduledHoursMap.get(n.id) || n.target_hours || 180;
-              const pct = Math.min(Math.round((hrs / target) * 100), 100);
-              const activeEntry = activeMap.get(n.id);
-              const isActive = !!activeEntry;
-              return (
-                <tr key={n.id} className="border-t hover:bg-muted/30">
-                  <td className="px-4 py-3">
-                    <p className="font-medium">{n.name}</p>
-                    <p className="text-xs text-muted-foreground">{n.role}</p>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">
-                    {n.ward?.split("|")[0] ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{n.facility ?? "—"}</td>
-                  <td className="px-4 py-3 text-right tabular-nums">{shifts}</td>
-                  <td className="px-4 py-3 text-right tabular-nums font-semibold">
-                    {fmtHours(hrs)}
-                    <span className="text-xs font-normal text-muted-foreground ml-1">
-                      / {Math.round(target)}h
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="h-2 rounded-full bg-muted overflow-hidden w-32">
-                      <Progress value={pct} className="h-full rounded-full" />
-                    </div>
-                    <p className="text-[10px] text-muted-foreground mt-0.5">{pct}%</p>
-                  </td>
-                  <td className="px-4 py-3 text-right">
-                    {lateCount > 0 ? (
-                      <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
-                        <AlertTriangle className="h-3 w-3" />
-                        {lateCount}
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
+              <tr>
+                <th className="text-left px-4 py-3 font-semibold">Nurse</th>
+                <th className="text-left px-4 py-3 font-semibold">Ward</th>
+                <th className="text-left px-4 py-3 font-semibold">Facility</th>
+                <th className="text-right px-4 py-3 font-semibold">Shifts</th>
+                <th className="text-right px-4 py-3 font-semibold">Current Period Hours</th>
+                <th className="text-left px-4 py-3 font-semibold w-40">Progress</th>
+                <th className="text-right px-4 py-3 font-semibold">Late</th>
+                <th className="text-left px-4 py-3 font-semibold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((n) => {
+                const hrs = hoursMap.get(n.id) ?? 0;
+                const shifts = shiftsMap.get(n.id) ?? 0;
+                const lateCount = lateMap.get(n.id) ?? 0;
+                // Total hours this nurse is actually rostered for this period, computed
+                // from her own shift_assignments (9h per M/MWC, 15h per N/NC — including
+                // LEAVE cells via pre_leave_shift) — not the manually-set target_hours,
+                // which is a fixed figure that doesn't reflect what she's really scheduled.
+                const target = scheduledHoursMap.get(n.id) || n.target_hours || 180;
+                const pct = Math.min(Math.round((hrs / target) * 100), 100);
+                const activeEntry = activeMap.get(n.id);
+                const isActive = !!activeEntry;
+                return (
+                  <tr key={n.id} className="border-t hover:bg-muted/30">
+                    <td className="px-4 py-3">
+                      <p className="font-medium">{n.name}</p>
+                      <p className="text-xs text-muted-foreground">{n.role}</p>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">
+                      {n.ward?.split("|")[0] ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground">{n.facility ?? "—"}</td>
+                    <td className="px-4 py-3 text-right tabular-nums">{shifts}</td>
+                    <td className="px-4 py-3 text-right tabular-nums font-semibold">
+                      {fmtHours(hrs)}
+                      <span className="text-xs font-normal text-muted-foreground ml-1">
+                        / {Math.round(target)}h
                       </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3">
-                    {isActive ? (
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                          Active
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => openEndModal(n.id, n.name)}
-                          className="text-xs px-2 py-0.5 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
-                        >
-                          End shift
-                        </button>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="h-2 rounded-full bg-muted overflow-hidden w-32">
+                        <Progress value={pct} className="h-full rounded-full" />
                       </div>
-                    ) : hrs > 0 ? (
-                      <span className="text-xs text-muted-foreground">Logged hours</span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">No logs yet</span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">{pct}%</p>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {lateCount > 0 ? (
+                        <span className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                          <AlertTriangle className="h-3 w-3" />
+                          {lateCount}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      {isActive ? (
+                        <div className="flex items-center gap-2">
+                          <span className="inline-flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-full">
+                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                            Active
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => openEndModal(n.id, n.name)}
+                            className="text-xs px-2 py-0.5 rounded border border-destructive text-destructive hover:bg-destructive hover:text-destructive-foreground transition-colors"
+                          >
+                            End shift
+                          </button>
+                        </div>
+                      ) : hrs > 0 ? (
+                        <span className="text-xs text-muted-foreground">Logged hours</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">No logs yet</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
 
@@ -1462,7 +1484,10 @@ function AllNursesShiftView() {
               </p>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground uppercase tracking-wide font-medium" htmlFor="end-time-input">
+              <label
+                className="text-xs text-muted-foreground uppercase tracking-wide font-medium"
+                htmlFor="end-time-input"
+              >
                 Actual end time
               </label>
               <input
@@ -1480,7 +1505,10 @@ function AllNursesShiftView() {
                       Math.max(
                         0,
                         Math.round(
-                          ((new Date(endTimeInput).getTime() - new Date(endModal.startedAt).getTime()) / 3600000) * 100,
+                          ((new Date(endTimeInput).getTime() -
+                            new Date(endModal.startedAt).getTime()) /
+                            3600000) *
+                            100,
                         ) / 100,
                       ),
                     )}

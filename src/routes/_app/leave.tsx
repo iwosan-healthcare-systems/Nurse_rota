@@ -496,10 +496,10 @@ function LeavePage() {
         if (!sw) return toast.error("Invalid shift switch data");
 
         const [arrA, arrB] = await Promise.all([
-          api.get<{ id: string; shift: string }[]>(
+          api.get<{ id: string; shift: string; ward: string | null }[]>(
             `/shift-assignments?nurse_id=${l.nurse_id ?? ""}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
-          api.get<{ id: string; shift: string }[]>(
+          api.get<{ id: string; shift: string; ward: string | null }[]>(
             `/shift-assignments?nurse_id=${sw.nurseBId}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
         ]);
@@ -527,9 +527,16 @@ function LeavePage() {
               `Cannot approve — this would leave ${sw.nurseBName} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
             );
           }
-          // Idempotent: skip if nurse B already has the target shift (retry-safe).
-          if (assignB.shift !== targetShift) {
-            await api.patch(`/shift-assignments/${assignB.id}`, { shift: targetShift });
+          // Nurse B is standing in for Nurse A specifically, so her ward needs to
+          // become Nurse A's ward too — not just the shift type. A same-ward
+          // switch makes this a no-op (they already match); an inter-ward one
+          // actually moves her into the ward that needs covering.
+          // Idempotent: skip if nurse B is already in the target state (retry-safe).
+          if (assignB.shift !== targetShift || assignB.ward !== assignA.ward) {
+            await api.patch(`/shift-assignments/${assignB.id}`, {
+              shift: targetShift,
+              ward: assignA.ward,
+            });
             qc.invalidateQueries({ queryKey: ["assignments"] });
           }
           logAudit(
@@ -554,17 +561,30 @@ function LeavePage() {
               `Cannot approve — this would leave ${sw.nurseBName} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
             );
           }
-          // Idempotent: skip if shifts are already in the swapped state (retry-safe).
-          const alreadySwapped = assignA.shift === sw.shiftB && assignB.shift === sw.shiftA;
+          // Inter-ward switches trade ward along with shift — each nurse ends up
+          // actually working in the other's ward, not just adopting their shift
+          // time while staying put. Same-ward switches leave ward untouched
+          // (both sides already match, so it's a no-op either way).
+          const patchA: { shift: string; ward?: string | null } = { shift: assignB.shift };
+          const patchB: { shift: string; ward?: string | null } = { shift: assignA.shift };
+          if (sw.interWard) {
+            patchA.ward = assignB.ward;
+            patchB.ward = assignA.ward;
+          }
+          // Idempotent: skip if already in the swapped state (retry-safe).
+          const alreadySwapped =
+            assignA.shift === sw.shiftB &&
+            assignB.shift === sw.shiftA &&
+            (!sw.interWard || (assignA.ward === patchA.ward && assignB.ward === patchB.ward));
           if (!alreadySwapped) {
             await Promise.all([
-              api.patch(`/shift-assignments/${assignA.id}`, { shift: assignB.shift }),
-              api.patch(`/shift-assignments/${assignB.id}`, { shift: assignA.shift }),
+              api.patch(`/shift-assignments/${assignA.id}`, patchA),
+              api.patch(`/shift-assignments/${assignB.id}`, patchB),
             ]);
             qc.invalidateQueries({ queryKey: ["assignments"] });
           }
           logAudit(
-            `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}`,
+            `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}${sw.interWard ? " (inter-ward)" : ""}`,
             sw.date,
           );
         }
@@ -2237,6 +2257,24 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       >("/nurses"),
   });
 
+  // Admin-configurable via System Settings — defaults to 24 (this system's
+  // original hardcoded rule) if never explicitly saved. Same value the
+  // backend now enforces too (see leave-requests.js), so this is just the
+  // early, friendlier check — the real gate is server-side.
+  const { data: switchMinNoticeHours = 24 } = useQuery({
+    queryKey: ["shift-switch-min-notice"],
+    queryFn: async () => {
+      try {
+        const { value } = await api.get<{ value: number }>(
+          "/portal-settings/shift_switch_min_notice_hours",
+        );
+        return typeof value === "number" && value >= 0 ? value : 24;
+      } catch {
+        return 24;
+      }
+    },
+  });
+
   const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
   const [exchangeMode, setExchangeMode] = useState<"leave" | "direct">("leave");
   const [facility, setFacility] = useState(lockedFacility ?? "");
@@ -2396,25 +2434,22 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       return toast.error("Nurse A is on leave — please select the shift type that needs covering");
     if (!reason.trim()) return toast.error("Please provide a reason for this shift switch");
 
-    // 24-hour rule: the shift must start more than 24 hours from now — waived when
-    // covering an approved Sick/Emergency Leave that was itself requested AFTER
-    // the rota was already published (rota_stage_at_request === "published") —
-    // that's the only case where the leave could legitimately land with no lead
-    // time at all, so a switch to arrange cover has to be allowed just as late.
-    // A Sick/Emergency leave requested *before* publish had normal lead time to
-    // arrange cover through, so the standard 24-hour rule still applies to it.
+    // Minimum-notice rule (admin-configurable, default 24h): the shift must
+    // start more than switchMinNoticeHours from now — waived unconditionally
+    // when covering an approved Sick/Emergency Leave. A nurse can fall sick
+    // (or have an emergency) mid-shift with zero notice, and the whole point
+    // of allowing the switch request right after that leave is approved is
+    // to let someone else cover it, so the notice rule can't be what stands
+    // in the way.
     let waive24hRule = false;
     if (shiftA === "LEAVE") {
       const coveredLeave = await api
         .get<
-          { type: string; rota_stage_at_request: string | null }[]
+          { type: string }[]
         >(`/leave-requests?nurse_id=${nurseAId}&status=Approved&from_date_lte=${date}&to_date_gte=${date}&limit=1`)
-        .catch(() => [] as { type: string; rota_stage_at_request: string | null }[]);
+        .catch(() => [] as { type: string }[]);
       const covered = coveredLeave[0];
-      waive24hRule =
-        !!covered &&
-        ["Sick", "Emergency"].includes(covered.type) &&
-        covered.rota_stage_at_request === "published";
+      waive24hRule = !!covered && ["Sick", "Emergency"].includes(covered.type);
     }
 
     // Use the actual shift start time: Morning = 08:00, Night = 17:00.
@@ -2422,9 +2457,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     const shiftHour = effectiveShift === "N" ? 17 : 8;
     const shiftStart = new Date(`${date}T${String(shiftHour).padStart(2, "0")}:00:00`);
     const hoursUntil = (shiftStart.getTime() - Date.now()) / 3_600_000;
-    if (!waive24hRule && hoursUntil < 24) {
+    if (!waive24hRule && hoursUntil < switchMinNoticeHours) {
       return toast.error(
-        `Shift switch cannot be requested less than 24 hours before the shift (${Math.max(0, Math.floor(hoursUntil))}h remaining). Please contact the CNO directly.`,
+        `Shift switch cannot be requested less than ${switchMinNoticeHours} hour(s) before the shift (${Math.max(0, Math.floor(hoursUntil))}h remaining). Please contact the CNO directly.`,
       );
     }
 
@@ -2508,9 +2543,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     <Modal title="Request shift switch" onClose={onClose}>
       <p className="text-xs text-muted-foreground mb-4">
         Switches are applied to the <strong>published rota</strong> only after CNO approval.
-        Requests must be submitted at least <strong>24 hours</strong> before the shift — except to
-        cover an approved <strong>Sick</strong> or <strong>Emergency</strong> Leave, which can be
-        requested up to the shift itself.
+        Requests must be submitted at least <strong>{switchMinNoticeHours} hour(s)</strong> before
+        the shift — except to cover an approved <strong>Sick</strong> or <strong>Emergency</strong>{" "}
+        Leave, which can be requested up to the shift itself.
       </p>
       <form onSubmit={submit} className="space-y-4">
         {/* Exchange mode */}
