@@ -423,7 +423,7 @@ function ReportsContent() {
   const [tab, setTabState] = useState<ReportsTab>(tabParam ?? "overview");
   function setTab(next: ReportsTab) {
     setTabState(next);
-    navigate({ search: (prev) => ({ ...prev, tab: next }), replace: true });
+    navigate({ search: (prev: { tab?: ReportsTab }) => ({ ...prev, tab: next }), replace: true });
   }
   const [closingPeriod, setClosingPeriod] = useState(false);
   // Pagination state per heavy table tab

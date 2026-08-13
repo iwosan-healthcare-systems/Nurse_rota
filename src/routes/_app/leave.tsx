@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -24,6 +24,9 @@ import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 
 export const Route = createFileRoute("/_app/leave")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: search.tab === "leave" || search.tab === "switches" ? search.tab : undefined,
+  }),
   component: LeavePage,
 });
 
@@ -201,7 +204,13 @@ function LeavePage() {
   const [showAdd, setShowAdd] = useState(false);
   const [showSwitch, setShowSwitch] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("All");
-  const [activeTab, setActiveTab] = useState<ActiveTab>("leave");
+  const { tab: tabParam } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+  const [activeTab, setActiveTabState] = useState<ActiveTab>(tabParam ?? "leave");
+  function setActiveTab(next: ActiveTab) {
+    setActiveTabState(next);
+    navigate({ search: (prev: { tab?: ActiveTab }) => ({ ...prev, tab: next }), replace: true });
+  }
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
 

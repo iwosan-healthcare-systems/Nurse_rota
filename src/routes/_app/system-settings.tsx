@@ -126,7 +126,31 @@ const ROTA_DEADLINE_FIELDS: {
   },
 ];
 
+const SYSTEM_SETTINGS_TABS = [
+  "gps",
+  "password",
+  "leave-caps",
+  "permissions",
+  "menu-access",
+  "roles",
+  "rota-jobs",
+  "rota-deadlines",
+  "leave-session",
+  "shift-reminders",
+  "backups",
+] as const;
+type SystemSettingsTab = (typeof SYSTEM_SETTINGS_TABS)[number];
+
 export const Route = createFileRoute("/_app/system-settings")({
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: SYSTEM_SETTINGS_TABS.includes(search.tab as SystemSettingsTab)
+      ? (search.tab as SystemSettingsTab)
+      : undefined,
+    // Nested sub-tab within the "permissions" tab (PermissionsSettings.tsx)
+    // — its own search param since it's one level deeper than the outer tab.
+    permTab:
+      search.permTab === "by-role" || search.permTab === "by-user" ? search.permTab : undefined,
+  }),
   head: () => ({
     meta: [
       { title: "System Settings — Nurses Rota" },
@@ -147,8 +171,14 @@ export const Route = createFileRoute("/_app/system-settings")({
 // "/system-settings" — its visibility is hardcoded to isAdmin below, not
 // tag-assignable to any role the way ordinary pages are).
 function SystemSettingsPage() {
-  const navigate = useNavigate();
+  const navigate = useNavigate({ from: Route.fullPath });
   const { isAdmin, loading } = useAuth();
+  const { tab: tabParam } = Route.useSearch();
+  const [tab, setTabState] = useState<SystemSettingsTab>(tabParam ?? "gps");
+  function setTab(next: SystemSettingsTab) {
+    setTabState(next);
+    navigate({ search: (prev: { tab?: SystemSettingsTab }) => ({ ...prev, tab: next }), replace: true });
+  }
 
   // GPS fence settings
   const defaultGps: GpsSettings = {
@@ -638,7 +668,7 @@ function SystemSettingsPage() {
         subtitle="GPS fence, password security, permissions, and every other system-wide setting"
       />
 
-      <Tabs defaultValue="gps">
+      <Tabs value={tab} onValueChange={(v) => setTab(v as SystemSettingsTab)}>
         <TabsList className="flex-wrap h-auto">
           <TabsTrigger value="gps">GPS Fence</TabsTrigger>
           <TabsTrigger value="password">Password Security</TabsTrigger>

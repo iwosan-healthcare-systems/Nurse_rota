@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { api } from "@/lib/api";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { RotateCcw } from "lucide-react";
@@ -257,8 +258,22 @@ function mergeCapabilities(saved: { key: string; roles: AppRole[] }[]): Capabili
 }
 
 export function PermissionsSettings() {
+  // Nested sub-tab, one level inside the outer System Settings "permissions"
+  // tab — its own search param (permTab) on the same route, kept in sync the
+  // same way the outer tab is, so a refresh lands back on this sub-tab too.
+  const { permTab } = useSearch({ from: "/_app/system-settings" });
+  const navigate = useNavigate({ from: "/_app/system-settings" });
+  const [subTab, setSubTabState] = useState<"by-role" | "by-user">(permTab ?? "by-role");
+  function setSubTab(next: "by-role" | "by-user") {
+    setSubTabState(next);
+    navigate({
+      search: (prev: { permTab?: "by-role" | "by-user" }) => ({ ...prev, permTab: next }),
+      replace: true,
+    });
+  }
+
   return (
-    <Tabs defaultValue="by-role">
+    <Tabs value={subTab} onValueChange={(v) => setSubTab(v as "by-role" | "by-user")}>
       <TabsList>
         <TabsTrigger value="by-role">By Role</TabsTrigger>
         <TabsTrigger value="by-user">By User</TabsTrigger>
