@@ -9,7 +9,18 @@ import {
   type GpsSettings,
 } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
-import { Pencil, ShieldAlert, MapPin, Plus, Trash2, KeyRound, Timer, CalendarClock } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  Pencil,
+  ShieldAlert,
+  MapPin,
+  Plus,
+  Trash2,
+  KeyRound,
+  Timer,
+  CalendarClock,
+  ArrowLeftRight,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Switch } from "@/components/ui/switch";
@@ -50,6 +61,27 @@ const ALL_LEAVE_TYPES = [
   "Leave of Absence",
 ];
 
+type BackupLogRow = {
+  database: string;
+  filename: string | null;
+  size_bytes: number | null;
+  status: string;
+  error: string | null;
+  created_at: string;
+};
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  const units = ["KB", "MB", "GB"];
+  let value = n / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit++;
+  }
+  return `${value.toFixed(1)} ${units[unit]}`;
+}
+
 type RotaDeadlines = {
   leave_closure_days: number;
   generate_days: number;
@@ -72,7 +104,8 @@ const ROTA_DEADLINE_FIELDS: {
   {
     key: "leave_closure_days",
     label: "Leave closure",
-    description: "Non-exempt leave requests are blocked from this many days before the next period starts.",
+    description:
+      "Non-exempt leave requests are blocked from this many days before the next period starts.",
   },
   {
     key: "generate_days",
@@ -82,12 +115,14 @@ const ROTA_DEADLINE_FIELDS: {
   {
     key: "edit_close_days",
     label: "Edit closes / auto-submit",
-    description: "A draft still sitting unsubmitted is force-submitted, and edit-access grants close, this many days before the next period starts.",
+    description:
+      "A draft still sitting unsubmitted is force-submitted, and edit-access grants close, this many days before the next period starts.",
   },
   {
     key: "publish_deadline_days",
     label: "Auto-publish",
-    description: "A CNO-approved rota is auto-published this many days before the next period starts.",
+    description:
+      "A CNO-approved rota is auto-published this many days before the next period starts.",
   },
 ];
 
@@ -164,6 +199,10 @@ function SystemSettingsPage() {
   const [idleTimeoutDraft, setIdleTimeoutDraft] = useState(60);
   const [idleTimeoutEditing, setIdleTimeoutEditing] = useState(false);
   const [idleTimeoutSaving, setIdleTimeoutSaving] = useState(false);
+  const [switchMinNoticeHours, setSwitchMinNoticeHours] = useState(0);
+  const [switchMinNoticeDraft, setSwitchMinNoticeDraft] = useState(0);
+  const [switchMinNoticeEditing, setSwitchMinNoticeEditing] = useState(false);
+  const [switchMinNoticeSaving, setSwitchMinNoticeSaving] = useState(false);
 
   // Which leave types get one extra grace day before auto-decline (they can
   // legitimately be filed same-day or after the fact).
@@ -182,9 +221,23 @@ function SystemSettingsPage() {
   const [upcomingShiftEditing, setUpcomingShiftEditing] = useState(false);
   const [upcomingShiftSaving, setUpcomingShiftSaving] = useState(false);
 
+  // Daily pg_dump status — the cron itself runs on NRota-DB, outside this
+  // repo (/var/backups/nrota-db/pg_backup.sh); this just reads what it last
+  // reported, so a failed or missed backup is visible without SSH.
+  const [backupLog, setBackupLog] = useState<BackupLogRow[]>([]);
+  const [backupLogLoading, setBackupLogLoading] = useState(true);
+
   useEffect(() => {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
+
+  useEffect(() => {
+    api
+      .get<BackupLogRow[]>("/backup-log")
+      .then(setBackupLog)
+      .catch(() => {})
+      .finally(() => setBackupLogLoading(false));
+  }, []);
 
   useEffect(() => {
     api
@@ -228,6 +281,12 @@ function SystemSettingsPage() {
       })
       .catch(() => {});
     api
+      .get<{ value: number }>("/portal-settings/shift_switch_min_notice_hours")
+      .then(({ value }) => {
+        if (typeof value === "number" && value >= 0) setSwitchMinNoticeHours(value);
+      })
+      .catch(() => {});
+    api
       .get<{ value: number }>("/portal-settings/idle_timeout_minutes")
       .then(({ value }) => {
         if (typeof value === "number" && value > 0) setIdleTimeoutMinutes(value);
@@ -244,7 +303,8 @@ function SystemSettingsPage() {
         "/portal-settings/shift_reminder_settings",
       )
       .then(({ value }) => {
-        if (typeof value?.missed_shift_hours === "number") setMissedShiftHours(value.missed_shift_hours);
+        if (typeof value?.missed_shift_hours === "number")
+          setMissedShiftHours(value.missed_shift_hours);
         if (typeof value?.upcoming_shift_minutes === "number")
           setUpcomingShiftMinutes(value.upcoming_shift_minutes);
       })
@@ -314,7 +374,11 @@ function SystemSettingsPage() {
   }
 
   async function saveSickEmergencyMaxDays() {
-    if (!Number.isInteger(sickEmergencyDraft) || sickEmergencyDraft < 1 || sickEmergencyDraft > 90) {
+    if (
+      !Number.isInteger(sickEmergencyDraft) ||
+      sickEmergencyDraft < 1 ||
+      sickEmergencyDraft > 90
+    ) {
       toast.error("Must be a whole number between 1 and 90");
       return;
     }
@@ -328,6 +392,30 @@ function SystemSettingsPage() {
       toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
     } finally {
       setSickEmergencySaving(false);
+    }
+  }
+
+  async function saveSwitchMinNotice() {
+    if (
+      !Number.isInteger(switchMinNoticeDraft) ||
+      switchMinNoticeDraft < 0 ||
+      switchMinNoticeDraft > 720
+    ) {
+      toast.error("Must be a whole number between 0 and 720 hours");
+      return;
+    }
+    setSwitchMinNoticeSaving(true);
+    try {
+      await api.put("/portal-settings/shift_switch_min_notice_hours", {
+        value: switchMinNoticeDraft,
+      });
+      setSwitchMinNoticeHours(switchMinNoticeDraft);
+      setSwitchMinNoticeEditing(false);
+      toast.success("Shift switch minimum notice saved");
+    } catch (e) {
+      toast.error("Failed to save: " + (e instanceof Error ? e.message : "Unknown error"));
+    } finally {
+      setSwitchMinNoticeSaving(false);
     }
   }
 
@@ -375,7 +463,10 @@ function SystemSettingsPage() {
     setMissedShiftSaving(true);
     try {
       await api.put("/portal-settings/shift_reminder_settings", {
-        value: { missed_shift_hours: missedShiftDraft, upcoming_shift_minutes: upcomingShiftMinutes },
+        value: {
+          missed_shift_hours: missedShiftDraft,
+          upcoming_shift_minutes: upcomingShiftMinutes,
+        },
       });
       setMissedShiftHours(missedShiftDraft);
       setMissedShiftEditing(false);
@@ -388,7 +479,11 @@ function SystemSettingsPage() {
   }
 
   async function saveUpcomingShiftMinutes() {
-    if (!Number.isInteger(upcomingShiftDraft) || upcomingShiftDraft < 1 || upcomingShiftDraft > 120) {
+    if (
+      !Number.isInteger(upcomingShiftDraft) ||
+      upcomingShiftDraft < 1 ||
+      upcomingShiftDraft > 120
+    ) {
       toast.error("Must be a whole number between 1 and 120 minutes");
       return;
     }
@@ -442,7 +537,11 @@ function SystemSettingsPage() {
       toast.error("Expiry must be between 1 and 365 days");
       return;
     }
-    if (!Number.isInteger(minPasswordLengthDraft) || minPasswordLengthDraft < 4 || minPasswordLengthDraft > 64) {
+    if (
+      !Number.isInteger(minPasswordLengthDraft) ||
+      minPasswordLengthDraft < 4 ||
+      minPasswordLengthDraft > 64
+    ) {
       toast.error("Minimum password length must be a whole number between 4 and 64");
       return;
     }
@@ -551,6 +650,7 @@ function SystemSettingsPage() {
           <TabsTrigger value="rota-deadlines">Rota Deadlines</TabsTrigger>
           <TabsTrigger value="leave-session">Leave &amp; Session Rules</TabsTrigger>
           <TabsTrigger value="shift-reminders">Shift Reminders</TabsTrigger>
+          <TabsTrigger value="backups">Backups</TabsTrigger>
         </TabsList>
 
         <TabsContent value="gps">
@@ -799,8 +899,8 @@ function SystemSettingsPage() {
               <div className="flex-1">
                 <p className="text-sm font-medium">Minimum password length</p>
                 <p className="text-xs text-muted-foreground">
-                  Enforced on every password-setting endpoint — login password change, admin
-                  reset, and bulk login generation.
+                  Enforced on every password-setting endpoint — login password change, admin reset,
+                  and bulk login generation.
                 </p>
               </div>
               {pwExpiryEditing ? (
@@ -893,8 +993,8 @@ function SystemSettingsPage() {
               <div>
                 <h2 className="text-sm font-semibold">Rota Lifecycle Deadlines</h2>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  Day-offsets counted back from the next period's start date. Single source of
-                  truth for the dashboard, leave closure, and all three rota jobs.
+                  Day-offsets counted back from the next period's start date. Single source of truth
+                  for the dashboard, leave closure, and all three rota jobs.
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
@@ -966,11 +1066,13 @@ function SystemSettingsPage() {
                 </div>
               ))}
             </div>
-            {rotaDeadlinesEditing && rotaDeadlinesDraft && rotaDeadlinesOrderError(rotaDeadlinesDraft) && (
-              <p className="px-5 py-3 border-t text-xs text-destructive">
-                {rotaDeadlinesOrderError(rotaDeadlinesDraft)}
-              </p>
-            )}
+            {rotaDeadlinesEditing &&
+              rotaDeadlinesDraft &&
+              rotaDeadlinesOrderError(rotaDeadlinesDraft) && (
+                <p className="px-5 py-3 border-t text-xs text-destructive">
+                  {rotaDeadlinesOrderError(rotaDeadlinesDraft)}
+                </p>
+              )}
             <p className="px-5 py-3 border-t text-xs text-muted-foreground">
               Values must stay in descending order — Leave closure furthest out, Auto-publish
               nearest — since each step depends on the one before it having already happened.
@@ -1044,6 +1146,64 @@ function SystemSettingsPage() {
               </div>
 
               <div className="px-5 py-4 flex items-center gap-4">
+                <ArrowLeftRight className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Shift switch minimum notice</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    How many hours before the switch date a shift switch request must be raised. Set
+                    to 0 to allow requests with no minimum notice.
+                  </p>
+                </div>
+                {switchMinNoticeEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={720}
+                      value={switchMinNoticeDraft}
+                      onChange={(e) => setSwitchMinNoticeDraft(Number(e.target.value))}
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">hours</span>
+                    <button
+                      type="button"
+                      onClick={() => setSwitchMinNoticeEditing(false)}
+                      disabled={switchMinNoticeSaving}
+                      className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={saveSwitchMinNotice}
+                      disabled={switchMinNoticeSaving}
+                      className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                    >
+                      {switchMinNoticeSaving ? "Saving…" : "Save"}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-semibold tabular-nums">
+                      {switchMinNoticeHours === 0
+                        ? "No minimum"
+                        : `${switchMinNoticeHours} hour(s)`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSwitchMinNoticeDraft(switchMinNoticeHours);
+                        setSwitchMinNoticeEditing(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted"
+                    >
+                      <Pencil className="h-3.5 w-3.5" /> Edit
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="px-5 py-4 flex items-center gap-4">
                 <Timer className="h-4 w-4 text-muted-foreground shrink-0" />
                 <div className="flex-1">
                   <p className="text-sm font-medium">Idle session timeout</p>
@@ -1100,8 +1260,8 @@ function SystemSettingsPage() {
               </div>
             </div>
             <p className="px-5 py-3 border-t text-xs text-muted-foreground">
-              Both take effect immediately for new checks — the idle timeout applies the next time
-              a user's session timer resets (e.g. their next action), not retroactively to an
+              Both take effect immediately for new checks — the idle timeout applies the next time a
+              user's session timer resets (e.g. their next action), not retroactively to an
               already-running countdown.
             </p>
           </section>
@@ -1183,8 +1343,8 @@ function SystemSettingsPage() {
             <div className="px-5 py-4 border-b">
               <h2 className="text-sm font-semibold">Shift Reminders</h2>
               <p className="text-xs text-muted-foreground mt-0.5">
-                When the "starts soon" and "you haven't clocked in" emails fire, relative to a shift's
-                scheduled start time.
+                When the "starts soon" and "you haven't clocked in" emails fire, relative to a
+                shift's scheduled start time.
               </p>
             </div>
             <div className="divide-y">
@@ -1248,8 +1408,9 @@ function SystemSettingsPage() {
                 <div className="flex-1">
                   <p className="text-sm font-medium">Missed-shift reminder</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Sent this many hours after a shift's scheduled start if still not clocked in — an
-                    earlier heads-up, separate from the shift being marked fully missed at its end.
+                    Sent this many hours after a shift's scheduled start if still not clocked in —
+                    an earlier heads-up, separate from the shift being marked fully missed at its
+                    end.
                   </p>
                 </div>
                 {missedShiftEditing ? (
@@ -1299,6 +1460,67 @@ function SystemSettingsPage() {
                 )}
               </div>
             </div>
+          </section>
+        </TabsContent>
+
+        <TabsContent value="backups">
+          <section className="rounded-xl border bg-card overflow-hidden mt-4">
+            <div className="px-5 py-4 border-b">
+              <h2 className="text-sm font-semibold">Database Backups</h2>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Status reported by the daily pg_dump cron on NRota-DB (runs at 9am UTC, rolling
+                3-day retention). This page only reads what it last reported — it can't trigger a
+                backup itself.
+              </p>
+            </div>
+            {backupLogLoading ? (
+              <p className="px-5 py-6 text-sm text-muted-foreground">Loading…</p>
+            ) : backupLog.length === 0 ? (
+              <p className="px-5 py-6 text-sm text-muted-foreground">
+                No backup activity recorded yet.
+              </p>
+            ) : (
+              <div className="divide-y">
+                {backupLog.map((row) => {
+                  const ageHours = (Date.now() - new Date(row.created_at).getTime()) / 3600000;
+                  const isStale = ageHours > 30; // 9am daily run + margin
+                  const failed = row.status !== "success";
+                  return (
+                    <div key={row.database} className="px-5 py-4 flex items-center gap-4">
+                      <span
+                        className={cn(
+                          "h-2 w-2 rounded-full shrink-0",
+                          failed ? "bg-destructive" : isStale ? "bg-amber-500" : "bg-emerald-500",
+                        )}
+                      />
+                      <div className="flex-1">
+                        <p className="text-sm font-medium">{row.database}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {failed
+                            ? `Last attempt failed${row.error ? ` — ${row.error}` : ""}`
+                            : isStale
+                              ? "Overdue — expected a fresher backup by now"
+                              : row.filename}
+                        </p>
+                      </div>
+                      <div className="text-right shrink-0">
+                        <p className="text-sm font-semibold tabular-nums">
+                          {new Date(row.created_at).toLocaleString("en-GB", {
+                            dateStyle: "medium",
+                            timeStyle: "short",
+                          })}
+                        </p>
+                        {row.size_bytes != null && (
+                          <p className="text-xs text-muted-foreground tabular-nums">
+                            {formatBytes(row.size_bytes)}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </section>
         </TabsContent>
       </Tabs>

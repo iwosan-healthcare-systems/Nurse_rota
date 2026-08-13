@@ -4,7 +4,7 @@ const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
 const { getNextPeriodDates, checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
-const { getSickEmergencyMaxDays } = require("../lib/leave-settings");
+const { getSickEmergencyMaxDays, getShiftSwitchMinNoticeHours } = require("../lib/leave-settings");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 function fmtDateRange(from, to) {
@@ -191,6 +191,25 @@ router.post(
         return res.status(400).json({
           error: `${type} leave can only be requested for up to ${maxDays} day(s) from the start date.`,
         });
+      }
+    }
+
+    // Shift switches need at least this many hours' notice before the switch
+    // date — admin-configurable, defaults to 0 (no restriction). Measured
+    // from now to the start of from_date in Africa/Lagos, not to a specific
+    // shift's clock-in time — the request only carries a date, not which
+    // shift (M/N) is being switched.
+    if (type === "Swap") {
+      const minNoticeHours = await getShiftSwitchMinNoticeHours();
+      if (minNoticeHours > 0) {
+        const switchDateStart = new Date(`${from_date}T00:00:00+01:00`);
+        const hoursUntilSwitch = (switchDateStart.getTime() - Date.now()) / 3600000;
+        if (hoursUntilSwitch < minNoticeHours) {
+          return res.status(422).json({
+            error: `Shift switch requests need at least ${minNoticeHours} hour(s) notice before the switch date.`,
+            code: "SWITCH_MIN_NOTICE_NOT_MET",
+          });
+        }
       }
     }
 

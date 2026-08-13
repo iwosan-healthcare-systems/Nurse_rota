@@ -167,9 +167,49 @@ router.post(
      VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1)) RETURNING *`,
       [nurse_id, shift, shift_date, ward || null, status || "draft", created_by || null],
     );
-    res.status(201).json(rows[0]);
+    await reapplyApprovedLeave(pool, [nurse_id], shift_date, shift_date);
+    const { rows: finalRows } = await pool.query("SELECT * FROM shift_assignments WHERE id = $1", [
+      rows[0].id,
+    ]);
+    res.status(201).json(finalRows[0] ?? rows[0]);
   }),
 );
+
+// Re-applies approved (non-Swap) leave over shift_assignments rows for the
+// given nurses/date range — corrects any cell that disagrees with an
+// approved leave request back to LEAVE, regardless of how that cell got
+// there. Shared by EVERY write path that can create or change a shift
+// value (upsertAssignments, the single-row POST/PATCH, and the bulk filter
+// PATCH below) specifically so this class of mismatch can't happen no
+// matter which route touched the cell — previously only the batch
+// upsert path had this, which is exactly how a leave/rota mismatch could
+// still occur via a single manual edit (see fix-missing-leave-flips.js,
+// now closed at the root instead of needing a periodic manual re-run).
+// `queryable` is either the pool or a transaction client — both expose .query.
+async function reapplyApprovedLeave(queryable, nurseIds, minDate, maxDate) {
+  if (!nurseIds.length || !minDate || !maxDate) return;
+  await queryable.query(
+    `UPDATE shift_assignments sa
+        SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
+            leave_type = (
+              SELECT lr.type FROM leave_requests lr
+              WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
+                AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+              LIMIT 1
+            )
+      WHERE sa.nurse_id = ANY($1)
+        AND sa.shift_date BETWEEN $2 AND $3
+        AND sa.shift != 'LEAVE'
+        AND EXISTS (
+          SELECT 1 FROM leave_requests lr
+          WHERE lr.nurse_id = sa.nurse_id
+            AND lr.status = 'Approved'
+            AND lr.type != 'Swap'
+            AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
+        )`,
+    [nurseIds, minDate, maxDate],
+  );
+}
 
 // Shared by both /upsert (normal draft editing, grant-checked) and
 // /new-staff-upsert (grant-free — see that route for why) — same upsert +
@@ -207,29 +247,7 @@ async function upsertAssignments(rows) {
       .map((r) => r.shift_date)
       .filter(Boolean)
       .sort();
-    const minDate = dates[0];
-    const maxDate = dates[dates.length - 1];
-    await client.query(
-      `UPDATE shift_assignments sa
-          SET pre_leave_shift = sa.shift, shift = 'LEAVE', updated_at = NOW(),
-              leave_type = (
-                SELECT lr.type FROM leave_requests lr
-                WHERE lr.nurse_id = sa.nurse_id AND lr.status = 'Approved' AND lr.type != 'Swap'
-                  AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
-                LIMIT 1
-              )
-        WHERE sa.nurse_id = ANY($1)
-          AND sa.shift_date BETWEEN $2 AND $3
-          AND sa.shift != 'LEAVE'
-          AND EXISTS (
-            SELECT 1 FROM leave_requests lr
-            WHERE lr.nurse_id = sa.nurse_id
-              AND lr.status = 'Approved'
-              AND lr.type != 'Swap'
-              AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
-          )`,
-      [nurseIds, minDate, maxDate],
-    );
+    await reapplyApprovedLeave(client, nurseIds, dates[0], dates[dates.length - 1]);
 
     await client.query("COMMIT");
   } catch (err) {
@@ -334,6 +352,16 @@ router.patch(
       values,
     );
     if (!rows[0]) return res.status(404).json({ error: "Assignment not found" });
+
+    if (fields.includes("shift") || fields.includes("shift_date")) {
+      const affectedDate = req.body.shift_date ?? existing.shift_date;
+      await reapplyApprovedLeave(pool, [existing.nurse_id], affectedDate, affectedDate);
+      const { rows: finalRows } = await pool.query(
+        "SELECT * FROM shift_assignments WHERE id = $1",
+        [req.params.id],
+      );
+      return res.json(finalRows[0] ?? rows[0]);
+    }
     res.json(rows[0]);
   }),
 );
@@ -592,6 +620,17 @@ router.patch(
 
     const where = "WHERE " + conditions.join(" AND ");
     await pool.query(`UPDATE shift_assignments SET ${sets.join(", ")} ${where}`, params);
+
+    // A manager bulk-editing shift values (not a status transition) can hit
+    // the same class of mismatch a single edit can — re-apply approved leave
+    // over whatever range this touched. Skipped for the self-service locum-
+    // accept exception too (harmless either way: that path only ever fires
+    // from an OFF cell, which can't coexist with approved leave — see the
+    // guard above requiring filterShift === "OFF" — approved leave already
+    // flips a cell to LEAVE regardless of status).
+    if (shift && nurse_ids && shift_date_from && shift_date_to) {
+      await reapplyApprovedLeave(pool, nurse_ids.split(","), shift_date_from, shift_date_to);
+    }
 
     // Publishing spends any edit-access grant that was open for this unit —
     // a grant that was live pre-publish (e.g. for finishing the original
