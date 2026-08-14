@@ -99,7 +99,7 @@ async function runAutoPublish({ simulateToday } = {}) {
 
     const { rowCount } = await pool.query(
       `UPDATE shift_assignments sa
-          SET status = 'published', updated_at = NOW()
+          SET status = 'published', updated_at = NOW(), updated_by_name = 'System (auto-published)'
         WHERE sa.nurse_id = ANY($1) AND sa.shift_date BETWEEN $2 AND $3
           AND sa.status = 'cno_approved' ${wardClause}`,
       params,

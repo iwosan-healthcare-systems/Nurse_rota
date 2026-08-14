@@ -154,7 +154,7 @@ router.post(
   "/",
   requireCapability("edit_shift_assignments", ["admin", "head_nurse"]),
   wrap(async (req, res) => {
-    const { nurse_id, shift, shift_date, ward, status, created_by } = req.body;
+    const { nurse_id, shift, shift_date, ward, status } = req.body;
     if (!nurse_id || !shift || !shift_date)
       return res.status(400).json({ error: "nurse_id, shift, shift_date required" });
 
@@ -162,10 +162,21 @@ router.post(
       return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
     }
 
+    // created_by/created_by_name come from the authenticated actor, not the
+    // request body — trusting a client-supplied value would let anyone
+    // attribute a cell to someone else.
     const { rows } = await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role)
-     VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1)) RETURNING *`,
-      [nurse_id, shift, shift_date, ward || null, status || "draft", created_by || null],
+      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, created_by_name, nurse_role)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT role FROM nurses WHERE id = $1)) RETURNING *`,
+      [
+        nurse_id,
+        shift,
+        shift_date,
+        ward || null,
+        status || "draft",
+        req.user?.userId ?? null,
+        req.user?.full_name ?? null,
+      ],
     );
     await reapplyApprovedLeave(pool, [nurse_id], shift_date, shift_date);
     const { rows: finalRows } = await pool.query("SELECT * FROM shift_assignments WHERE id = $1", [
@@ -215,24 +226,33 @@ async function reapplyApprovedLeave(queryable, nurseIds, minDate, maxDate) {
 // /new-staff-upsert (grant-free — see that route for why) — same upsert +
 // leave-reapply logic either way, they only differ in what's checked before
 // this runs.
-async function upsertAssignments(rows) {
+// `actor` is { id, name } of whoever triggered this — a real user for the
+// manual routes below, or a 'System (auto-generated)'-style label with a
+// null id for cron callers. created_by/created_by_name are only applied on
+// first insert (preserved on conflict); updated_by/updated_by_name are
+// stamped on every conflict, i.e. every re-generate/re-save of an existing
+// cell.
+async function upsertAssignments(rows, actor = { id: null, name: null }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
     for (const row of rows) {
       await client.query(
-        `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, nurse_role, pre_leave_shift, leave_type)
-       VALUES ($1, $2, $3, $4, $5, $6, (SELECT role FROM nurses WHERE id = $1), $7, $8)
+        `INSERT INTO shift_assignments
+           (nurse_id, shift, shift_date, ward, status, created_by, created_by_name, nurse_role, pre_leave_shift, leave_type)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT role FROM nurses WHERE id = $1), $8, $9)
        ON CONFLICT (nurse_id, shift_date)
        DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
-         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
+         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW(),
+         updated_by = $6, updated_by_name = $7`,
         [
           row.nurse_id,
           row.shift,
           row.shift_date,
           row.ward || null,
           row.status || "draft",
-          row.created_by || null,
+          actor.id,
+          actor.name,
           row.pre_leave_shift || null,
           row.leave_type || null,
         ],
@@ -276,7 +296,10 @@ router.post(
       return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
     }
 
-    await upsertAssignments(rows);
+    await upsertAssignments(rows, {
+      id: req.user?.userId ?? null,
+      name: req.user?.full_name ?? null,
+    });
     res.json({ success: true, count: rows.length });
   }),
 );
@@ -311,7 +334,10 @@ router.post(
       });
     }
 
-    await upsertAssignments(rows);
+    await upsertAssignments(rows, {
+      id: req.user?.userId ?? null,
+      name: req.user?.full_name ?? null,
+    });
     res.json({ success: true, count: rows.length });
   }),
 );
@@ -343,9 +369,13 @@ router.patch(
     }
 
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
-    sets.push("updated_at = NOW()");
+    sets.push(
+      `updated_by = $${fields.length + 1}`,
+      `updated_by_name = $${fields.length + 2}`,
+      "updated_at = NOW()",
+    );
     const values = fields.map((f) => req.body[f]);
-    values.push(req.params.id);
+    values.push(req.user?.userId ?? null, req.user?.full_name ?? null, req.params.id);
 
     const { rows } = await pool.query(
       `UPDATE shift_assignments SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
@@ -613,10 +643,13 @@ router.patch(
       sets.push(`ward = $${params.length + 1}`);
       params.push(newWard);
     }
-    sets.push("updated_at = NOW()");
 
-    if (sets.length < 2 || !conditions.length)
+    if (!sets.length || !conditions.length)
       return res.status(400).json({ error: "Filters and update fields required" });
+
+    sets.push(`updated_by = $${params.length + 1}`, `updated_by_name = $${params.length + 2}`);
+    params.push(req.user?.userId ?? null, req.user?.full_name ?? null);
+    sets.push("updated_at = NOW()");
 
     const where = "WHERE " + conditions.join(" AND ");
     await pool.query(`UPDATE shift_assignments SET ${sets.join(", ")} ${where}`, params);

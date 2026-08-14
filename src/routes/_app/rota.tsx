@@ -1210,7 +1210,7 @@ function RotaPage() {
 
       const rows = draft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
-        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+        .map((d) => ({ ...d, status: "draft" as const }));
 
       for (let i = 0; i < rows.length; i += 500) {
         await api.post("/shift-assignments/upsert", rows.slice(i, i + 500));
@@ -1445,7 +1445,7 @@ function RotaPage() {
 
       const toInsert = targetDraft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
-        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+        .map((d) => ({ ...d, status: "draft" as const }));
 
       for (let i = 0; i < toInsert.length; i += 500) {
         await api.post("/shift-assignments/new-staff-upsert", toInsert.slice(i, i + 500));
@@ -1587,7 +1587,7 @@ function RotaPage() {
 
       const toInsert = targetDraft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
-        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+        .map((d) => ({ ...d, status: "draft" as const }));
       for (let i = 0; i < toInsert.length; i += 500) {
         await api.post("/shift-assignments/new-staff-upsert", toInsert.slice(i, i + 500));
       }
@@ -1802,7 +1802,7 @@ function RotaPage() {
 
       const rows = draft
         .filter((d) => !publishedKeys.has(`${d.nurse_id}|${d.shift_date}`))
-        .map((d) => ({ ...d, created_by: user?.id ?? null, status: "draft" as const }));
+        .map((d) => ({ ...d, status: "draft" as const }));
       for (let i = 0; i < rows.length; i += 500) {
         await api.post("/shift-assignments/upsert", rows.slice(i, i + 500));
       }
@@ -1998,7 +1998,6 @@ function RotaPage() {
           shift_date: dateStr,
           shift,
           status: "draft",
-          created_by: user?.id ?? null,
         });
       } catch (e: unknown) {
         toast.error(e instanceof Error ? e.message : "Failed to add");

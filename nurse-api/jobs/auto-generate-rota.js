@@ -324,12 +324,21 @@ async function generateUnit({
   const rows = assignments.filter((a) => !publishedKeys.has(`${a.nurse_id}|${a.shift_date}`));
   for (const row of rows) {
     await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, pre_leave_shift, leave_type)
-       VALUES ($1, $2, $3, $4, 'draft', $5, $6)
+      `INSERT INTO shift_assignments
+         (nurse_id, shift, shift_date, ward, status, created_by_name, pre_leave_shift, leave_type)
+       VALUES ($1, $2, $3, $4, 'draft', 'System (auto-generated)', $5, $6)
        ON CONFLICT (nurse_id, shift_date)
        DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = 'draft',
-         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW()`,
-      [row.nurse_id, row.shift, row.shift_date, row.ward, row.pre_leave_shift || null, row.leave_type || null],
+         pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW(),
+         updated_by_name = 'System (auto-generated)'`,
+      [
+        row.nurse_id,
+        row.shift,
+        row.shift_date,
+        row.ward,
+        row.pre_leave_shift || null,
+        row.leave_type || null,
+      ],
     );
   }
 
