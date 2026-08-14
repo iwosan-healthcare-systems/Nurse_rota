@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { getRotaDeadlineSettings } = require("./rota-deadline-settings");
 
 // Mirrors leave-requests.js's facilityWideGroupSlug / shift-assignments.js's
 // roleGroupOf — kept as its own small copy here rather than a shared import,
@@ -81,21 +82,34 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
 }
 
 // Returns true when the most recent rota_transitions row for this unit+period
-// is a revert to draft (HR sent a submitted/cno_approved rota back), as
-// opposed to a draft that's freshly generated and never submitted. Used to
+// is a revert to draft (HR sent a submitted/cno_approved rota back) AND that
+// revert happened within the configurable revert_grace_days window — as
+// opposed to a draft that's freshly generated and never submitted, or one
+// that was reverted so long ago the grace period has since lapsed. Used to
 // tell the T-17 auto-submit sweep (jobs/auto-submit-draft.js) not to
 // immediately re-grab a rota HR just rejected, and to let the edit-access
 // request route (routes/rota-edit-requests.js) allow a fresh request for
-// that specific case even outside the normal T-19..T-17 window.
-async function wasRevertedToDraft({ facility, ward, roleGroup, periodStart }) {
+// that specific case even outside the normal T-19..T-17 window — both only
+// for the duration of the grace period, not indefinitely. Without the grace
+// bound, a unit nobody ever manually resubmitted after a revert would stay
+// exempt from auto-submit forever, regardless of how far past deadline it
+// gets — exactly the gap this closes.
+async function wasRevertedToDraft({ facility, ward, roleGroup, periodStart, simulateToday }) {
   const unitClause = ward ? "ward = $2" : "role_group = $2";
   const { rows } = await pool.query(
-    `SELECT event_type, status FROM rota_transitions
+    `SELECT event_type, status, transitioned_at FROM rota_transitions
       WHERE facility = $1 AND ${unitClause} AND period_start = $3
       ORDER BY transitioned_at DESC LIMIT 1`,
     [facility, ward || roleGroup, periodStart],
   );
-  return rows.length > 0 && rows[0].event_type === "revert" && rows[0].status === "draft";
+  if (!(rows.length > 0 && rows[0].event_type === "revert" && rows[0].status === "draft")) {
+    return false;
+  }
+  const { revert_grace_days } = await getRotaDeadlineSettings();
+  const now = simulateToday ? new Date(`${simulateToday}T12:00:00+01:00`) : new Date();
+  const graceEnd = new Date(rows[0].transitioned_at);
+  graceEnd.setDate(graceEnd.getDate() + revert_grace_days);
+  return now < graceEnd;
 }
 
 module.exports = { forceSubmitUnit, roleGroupOf, wasRevertedToDraft, resolveUnitNurseIds };

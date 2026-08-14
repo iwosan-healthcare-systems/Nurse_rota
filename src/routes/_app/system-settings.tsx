@@ -87,6 +87,7 @@ type RotaDeadlines = {
   generate_days: number;
   edit_close_days: number;
   publish_deadline_days: number;
+  revert_grace_days: number;
 };
 
 const DEFAULT_ROTA_DEADLINES: RotaDeadlines = {
@@ -94,6 +95,7 @@ const DEFAULT_ROTA_DEADLINES: RotaDeadlines = {
   generate_days: 19,
   edit_close_days: 17,
   publish_deadline_days: 14,
+  revert_grace_days: 2,
 };
 
 const ROTA_DEADLINE_FIELDS: {
@@ -177,7 +179,10 @@ function SystemSettingsPage() {
   const [tab, setTabState] = useState<SystemSettingsTab>(tabParam ?? "gps");
   function setTab(next: SystemSettingsTab) {
     setTabState(next);
-    navigate({ search: (prev: { tab?: SystemSettingsTab }) => ({ ...prev, tab: next }), replace: true });
+    navigate({
+      search: (prev: { tab?: SystemSettingsTab }) => ({ ...prev, tab: next }),
+      replace: true,
+    });
   }
 
   // GPS fence settings
@@ -369,6 +374,9 @@ function SystemSettingsPage() {
       d.publish_deadline_days < 1
     ) {
       return "All four values must be whole numbers, at least 1.";
+    }
+    if (!Number.isInteger(d.revert_grace_days) || d.revert_grace_days < 1) {
+      return "Revert grace period must be a whole number, at least 1.";
     }
     if (
       !(
@@ -1095,6 +1103,40 @@ function SystemSettingsPage() {
                   )}
                 </div>
               ))}
+              <div className="px-5 py-4 flex items-center gap-4 bg-muted/30">
+                <CalendarClock className="h-4 w-4 text-muted-foreground shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Revert grace period</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    When a CNO sends a rota back to draft, auto-submit leaves it alone for this many
+                    days to allow a fix and manual resubmit — then resumes and force-submits it
+                    as-is regardless. Counted from the revert itself, not from period start.
+                  </p>
+                </div>
+                {rotaDeadlinesEditing ? (
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={1}
+                      max={90}
+                      value={
+                        rotaDeadlinesDraft?.revert_grace_days ?? rotaDeadlines.revert_grace_days
+                      }
+                      onChange={(e) =>
+                        setRotaDeadlinesDraft((d) =>
+                          d ? { ...d, revert_grace_days: Number(e.target.value) } : d,
+                        )
+                      }
+                      className="w-20 h-8 px-2 rounded-md border text-sm text-right focus:outline-none focus:ring-2 focus:ring-ring"
+                    />
+                    <span className="text-xs text-muted-foreground">days</span>
+                  </div>
+                ) : (
+                  <span className="text-sm font-semibold tabular-nums">
+                    +{rotaDeadlines.revert_grace_days}d
+                  </span>
+                )}
+              </div>
             </div>
             {rotaDeadlinesEditing &&
               rotaDeadlinesDraft &&

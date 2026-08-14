@@ -94,13 +94,15 @@ async function runAutoSubmit({ simulateToday } = {}) {
     // HR already reviewed this unit and explicitly sent it back to draft —
     // don't silently re-submit the same as-is draft on the very next tick.
     // It now waits for the head_nurse to request edit access, fix it, and
-    // resubmit manually (see routes/rota-edit-requests.js's window exception).
+    // resubmit manually (see routes/rota-edit-requests.js's window exception)
+    // — but only for revert_grace_days; past that, auto-submit resumes.
     if (
       await wasRevertedToDraft({
         facility: row.facility,
         ward: row.ward,
         roleGroup,
         periodStart: period.periodStart,
+        simulateToday,
       })
     ) {
       continue;
@@ -162,6 +164,7 @@ async function runAutoSubmit({ simulateToday } = {}) {
         ward: grant.ward,
         roleGroup: grant.role_group,
         periodStart: grant.period_start,
+        simulateToday,
       });
       if (reverted) continue;
       if (grant.status === "Pending") {
