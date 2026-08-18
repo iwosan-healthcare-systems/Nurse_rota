@@ -354,17 +354,34 @@ router.post(
     const invites = Array.isArray(req.body) ? req.body : [req.body];
     if (!invites.length) return res.status(400).json({ error: "Invite data required" });
 
+    const deduped = [];
+    const seen = new Set();
+    for (const invite of invites) {
+      if (!invite?.locum_request_id || !invite?.nurse_id) continue;
+      const key = `${invite.locum_request_id}:${invite.nurse_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({
+        ...invite,
+        status: invite.status || "pending",
+      });
+    }
+
+    if (!deduped.length) return res.status(400).json({ error: "No valid invites to send" });
+
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       const results = [];
-      for (const invite of invites) {
+      for (const invite of deduped) {
         const { rows } = await client.query(
           `INSERT INTO locum_invites (locum_request_id, nurse_id, nurse_name, status)
-         VALUES ($1,$2,$3,$4) RETURNING *`,
-          [invite.locum_request_id, invite.nurse_id, invite.nurse_name, invite.status || "pending"],
+         VALUES ($1,$2,$3,$4)
+         ON CONFLICT (locum_request_id, nurse_id) DO NOTHING
+         RETURNING *`,
+          [invite.locum_request_id, invite.nurse_id, invite.nurse_name, invite.status],
         );
-        results.push(rows[0]);
+        if (rows[0]) results.push(rows[0]);
       }
       await client.query("COMMIT");
       res.status(201).json(results);

@@ -191,6 +191,9 @@ CREATE TABLE locum_invites (
   created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_locum_invites_request_nurse
+  ON locum_invites (locum_request_id, nurse_id);
+
 -- increment_nurse_hours function (called via API for atomic hour updates)
 CREATE OR REPLACE FUNCTION increment_nurse_hours(p_nurse_id UUID, p_hours NUMERIC)
 RETURNS void AS $$

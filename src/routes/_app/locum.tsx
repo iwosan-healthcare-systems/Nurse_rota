@@ -380,14 +380,15 @@ function LocumPage() {
   }
 
   async function handleSendInvites(req: LocumRequest, offNurses: OffNurse[]) {
-    if (!offNurses.length) {
+    const uniqueNurses = Array.from(new Map(offNurses.map((n) => [n.nurse_id, n])).values());
+    if (!uniqueNurses.length) {
       toast.error("No nurses are on OFF duty on this date for this facility.");
       return;
     }
 
     await api.post(
       "/locum/invites",
-      offNurses.map((n) => ({
+      uniqueNurses.map((n) => ({
         locum_request_id: req.id,
         nurse_id: n.nurse_id,
         nurse_name: n.nurse_name,
@@ -397,7 +398,7 @@ function LocumPage() {
 
     await api.patch(`/locum/requests/${req.id}`, { status: "invites_sent" });
 
-    const notifRows = offNurses
+    const notifRows = uniqueNurses
       .filter((n) => n.auth_user_id)
       .map((n) => ({
         user_id: n.auth_user_id!,
@@ -416,10 +417,10 @@ function LocumPage() {
 
     await logAudit(
       "Locum invites sent",
-      `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)} · ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}`,
+      `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)} · ${uniqueNurses.length} nurse${uniqueNurses.length !== 1 ? "s" : ""}`,
     );
     toast.success(
-      `Locum invites sent to ${offNurses.length} nurse${offNurses.length !== 1 ? "s" : ""}.`,
+      `Locum invites sent to ${uniqueNurses.length} nurse${uniqueNurses.length !== 1 ? "s" : ""}.`,
     );
     qc.invalidateQueries({ queryKey: ["locum-my"] });
     qc.invalidateQueries({ queryKey: ["locum-pending"] });
@@ -1845,11 +1846,15 @@ function SendInvitesModal({
         return n.role?.toLowerCase().startsWith(request.role_needed.toLowerCase()) ?? false;
       });
 
-      return eligible.map((n) => ({
-        nurse_id: n.id,
-        nurse_name: n.name,
-        auth_user_id: n.profile_id ?? null,
-      })) as OffNurse[];
+      const uniqueOffNurses = new Map<string, OffNurse>();
+      for (const n of eligible) {
+        uniqueOffNurses.set(n.id, {
+          nurse_id: n.id,
+          nurse_name: n.name,
+          auth_user_id: n.profile_id ?? null,
+        });
+      }
+      return [...uniqueOffNurses.values()];
     },
   });
 
