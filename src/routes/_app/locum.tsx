@@ -396,8 +396,6 @@ function LocumPage() {
       })),
     );
 
-    await api.patch(`/locum/requests/${req.id}`, { status: "invites_sent" });
-
     const notifRows = uniqueNurses
       .filter((n) => n.auth_user_id)
       .map((n) => ({

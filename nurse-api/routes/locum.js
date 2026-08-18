@@ -372,6 +372,21 @@ router.post(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+
+      const requestIds = [...new Set(deduped.map((invite) => invite.locum_request_id))];
+      for (const requestId of requestIds) {
+        const { rows: requestRows } = await client.query(
+          `UPDATE locum_requests
+           SET status = 'invites_sent', updated_at = NOW()
+           WHERE id = $1 AND status IN ('approved', 'invites_sent')
+           RETURNING *`,
+          [requestId],
+        );
+        if (!requestRows[0]) {
+          throw new Error(`Locum request ${requestId} is not in an invite-sending state`);
+        }
+      }
+
       const results = [];
       for (const invite of deduped) {
         const { rows } = await client.query(
