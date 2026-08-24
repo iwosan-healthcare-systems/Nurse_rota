@@ -457,7 +457,6 @@ function ReportsContent() {
   const [locumReqShiftFilter, setLocumReqShiftFilter] = useState<"all" | "M" | "N">("all");
   const [leaveRange, setLeaveRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [missedRange, setMissedRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
-  const [periodsRange, setPeriodsRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [archivePeriodFilter, setArchivePeriodFilter] = useState("");
   const [archiveStaffSearch, setArchiveStaffSearch] = useState("");
   const [archivePage, setArchivePage] = useState(1);
@@ -645,12 +644,9 @@ function ReportsContent() {
     return data;
   }, [scopedMissedLogs, missedRange]);
 
-  // Period summaries overlapping the selected range (a period counts if any part
-  // of it falls within [from, to], same overlap semantics as the leave filter above).
+  // Archive summaries can be narrowed by one complete rota period and staff.
   const filteredPeriodSummaries = useMemo(() => {
     let data = scopedPeriodSummaries;
-    if (periodsRange.from) data = data.filter((p) => p.period_end >= periodsRange.from);
-    if (periodsRange.to) data = data.filter((p) => p.period_start <= periodsRange.to);
     if (archivePeriodFilter) data = data.filter((p) => p.period_start === archivePeriodFilter);
     if (archiveStaffSearch.trim()) {
       const term = archiveStaffSearch.trim().toLowerCase();
@@ -662,7 +658,7 @@ function ReportsContent() {
       });
     }
     return data;
-  }, [scopedPeriodSummaries, periodsRange, archivePeriodFilter, archiveStaffSearch, nurses]);
+  }, [scopedPeriodSummaries, archivePeriodFilter, archiveStaffSearch, nurses]);
 
   const archivePeriods = useMemo(
     () =>
@@ -690,7 +686,6 @@ function ReportsContent() {
     locumReqShiftFilter,
     leaveRange,
     missedRange,
-    periodsRange,
     archivePeriodFilter,
     archiveStaffSearch,
   ]);
@@ -2924,7 +2919,6 @@ ${sections}
                 </option>
               ))}
             </select>
-            <DateRangeFilter value={periodsRange} onChange={setPeriodsRange} />
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <input
@@ -2956,7 +2950,7 @@ ${sections}
               />
             ) : (
               <div className="py-16 text-center text-sm text-muted-foreground">
-                No archived periods found for the selected date range.
+                No archived periods found for the selected period or staff search.
               </div>
             )
           ) : (

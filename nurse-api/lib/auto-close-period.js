@@ -42,8 +42,36 @@ async function closeCompletedPeriod() {
   if (!periodRows[0]) return { closed: false, period_start: null, period_end: null };
   const { period_start, period_end, archived_period_end } = periodRows[0];
   const alreadyArchived = !!archived_period_end;
+
+  // Repair logs created by older clients that used the trailing 28-day
+  // lookback. The assignment date is authoritative: every log in the closed
+  // window belongs to its period start, and the following window starts next.
+  const nextPeriodStart = new Date(period_end + "T00:00:00Z");
+  nextPeriodStart.setUTCDate(nextPeriodStart.getUTCDate() + 1);
+  const nextPeriodEnd = new Date(nextPeriodStart);
+  nextPeriodEnd.setUTCDate(nextPeriodEnd.getUTCDate() + 27);
+  const repaired = await pool.query(
+    `UPDATE shift_logs
+        SET period_start = CASE
+          WHEN shift_date BETWEEN $1::date AND $2::date THEN $1::date
+          ELSE $3::date
+        END
+      WHERE shift_date BETWEEN $1::date AND $4::date
+        AND period_start IS DISTINCT FROM CASE
+          WHEN shift_date BETWEEN $1::date AND $2::date THEN $1::date
+          ELSE $3::date
+        END`,
+    [
+      period_start,
+      period_end,
+      nextPeriodStart.toISOString().slice(0, 10),
+      nextPeriodEnd.toISOString().slice(0, 10),
+    ],
+  );
   if (archived_period_end === period_end) {
-    return { closed: false, period_start: null, period_end: null };
+    return repaired.rowCount
+      ? { closed: true, period_start, period_end }
+      : { closed: false, period_start: null, period_end: null };
   }
 
   const { rows: hoursRows } = await pool.query(

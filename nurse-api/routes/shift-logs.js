@@ -1,6 +1,7 @@
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
+const { periodStartForShiftDate } = require("../lib/period-start");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Must be before GET / to avoid conflict
@@ -110,7 +111,7 @@ router.post(
       hours_logged,
     } = req.body;
 
-    if (!shift_date || !shift_type || !started_at || !expected_end_at || !period_start)
+    if (!shift_date || !shift_type || !started_at || !expected_end_at)
       return res.status(400).json({ error: "Missing required fields" });
 
     // Admins/CNO can log shifts for any nurse; other users can only log their own
@@ -140,6 +141,8 @@ router.post(
     }
     if (!resolvedNurseId) return res.status(400).json({ error: "nurse_id required" });
 
+    const resolvedPeriodStart = await periodStartForShiftDate(shift_date, period_start);
+
     let rows;
     try {
       ({ rows } = await pool.query(
@@ -156,7 +159,7 @@ router.post(
           shift_type,
           started_at,
           expected_end_at,
-          period_start,
+          resolvedPeriodStart,
           is_late || false,
           late_minutes || null,
           late_reason || null,
