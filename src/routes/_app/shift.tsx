@@ -81,6 +81,13 @@ function todayYmd() {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function nextPeriodStart(periodEnd: string | undefined, fallback: string): string {
+  if (!periodEnd) return fallback;
+  const d = new Date(periodEnd.slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
 function fmtTime(iso: string) {
   return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
@@ -344,22 +351,17 @@ function ShiftPage() {
 
   // Running hours this period from shift_logs (live sum)
   const { data: currentPeriodLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["my-period-logs", nurseId],
+    queryKey: ["my-period-logs", nurseId, periodHours?.period_end],
     enabled: !!nurseId,
     refetchInterval: 60000,
     queryFn: async () => {
-      // Find the active period window start (earliest assignment in last 27 days)
+      // Start the live total after the latest archived period. This prevents
+      // the trailing 28-day fallback from including the period just closed.
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
 
-      const winRow = await api
-        .get<
-          { shift_date: string }[]
-        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
-        .catch(() => []);
-
-      const periodStart = winRow[0]?.shift_date ?? lb;
+      const periodStart = nextPeriodStart(periodHours?.period_end, lb);
       const periodEnd = new Date(periodStart.slice(0, 10) + "T00:00:00");
       periodEnd.setDate(periodEnd.getDate() + 27);
       const pe = `${periodEnd.getFullYear()}-${String(periodEnd.getMonth() + 1).padStart(2, "0")}-${String(periodEnd.getDate()).padStart(2, "0")}`;
@@ -428,7 +430,7 @@ function ShiftPage() {
           { shift_date: string }[]
         >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
         .catch(() => []);
-      const periodStart = winRows[0]?.shift_date ?? today;
+      const periodStart = nextPeriodStart(periodHours?.period_end, winRows[0]?.shift_date ?? today);
       await api
         .post("/shift-logs", {
           nurse_id: nurseId,
@@ -511,7 +513,7 @@ function ShiftPage() {
       const winRows = await api.get<{ shift_date: string }[]>(
         `/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`,
       );
-      const periodStart = winRows[0]?.shift_date ?? today;
+      const periodStart = nextPeriodStart(periodHours?.period_end, winRows[0]?.shift_date ?? today);
 
       const recordedLate = (lateMins ?? 0) > 0;
 
@@ -1170,10 +1172,29 @@ function AllNursesShiftView() {
     queryFn: () => api.get<NurseRow[]>("/nurses"),
   });
 
-  const { data: logs = [] } = useQuery<AllShiftLog[]>({
-    queryKey: ["all-shift-logs-current"],
+  const { data: latestPeriod } = useQuery<PeriodHours | null>({
+    queryKey: ["all-latest-period-hours"],
     refetchInterval: 60000,
-    queryFn: () => api.get<AllShiftLog[]>(`/shift-logs?from=${lbStr}`),
+    queryFn: async () => {
+      const rows = await api
+        .get<PeriodHours[]>("/nurse-period-hours?limit=1")
+        .catch(() => []);
+      return rows[0] ?? null;
+    },
+  });
+
+  const currentPeriodStart = latestPeriod?.period_end
+    ? (() => {
+        const d = new Date(latestPeriod.period_end.slice(0, 10) + "T00:00:00");
+        d.setDate(d.getDate() + 1);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      })()
+    : lbStr;
+
+  const { data: logs = [] } = useQuery<AllShiftLog[]>({
+    queryKey: ["all-shift-logs-current", currentPeriodStart],
+    refetchInterval: 60000,
+    queryFn: () => api.get<AllShiftLog[]>(`/shift-logs?from=${currentPeriodStart}`),
   });
 
   // Build per-nurse totals
@@ -1215,12 +1236,9 @@ function AllNursesShiftView() {
   const { data: periodAssignments = [] } = useQuery<
     { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
   >({
-    queryKey: ["all-period-assignments", lbStr],
+    queryKey: ["all-period-assignments", currentPeriodStart],
     queryFn: async () => {
-      const winRow = await api
-        .get<{ shift_date: string }[]>(`/shift-assignments?from=${lbStr}&status=published&limit=1`)
-        .catch(() => []);
-      const periodStart = winRow[0]?.shift_date ?? lbStr;
+      const periodStart = currentPeriodStart;
       const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
       periodEndDate.setDate(periodEndDate.getDate() + 27);
       const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, "0")}-${String(periodEndDate.getDate()).padStart(2, "0")}`;

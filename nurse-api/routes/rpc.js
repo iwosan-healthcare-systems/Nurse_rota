@@ -2,6 +2,7 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
+const { closeCompletedPeriod } = require("../lib/auto-close-period");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Mirrors lib/force-submit-rota.js's roleGroupOf, plus the "naday" bucket
@@ -275,116 +276,7 @@ router.post(
   "/auto-close-period",
   requireCapability("manage_rota_periods", ["admin", "cno"]),
   wrap(async (req, res) => {
-    // Use 28-day bucket logic so a running Period 2 doesn't hide completed
-    // Period 1.  Dates are bucketed from the earliest ever published date,
-    // giving stable 0-27, 28-55, … windows regardless of how many periods
-    // are currently running.
-    const { rows: periodRows } = await pool.query(`
-      WITH dates AS (
-        SELECT DISTINCT shift_date::date AS d
-        FROM shift_assignments
-        WHERE status = 'published'
-      ),
-      anchored AS (
-        SELECT d, MIN(d) OVER () AS anchor FROM dates
-      ),
-      bucketed AS (
-        SELECT d, (d - anchor) / 28 AS bucket FROM anchored
-      ),
-      periods AS (
-        SELECT
-          MIN(d) AS period_start,
-          MAX(d) AS period_end
-        FROM bucketed
-        GROUP BY bucket
-      )
-      SELECT period_start::text, period_end::text
-      FROM periods
-      WHERE period_end < CURRENT_DATE
-        AND NOT EXISTS (
-          SELECT 1 FROM nurse_period_hours nph
-          WHERE nph.period_start = periods.period_start
-          LIMIT 1
-        )
-      ORDER BY period_end DESC
-      LIMIT 1
-    `);
-
-    if (!periodRows[0]) {
-      return res.json({ closed: false, period_start: null, period_end: null });
-    }
-
-    const { period_start, period_end } = periodRows[0];
-
-    // Aggregate completed shift hours per nurse for this period.
-    const { rows: hoursRows } = await pool.query(
-      `
-      SELECT
-        nurse_id,
-        ROUND(SUM(hours_logged) * 100) / 100            AS total_hours,
-        COUNT(*) FILTER (WHERE hours_logged > 0 AND NOT is_missed)::int AS total_shifts
-      FROM shift_logs
-      WHERE shift_date BETWEEN $1 AND $2
-        AND is_locum       = false
-        AND is_swap        = false
-        AND ended_at       IS NOT NULL
-        AND hours_logged   IS NOT NULL
-      GROUP BY nurse_id
-      HAVING SUM(hours_logged) > 0
-    `,
-      [period_start, period_end],
-    );
-
-    if (!hoursRows.length) {
-      return res.json({ closed: false, period_start: null, period_end: null });
-    }
-
-    const client = await pool.connect();
-    try {
-      await client.query("BEGIN");
-
-      for (const row of hoursRows) {
-        await client.query(
-          `
-          INSERT INTO nurse_period_hours
-            (nurse_id, period_start, period_end, total_hours, total_shifts)
-          VALUES ($1, $2, $3, $4, $5)
-          ON CONFLICT (nurse_id, period_start) DO UPDATE
-          SET period_end   = EXCLUDED.period_end,
-              total_hours  = EXCLUDED.total_hours,
-              total_shifts = EXCLUDED.total_shifts
-        `,
-          [
-            row.nurse_id,
-            period_start,
-            period_end,
-            parseFloat(row.total_hours),
-            parseInt(row.total_shifts, 10),
-          ],
-        );
-      }
-
-      const nurseIds = hoursRows.map((r) => r.nurse_id);
-      await client.query(
-        "UPDATE nurses SET hours_this_month = 0, updated_at = NOW() WHERE id = ANY($1)",
-        [nurseIds],
-      );
-
-      await client.query(
-        `INSERT INTO audit_logs (actor_name, action, target)
-         VALUES ('system', 'Period auto-closed', $1)`,
-        [`${period_start} → ${period_end} · ${hoursRows.length} nurse(s) archived`],
-      );
-
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-
-    res.json({ closed: true, period_start, period_end });
+    res.json(await closeCompletedPeriod());
   }),
 );
 

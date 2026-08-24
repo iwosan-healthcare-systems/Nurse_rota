@@ -98,6 +98,7 @@ app.use((err, req, res, next) => {
 });
 
 const { startAutoEndJob } = require("./jobs/auto-end-shifts");
+const { startAutoClosePeriodJob } = require("./jobs/auto-close-period");
 const { startAutoDeclineJob } = require("./jobs/auto-decline-requests");
 const { startAutoExpireLocumJob } = require("./jobs/auto-expire-locum-requests");
 const { startAutoGenerateJob } = require("./jobs/auto-generate-rota");
@@ -129,6 +130,7 @@ app.listen(PORT, () => {
   // connection-count blowup.
   if (!process.env.NODE_APP_INSTANCE || process.env.NODE_APP_INSTANCE === "0") {
     startAutoEndJob();
+    startAutoClosePeriodJob();
     startAutoDeclineJob();
     startAutoExpireLocumJob();
     startAutoGenerateJob();

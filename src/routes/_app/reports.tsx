@@ -982,34 +982,16 @@ function ReportsContent() {
       return;
     setClosingPeriod(true);
     try {
-      const today = todayYmd();
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-
-      const winArr = await api.get<{ shift_date: string }[]>(
-        `/shift-assignments?from=${lb}&limit=1`,
+      const result = await api.post<{
+        closed: boolean;
+        period_start: string | null;
+        period_end: string | null;
+      }>("/rpc/auto-close-period");
+      toast.success(
+        result.closed
+          ? `Period closed — ${fmtDate(result.period_start!)} to ${fmtDate(result.period_end!)}; hours archived and counters reset`
+          : "No completed period is ready to close yet",
       );
-      const periodStart = winArr[0]?.shift_date ?? lb;
-
-      const upsertRows = nurses
-        .map((nurse) => ({
-          nurse_id: nurse.id,
-          period_start: periodStart,
-          period_end: today,
-          total_hours: nurseHoursMap.get(nurse.id) ?? 0,
-          total_shifts: nurseShiftCountMap.get(nurse.id) ?? 0,
-        }))
-        .filter((r) => r.total_hours > 0);
-
-      if (upsertRows.length) {
-        await api.post("/nurse-period-hours/upsert", upsertRows);
-        await api.patch("/nurses/reset-hours", {
-          nurse_ids: upsertRows.map((r) => r.nurse_id),
-        });
-      }
-
-      toast.success("Period closed — hours archived and counters reset");
       qc.invalidateQueries({ queryKey: ["nurses"] });
       qc.invalidateQueries({ queryKey: ["period-hours-all"] });
       qc.invalidateQueries({ queryKey: ["shift-logs-current"] });
@@ -1695,11 +1677,11 @@ ${sections}
             type="button"
             disabled={closingPeriod}
             onClick={closePeriod}
-            title="Periods close automatically at 8 am the day after the last shift. Use this only to close manually."
+            title="Periods close automatically after the final shift window. Use this to check for a completed period now."
             className="inline-flex items-center gap-2 h-10 px-4 rounded-md border bg-card text-sm hover:bg-amber-50 hover:border-amber-400 hover:text-amber-700 disabled:opacity-50"
           >
             <Archive className="h-4 w-4" />
-            {closingPeriod ? "Closing…" : "Force Close Period"}
+            {closingPeriod ? "Checking…" : "Close Completed Period"}
           </button>
         }
       />
