@@ -23,8 +23,10 @@ async function closeCompletedPeriod() {
       FROM bucketed
       GROUP BY bucket
     )
-    SELECT period_start::text, period_end::text
+        SELECT periods.period_start::text, periods.period_end::text,
+          MAX(nph.period_end)::text AS archived_period_end
     FROM periods
+        LEFT JOIN nurse_period_hours nph ON nph.period_start = periods.period_start
     WHERE close_at <= NOW()
       AND NOT EXISTS (
         SELECT 1 FROM shift_logs sl
@@ -32,16 +34,17 @@ async function closeCompletedPeriod() {
           AND sl.ended_at IS NULL
           AND sl.expected_end_at <= NOW()
       )
-      AND NOT EXISTS (
-        SELECT 1 FROM nurse_period_hours nph
-        WHERE nph.period_start = periods.period_start
-      )
+    GROUP BY periods.period_start, periods.period_end, periods.close_at
     ORDER BY period_end DESC
     LIMIT 1
   `);
 
   if (!periodRows[0]) return { closed: false, period_start: null, period_end: null };
-  const { period_start, period_end } = periodRows[0];
+  const { period_start, period_end, archived_period_end } = periodRows[0];
+  const alreadyArchived = !!archived_period_end;
+  if (archived_period_end === period_end) {
+    return { closed: false, period_start: null, period_end: null };
+  }
 
   const { rows: hoursRows } = await pool.query(
     `
@@ -78,10 +81,12 @@ async function closeCompletedPeriod() {
       );
     }
 
-    await client.query(
-      "UPDATE nurses SET hours_this_month = 0, updated_at = NOW() WHERE id = ANY($1)",
-      [hoursRows.map((row) => row.nurse_id)],
-    );
+    if (!alreadyArchived) {
+      await client.query(
+        "UPDATE nurses SET hours_this_month = 0, updated_at = NOW() WHERE id = ANY($1)",
+        [hoursRows.map((row) => row.nurse_id)],
+      );
+    }
     await client.query(
       `INSERT INTO audit_logs (actor_name, action, target)
        VALUES ('system', 'Period auto-closed', $1)`,

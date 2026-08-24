@@ -22,6 +22,7 @@ import {
   Stethoscope,
   ArrowLeftRight,
   ChevronRight,
+  Search,
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Progress } from "@/components/ui/progress";
@@ -91,6 +92,7 @@ function fmtHoursLog(decHours: number): string {
 
 type Nurse = {
   id: string;
+  employee_id?: string | null;
   name: string;
   role: string;
   ward: string | null;
@@ -456,6 +458,10 @@ function ReportsContent() {
   const [leaveRange, setLeaveRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [missedRange, setMissedRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [periodsRange, setPeriodsRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
+  const [archivePeriodFilter, setArchivePeriodFilter] = useState("");
+  const [archiveStaffSearch, setArchiveStaffSearch] = useState("");
+  const [archivePage, setArchivePage] = useState(1);
+  const [archivePageSize, setArchivePageSize] = useState(20);
   const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
@@ -645,8 +651,26 @@ function ReportsContent() {
     let data = scopedPeriodSummaries;
     if (periodsRange.from) data = data.filter((p) => p.period_end >= periodsRange.from);
     if (periodsRange.to) data = data.filter((p) => p.period_start <= periodsRange.to);
+    if (archivePeriodFilter) data = data.filter((p) => p.period_start === archivePeriodFilter);
+    if (archiveStaffSearch.trim()) {
+      const term = archiveStaffSearch.trim().toLowerCase();
+      data = data.filter((p) => {
+        const nurse = nurses.find((n) => n.id === p.nurse_id);
+        return [nurse?.name, nurse?.role, nurse?.facility, nurse?.employee_id]
+          .filter(Boolean)
+          .some((value) => String(value).toLowerCase().includes(term));
+      });
+    }
     return data;
-  }, [scopedPeriodSummaries, periodsRange]);
+  }, [scopedPeriodSummaries, periodsRange, archivePeriodFilter, archiveStaffSearch, nurses]);
+
+  const archivePeriods = useMemo(
+    () =>
+      [...new Map(scopedPeriodSummaries.map((p) => [p.period_start, p])).values()].sort((a, b) =>
+        b.period_start.localeCompare(a.period_start),
+      ),
+    [scopedPeriodSummaries],
+  );
 
   // Reset all paginated tables to page 1 when the facility filter or date filters change
   useEffect(() => {
@@ -656,6 +680,7 @@ function ReportsContent() {
     setLeavePage(1);
     setSwitchPage(1);
     setMissedPage(1);
+    setArchivePage(1);
   }, [
     reportFacility,
     hoursRange,
@@ -665,6 +690,9 @@ function ReportsContent() {
     locumReqShiftFilter,
     leaveRange,
     missedRange,
+    periodsRange,
+    archivePeriodFilter,
+    archiveStaffSearch,
   ]);
 
   // Paginate the four heavy tables (hooks must be unconditional)
@@ -697,6 +725,11 @@ function ReportsContent() {
     filteredMissedLogs,
     missedPageSize,
     missedPage,
+  );
+  const { pageItems: pagedPeriodSummaries, totalPages: archiveTotalPages } = usePagination(
+    filteredPeriodSummaries,
+    archivePageSize,
+    archivePage,
   );
 
   // Build per-nurse hours for current period (locum and swap-coverage excluded from regular total).
@@ -2878,7 +2911,31 @@ ${sections}
       {tab === "periods" && (
         <div className="space-y-4">
           <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={archivePeriodFilter}
+              onChange={(e) => setArchivePeriodFilter(e.target.value)}
+              aria-label="Filter archive by period"
+              className="h-9 rounded-md border bg-card px-3 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+            >
+              <option value="">All archived periods</option>
+              {archivePeriods.map((period) => (
+                <option key={period.period_start} value={period.period_start}>
+                  {fmtDate(period.period_start)} → {fmtDate(period.period_end)}
+                </option>
+              ))}
+            </select>
             <DateRangeFilter value={periodsRange} onChange={setPeriodsRange} />
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <input
+                type="search"
+                value={archiveStaffSearch}
+                onChange={(e) => setArchiveStaffSearch(e.target.value)}
+                placeholder="Search staff"
+                aria-label="Search archived staff"
+                className="h-9 w-52 rounded-md border bg-card pl-8 pr-3 text-sm focus:outline-none focus:ring-1 focus:ring-primary"
+              />
+            </div>
             <div className="ml-auto">
               <button
                 type="button"
@@ -2915,7 +2972,7 @@ ${sections}
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredPeriodSummaries.map((p) => {
+                    {pagedPeriodSummaries.map((p) => {
                       const nurse = nurses.find((n) => n.id === p.nurse_id);
                       return (
                         <tr
@@ -2936,6 +2993,14 @@ ${sections}
                   </tbody>
                 </table>
               </div>
+              <Pagination
+                page={archivePage}
+                totalPages={archiveTotalPages}
+                pageSize={archivePageSize}
+                totalItems={filteredPeriodSummaries.length}
+                onPage={setArchivePage}
+                onPageSize={setArchivePageSize}
+              />
             </div>
           )}
         </div>

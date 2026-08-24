@@ -161,6 +161,17 @@ function RotaPage() {
     queryFn: () => api.get("/rpc/workflow-status"),
   });
 
+  const { data: latestArchivedPeriod } = useQuery<{ period_end: string } | null>({
+    queryKey: ["rota-latest-archived-period"],
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const rows = await api
+        .get<{ period_end: string }[]>("/nurse-period-hours?limit=1")
+        .catch(() => []);
+      return rows[0] ?? null;
+    },
+  });
+
   const fmtWD = (d?: string) =>
     d
       ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
@@ -338,11 +349,27 @@ function RotaPage() {
   // Scoped to the effective facility (via nurse IDs) so admin users switching between
   // facilities with different schedule start dates see the correct period anchor.
   const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
-    queryKey: ["schedule-window-start", activeRole, effectiveFacility],
+    queryKey: [
+      "schedule-window-start",
+      activeRole,
+      effectiveFacility,
+      latestArchivedPeriod?.period_end,
+    ],
     queryFn: async () => {
       const today = new Date();
       today.setHours(0, 0, 0, 0);
       const todayStr = ymd(today);
+
+      // Once a period is archived, its next calendar day is the current
+      // rota period. Do not let the trailing lookback rediscover the closed
+      // period's final shift date (especially an overnight shift).
+      if (latestArchivedPeriod?.period_end) {
+        const nextStart = new Date(
+          latestArchivedPeriod.period_end.slice(0, 10) + "T00:00:00",
+        );
+        nextStart.setDate(nextStart.getDate() + 1);
+        return ymd(nextStart);
+      }
 
       const lookback = new Date(today);
       lookback.setDate(lookback.getDate() - 27);
@@ -377,6 +404,7 @@ function RotaPage() {
       if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
       return (future[0]?.shift_date ?? todayStr).slice(0, 10);
     },
+    enabled: latestArchivedPeriod !== undefined,
   });
 
   // ── Computed dates ────────────────────────────────────────────────────────
@@ -1230,12 +1258,25 @@ function RotaPage() {
       //    Generating a future period (startOffset=1) must not shift the anchor forward —
       //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
       if (startOffset === 0) {
-        qc.setQueryData(["schedule-window-start", activeRole, genForm.facility], genForm.startDate);
+        qc.setQueryData(
+          [
+            "schedule-window-start",
+            activeRole,
+            genForm.facility,
+            latestArchivedPeriod?.period_end,
+          ],
+          genForm.startDate,
+        );
         // Also update the display's anchor key — it's keyed by effectiveFacility (the toolbar
         // filter), which can differ from genForm.facility when the admin has no facility selected.
         // Without this the anchor stays stale and the prefetched data lands in the wrong cache key.
         qc.setQueryData(
-          ["schedule-window-start", activeRole, effectiveFacility],
+          [
+            "schedule-window-start",
+            activeRole,
+            effectiveFacility,
+            latestArchivedPeriod?.period_end,
+          ],
           genForm.startDate,
         );
       }
