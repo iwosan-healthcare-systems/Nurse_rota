@@ -366,8 +366,11 @@ function LeavePage() {
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
     try {
       if (status === "Approved" && l.nurse_id) {
-        const publishedShifts = await api.get<{ id: string; shift_date: string; shift: string }[]>(
-          `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published&shift_in=M,N,MWC,NC`,
+        const publishedRows = await api.get<
+          { id: string; shift_date: string; shift: string }[]
+        >(`/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published`);
+        const publishedShifts = publishedRows.filter((s) =>
+          ["M", "N", "MWC", "NC"].includes(s.shift),
         );
 
         if (publishedShifts.length > 0) {
@@ -375,7 +378,7 @@ function LeavePage() {
           // PATCH transaction below — no need to PATCH each assignment individually here.
 
           const existingLogs = await api.get<{ shift_date: string }[]>(
-            `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date.slice(0, 10)).join(",")}`,
+            `/shift-logs?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}`,
           );
           const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date.slice(0, 10)));
           const today = todayYmd();
