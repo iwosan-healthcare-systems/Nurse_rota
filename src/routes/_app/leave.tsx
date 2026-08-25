@@ -366,9 +366,11 @@ function LeavePage() {
   async function reviewLeave(l: LeaveRow, status: "Approved" | "Rejected", note = "") {
     try {
       if (status === "Approved" && l.nurse_id) {
-        const publishedRows = await api.get<
-          { id: string; shift_date: string; shift: string }[]
-        >(`/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published`);
+        const publishedRows = await api
+          .get<
+            { id: string; shift_date: string; shift: string }[]
+          >(`/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published`)
+          .catch(() => []);
         const publishedShifts = publishedRows.filter((s) =>
           ["M", "N", "MWC", "NC"].includes(s.shift),
         );
@@ -377,9 +379,11 @@ function LeavePage() {
           // The backend flips shifts to LEAVE atomically inside the leave-request
           // PATCH transaction below — no need to PATCH each assignment individually here.
 
-          const existingLogs = await api.get<{ shift_date: string }[]>(
-            `/shift-logs?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}`,
-          );
+          const existingLogs = await api
+            .get<
+              { shift_date: string }[]
+            >(`/shift-logs?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}`)
+            .catch(() => []);
           const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date.slice(0, 10)));
           const today = todayYmd();
           const shiftsToCredit = publishedShifts.filter(
