@@ -92,9 +92,10 @@ app.use((err, req, res, next) => {
   console.error(err.stack);
   // Never leak raw PostgreSQL error details (table names, constraint names, enum values).
   const isPgError = err.code && /^\d{5}$/.test(String(err.code));
-  res
-    .status(500)
-    .json({ error: isPgError ? "Database error" : err.message || "Internal server error" });
+  res.status(500).json({
+    error: isPgError ? "Database error" : err.message || "Internal server error",
+    ...(isPgError ? { error_code: String(err.code) } : {}),
+  });
 });
 
 const { startAutoEndJob } = require("./jobs/auto-end-shifts");

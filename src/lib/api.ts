@@ -40,7 +40,9 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 
   if (!res.ok) {
     const payload = (await res.json().catch(() => ({}))) as Record<string, unknown>;
-    const msg = (payload.error as string) ?? `HTTP ${res.status}`;
+    const errorCode = payload.error_code as string | undefined;
+    const msg =
+      ((payload.error as string) ?? `HTTP ${res.status}`) + (errorCode ? ` (${errorCode})` : "");
     if (res.status === 401) clearToken();
     throw new ApiError(msg, res.status, payload.code as string | undefined, payload);
   }
