@@ -131,7 +131,10 @@ router.post(
         if (byName[0]) {
           nurseRows = byName;
           pool
-            .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id])
+            .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [
+              req.user.userId,
+              byName[0].id,
+            ])
             .catch(() => {});
         }
       }
@@ -210,6 +213,7 @@ router.post(
       await client.query("BEGIN");
       const results = [];
       for (const row of rows) {
+        const resolvedPeriodStart = await periodStartForShiftDate(row.shift_date, row.period_start);
         const { rows: inserted } = await client.query(
           `INSERT INTO shift_logs
          (nurse_id, shift_date, shift_type, started_at, expected_end_at, period_start,
@@ -223,7 +227,7 @@ router.post(
             row.shift_type || "LEAVE",
             row.started_at,
             row.expected_end_at,
-            row.period_start,
+            resolvedPeriodStart,
             row.is_leave || true,
             row.leave_request_id || null,
             row.hours_logged || null,
