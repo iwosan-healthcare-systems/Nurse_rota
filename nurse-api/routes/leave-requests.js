@@ -568,16 +568,33 @@ router.patch(
         leave.to_date &&
         leave.type !== "Swap"
       ) {
+        const { rows: leaveTypeColumn } = await client.query(
+          `SELECT 1 FROM information_schema.columns
+            WHERE table_schema = current_schema()
+              AND table_name = 'shift_assignments'
+              AND column_name = 'leave_type'`,
+        );
+        const hasLeaveTypeColumn = leaveTypeColumn.length > 0;
         const { rows: flippedRows } = await client.query(
-          `UPDATE shift_assignments
-              SET pre_leave_shift = shift,
-                  shift = 'LEAVE',
-                  leave_type = $4
-            WHERE nurse_id = $1
-              AND shift_date BETWEEN $2 AND $3
-              AND shift != 'LEAVE'
-            RETURNING shift_date, pre_leave_shift`,
-          [leave.nurse_id, leave.from_date, leave.to_date, leave.type],
+          hasLeaveTypeColumn
+            ? `UPDATE shift_assignments
+                SET pre_leave_shift = shift,
+                    shift = 'LEAVE',
+                    leave_type = $4
+              WHERE nurse_id = $1
+                AND shift_date BETWEEN $2 AND $3
+                AND shift != 'LEAVE'
+              RETURNING shift_date, pre_leave_shift`
+            : `UPDATE shift_assignments
+                SET pre_leave_shift = shift,
+                    shift = 'LEAVE'
+              WHERE nurse_id = $1
+                AND shift_date BETWEEN $2 AND $3
+                AND shift != 'LEAVE'
+              RETURNING shift_date, pre_leave_shift`,
+          hasLeaveTypeColumn
+            ? [leave.nurse_id, leave.from_date, leave.to_date, leave.type]
+            : [leave.nurse_id, leave.from_date, leave.to_date],
         );
         const preShiftByDate = new Map(
           flippedRows.map((r) => [r.shift_date.toString().slice(0, 10), r.pre_leave_shift]),
@@ -824,6 +841,14 @@ router.patch(
       res.json(leave);
     } catch (err) {
       await client.query("ROLLBACK");
+      console.error("[leave-approval] transaction failed:", {
+        leaveId: req.params.id,
+        code: err.code,
+        constraint: err.constraint,
+        column: err.column,
+        detail: err.detail,
+        message: err.message,
+      });
       throw err;
     } finally {
       client.release();
