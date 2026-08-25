@@ -38,7 +38,7 @@ router.get(
     }
     if (req.query.shift_date_in) {
       const dates = req.query.shift_date_in.split(",");
-      conditions.push(`shift_date = ANY($${params.length + 1})`);
+      conditions.push(`shift_date = ANY($${params.length + 1}::date[])`);
       params.push(dates);
     }
     if (req.query.from) {

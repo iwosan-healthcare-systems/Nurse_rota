@@ -375,7 +375,7 @@ function LeavePage() {
           // PATCH transaction below — no need to PATCH each assignment individually here.
 
           const existingLogs = await api.get<{ shift_date: string }[]>(
-            `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
+            `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date.slice(0, 10)).join(",")}`,
           );
           const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date.slice(0, 10)));
           const today = todayYmd();
