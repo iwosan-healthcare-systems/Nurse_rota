@@ -97,7 +97,7 @@ router.get(
     }
     if (req.query.status_in) {
       const statuses = req.query.status_in.split(",");
-      conditions.push(`status = ANY($${params.length + 1})`);
+      conditions.push(`status = ANY($${params.length + 1}::assignment_status[])`);
       params.push(statuses);
     }
     if (req.query.neq_status) {
@@ -127,7 +127,7 @@ router.get(
     }
     if (req.query.shift_in) {
       const shifts = req.query.shift_in.split(",");
-      conditions.push(`shift = ANY($${params.length + 1})`);
+      conditions.push(`shift = ANY($${params.length + 1}::shift_code[])`);
       params.push(shifts);
     }
     if (req.query.ward_in) {
