@@ -640,7 +640,7 @@ router.patch(
                 period_start, hours_logged, is_leave, is_missed, is_locum, is_swap, leave_request_id)
              VALUES (
                $1, $2::date,
-               CASE WHEN $3 THEN 'N' ELSE 'M' END,
+               (CASE WHEN $3 THEN 'N' ELSE 'M' END)::shift_code,
                CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
                     ELSE ($2::date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos' END,
                CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
