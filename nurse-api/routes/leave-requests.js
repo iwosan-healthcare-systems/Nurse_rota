@@ -4,6 +4,7 @@ const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
 const { getNextPeriodDates, checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
+const { periodStartForShiftDate } = require("../lib/period-start");
 const { getSickEmergencyMaxDays, getShiftSwitchMinNoticeHours } = require("../lib/leave-settings");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -629,15 +630,18 @@ router.patch(
                     ELSE ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' END,
                CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
                     ELSE ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' END,
-               COALESCE(
-                 (SELECT MIN(s2.shift_date) FROM shift_assignments s2
-                   WHERE s2.status = 'published' AND s2.shift_date BETWEEN $2::date - 27 AND $2::date),
-                 $2::date
-               ),
+               $6::date,
                $4, true, false, false, false, $5
              )
              RETURNING hours_logged`,
-            [leave.nurse_id, dateKey, isNight, remaining, leave.id],
+            [
+              leave.nurse_id,
+              dateKey,
+              isNight,
+              remaining,
+              leave.id,
+              await periodStartForShiftDate(dateKey, dateKey),
+            ],
           );
           creditsToApply.push({ hours: Number(creditRows[0].hours_logged) });
         }

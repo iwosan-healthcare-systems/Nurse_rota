@@ -377,11 +377,11 @@ function LeavePage() {
           const existingLogs = await api.get<{ shift_date: string }[]>(
             `/shift-logs?nurse_id=${l.nurse_id}&shift_date_in=${publishedShifts.map((s) => s.shift_date).join(",")}`,
           );
-          const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date));
+          const alreadyLogged = new Set(existingLogs.map((e) => e.shift_date.slice(0, 10)));
           const today = todayYmd();
           const shiftsToCredit = publishedShifts.filter(
             (s) =>
-              !alreadyLogged.has(s.shift_date) &&
+              !alreadyLogged.has(s.shift_date.slice(0, 10)) &&
               (s.shift === "M" || s.shift === "N" || s.shift === "MWC" || s.shift === "NC") &&
               s.shift_date <= today,
           );
