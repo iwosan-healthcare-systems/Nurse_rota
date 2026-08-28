@@ -149,7 +149,8 @@ function OwnEntitlements({
               <span className="text-base font-normal text-muted-foreground">left</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {e.used} of {e.cap} day(s) used {e.period === "month" ? "this month" : "this leave year"}
+              {e.used} of {e.cap} day(s) used{" "}
+              {e.period === "month" ? "this month" : "this leave year"}
             </p>
             {e.exhausted && (
               <p className="text-xs font-medium text-rose-700 dark:text-rose-400 mt-2 flex items-center gap-1">
@@ -235,10 +236,10 @@ function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
       </div>
 
       <p className="text-xs text-muted-foreground mb-4">
-        Annual, Study Leave, Compassionate Leave, and Maternity reset each leave year (1 April to
-        31 March). Sick leave resets every calendar month. Pending requests count toward usage the
-        same as Approved ones. Use the pencil icon to credit leave taken before this system existed
-        — it's tracked separately from real requests and always shown as its own number.
+        Annual, Study Leave, Compassionate Leave, and Maternity reset each leave year (1 April to 31
+        March). Sick leave resets every calendar month. Pending requests count toward usage the same
+        as Approved ones. Use the pencil icon to credit leave taken before this system existed —
+        it's tracked separately from real requests and always shown as its own number.
       </p>
 
       <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
@@ -440,7 +441,9 @@ function AdjustEntitlementModal({
               required
             />
             {period === "year" && (
-              <p className="text-xs text-muted-foreground mt-1">Leave year runs from 1 April to 31 March.</p>
+              <p className="text-xs text-muted-foreground mt-1">
+                Leave year runs from 1 April to 31 March.
+              </p>
             )}
           </div>
         </div>
