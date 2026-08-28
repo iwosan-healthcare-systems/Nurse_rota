@@ -349,9 +349,20 @@ function ShiftPage() {
     },
   });
 
+  const { data: latestArchivedPeriod } = useQuery<PeriodHours | null>({
+    queryKey: ["latest-archived-period-hours"],
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const arr = await api
+        .get<PeriodHours[]>("/nurse-period-hours?limit=1")
+        .catch(() => []);
+      return arr[0] ?? null;
+    },
+  });
+
   // Running hours this period from shift_logs (live sum)
   const { data: currentPeriodLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["my-period-logs", nurseId, periodHours?.period_end],
+    queryKey: ["my-period-logs", nurseId, latestArchivedPeriod?.period_end],
     enabled: !!nurseId,
     refetchInterval: 60000,
     queryFn: async () => {
@@ -361,7 +372,7 @@ function ShiftPage() {
       lookback.setDate(lookback.getDate() - 27);
       const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
 
-      const periodStart = nextPeriodStart(periodHours?.period_end, lb);
+      const periodStart = nextPeriodStart(latestArchivedPeriod?.period_end, lb);
       const periodEnd = new Date(periodStart.slice(0, 10) + "T00:00:00");
       periodEnd.setDate(periodEnd.getDate() + 27);
       const pe = `${periodEnd.getFullYear()}-${String(periodEnd.getMonth() + 1).padStart(2, "0")}-${String(periodEnd.getDate()).padStart(2, "0")}`;
@@ -369,7 +380,7 @@ function ShiftPage() {
       return api
         .get<
           ShiftLog[]
-        >(`/shift-logs?nurse_id=${nurseId}&is_locum=false&from=${periodStart}&to=${pe}`)
+        >(`/shift-logs?nurse_id=${nurseId}&is_locum=false&period_start=${periodStart}&from=${periodStart}&to=${pe}`)
         .catch(() => []);
     },
   });
