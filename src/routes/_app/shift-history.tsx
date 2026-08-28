@@ -79,9 +79,7 @@ function ShiftHistoryPage() {
   });
 
   const totalHours = logs.reduce((s, l) => s + (l.hours_logged ?? 0), 0);
-  const leaveHours = logs
-    .filter((l) => l.is_leave)
-    .reduce((s, l) => s + (l.hours_logged ?? 0), 0);
+  const leaveHours = logs.filter((l) => l.is_leave).reduce((s, l) => s + (l.hours_logged ?? 0), 0);
 
   const { pageItems, totalPages } = usePagination(logs, pageSize, page);
 
@@ -162,7 +160,7 @@ function ShiftHistoryPage() {
                           <ArrowLeftRight className="h-2.5 w-2.5" /> Additional Shift
                         </span>
                       )}
-                      {log.late_reason === "Missed shift" ? (
+                      {log.is_missed ? (
                         <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-red-600 bg-red-50 border border-red-200 px-1.5 py-0.5 rounded-full">
                           <AlertTriangle className="h-2.5 w-2.5" />
                           Missed
@@ -175,20 +173,20 @@ function ShiftHistoryPage() {
                       ) : null}
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {log.late_reason === "Missed shift"
+                      {log.is_missed
                         ? "Not started"
                         : `${fmtTime(log.started_at)} → ${log.ended_at ? fmtTime(log.ended_at) : "in progress"}`}
                     </p>
                     {log.is_swap && log.swap_note && (
                       <p className="text-xs text-sky-700 mt-0.5 italic">{log.swap_note}</p>
                     )}
-                    {log.is_late && log.late_reason && log.late_reason !== "Missed shift" && (
+                    {log.is_late && !log.is_missed && log.late_reason && (
                       <p className="text-xs text-amber-700 mt-0.5 italic">{log.late_reason}</p>
                     )}
                   </div>
                 </div>
                 <div className="text-right shrink-0">
-                  {log.late_reason === "Missed shift" ? (
+                  {log.is_missed ? (
                     <span className="text-red-500 text-xs font-medium">0h logged</span>
                   ) : log.hours_logged != null ? (
                     <span className="font-semibold">{fmtHours(Number(log.hours_logged))}</span>

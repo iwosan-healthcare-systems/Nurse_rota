@@ -298,7 +298,7 @@ function NurseDashboard() {
         : lb;
       const periodEnd = addDaysToYmd(periodStart, 27);
       return api.get<ShiftLog[]>(
-        `/shift-logs?nurse_id=${nurseId}&period_start=${periodStart}&from=${periodStart}&to=${periodEnd}&hours_not_null=true`,
+        `/shift-logs?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&hours_not_null=true`,
       );
     },
   });
