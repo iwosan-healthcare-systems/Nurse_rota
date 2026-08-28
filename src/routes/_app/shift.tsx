@@ -353,9 +353,7 @@ function ShiftPage() {
     queryKey: ["latest-archived-period-hours"],
     refetchInterval: 60000,
     queryFn: async () => {
-      const arr = await api
-        .get<PeriodHours[]>("/nurse-period-hours?limit=1")
-        .catch(() => []);
+      const arr = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
       return arr[0] ?? null;
     },
   });
@@ -1187,9 +1185,7 @@ function AllNursesShiftView() {
     queryKey: ["all-latest-period-hours"],
     refetchInterval: 60000,
     queryFn: async () => {
-      const rows = await api
-        .get<PeriodHours[]>("/nurse-period-hours?limit=1")
-        .catch(() => []);
+      const rows = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
       return rows[0] ?? null;
     },
   });
