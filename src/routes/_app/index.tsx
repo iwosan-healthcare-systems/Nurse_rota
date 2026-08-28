@@ -430,9 +430,12 @@ function NurseDashboard() {
   );
   const targetHours = scheduledHours || Number(nurseRecord?.target_hours ?? 180);
   const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
-  const completedShiftCount = regularLogs.filter(
-    (l) => l.hours_logged !== null && !l.is_missed,
-  ).length;
+  const completedShiftKeys = new Set(
+    regularLogs
+      .filter((l) => l.hours_logged !== null && !l.is_missed)
+      .map((l) => `${l.shift_date.slice(0, 10)}|${l.shift_type}`),
+  );
+  const completedShiftCount = completedShiftKeys.size;
   const missedShiftCount = regularLogs.filter((l) => l.is_missed).length;
 
   const shiftLabel: Record<string, string> = {
