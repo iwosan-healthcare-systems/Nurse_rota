@@ -142,14 +142,14 @@ function OwnEntitlements({
           <div key={t} className={`rounded-xl border p-5 shadow-soft ${cls}`}>
             <p className="text-sm font-semibold">{t}</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Resets {e.period === "month" ? "every calendar month" : "every calendar year (Jan 1)"}
+              Resets {e.period === "month" ? "every calendar month" : "each leave year (Apr 1)"}
             </p>
             <p className="text-3xl font-bold mt-3 tabular-nums">
               {e.remaining}{" "}
               <span className="text-base font-normal text-muted-foreground">left</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {e.used} of {e.cap} day(s) used {e.period === "month" ? "this month" : "this year"}
+              {e.used} of {e.cap} day(s) used {e.period === "month" ? "this month" : "this leave year"}
             </p>
             {e.exhausted && (
               <p className="text-xs font-medium text-rose-700 dark:text-rose-400 mt-2 flex items-center gap-1">
@@ -235,10 +235,10 @@ function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
       </div>
 
       <p className="text-xs text-muted-foreground mb-4">
-        Annual, Study Leave, Compassionate Leave, and Maternity reset every calendar year (Jan 1).
-        Sick leave resets every calendar month. Pending requests count toward usage the same as
-        Approved ones. Use the pencil icon to credit leave taken before this system existed — it's
-        tracked separately from real requests and always shown as its own number.
+        Annual, Study Leave, Compassionate Leave, and Maternity reset each leave year (1 April to
+        31 March). Sick leave resets every calendar month. Pending requests count toward usage the
+        same as Approved ones. Use the pencil icon to credit leave taken before this system existed
+        — it's tracked separately from real requests and always shown as its own number.
       </p>
 
       <div className="bg-card border rounded-xl shadow-soft overflow-hidden">
@@ -300,7 +300,7 @@ function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
                           <div className="inline-flex items-center gap-1.5">
                             <span
                               className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums ${cls}`}
-                              title={`${e.usedFromRequests} day(s) from system requests + ${e.usedFromAdjustments} manually adjusted = ${e.used} of ${e.cap} used ${e.period === "month" ? "this month" : "this year"}`}
+                              title={`${e.usedFromRequests} day(s) from system requests + ${e.usedFromAdjustments} manually adjusted = ${e.used} of ${e.cap} used ${e.period === "month" ? "this month" : "this leave year"}`}
                             >
                               {e.used}/{e.cap}
                             </span>
@@ -366,7 +366,9 @@ function AdjustEntitlementModal({
 }) {
   const now = new Date();
   const [days, setDays] = useState("");
-  const [year, setYear] = useState(now.getFullYear());
+  const [year, setYear] = useState(
+    now.getMonth() + 1 >= 4 ? now.getFullYear() : now.getFullYear() - 1,
+  );
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -429,7 +431,7 @@ function AdjustEntitlementModal({
             />
           </div>
           <div>
-            <label className="text-sm font-medium block mb-1">Year</label>
+            <label className="text-sm font-medium block mb-1">Leave year start</label>
             <input
               type="number"
               value={year}
@@ -437,6 +439,9 @@ function AdjustEntitlementModal({
               className="w-full h-9 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
               required
             />
+            {period === "year" && (
+              <p className="text-xs text-muted-foreground mt-1">Leave year runs from 1 April to 31 March.</p>
+            )}
           </div>
         </div>
         {period === "month" && (
@@ -484,7 +489,7 @@ function AdjustEntitlementModal({
                     <span className="text-muted-foreground">
                       {a.period_month
                         ? `${new Date(2000, a.period_month - 1, 1).toLocaleDateString("en-GB", { month: "short" })} ${a.period_year}`
-                        : a.period_year}
+                        : `${a.period_year}/${String(a.period_year + 1).slice(-2)}`}
                     </span>
                   </div>
                   <p className="text-muted-foreground mt-0.5">{a.reason}</p>
