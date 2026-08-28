@@ -20,7 +20,11 @@ const {
 // shows. Falls through to "nurse" (plain ward nurse) when nothing else matches.
 const ROLE_GROUPS = [
   { key: "matron", label: "Matron", test: isMatron },
-  { key: "coverage_nurse", label: "Coverage Nurse (Head Nurse) (Day & Normal)", test: isGlobalHead },
+  {
+    key: "coverage_nurse",
+    label: "Coverage Nurse (Head Nurse) (Day & Normal)",
+    test: isGlobalHead,
+  },
   {
     key: "surgical_nurse",
     label: "Surgical Nurse (Day & Normal)",
@@ -38,8 +42,8 @@ function roleGroupKey(role) {
   return "nurse";
 }
 
-// Per-type leave entitlement caps. "year" resets every calendar year
-// (Jan 1 - Dec 31, same for every staff member); "month" resets every
+// Per-type leave entitlement caps. "year" resets every leave year
+// (Apr 1 - Mar 31, same for every staff member); "month" resets every
 // calendar month. Types not listed here (Emergency, Public Holiday, Leave
 // of Absence, Swap) have no cap at all — untracked, always allowed.
 // These are the SYSTEM DEFAULTS — an individual or job-role override in
@@ -78,7 +82,16 @@ function currentWindow(period) {
       month,
     };
   }
-  return { start: ymd(new Date(year, 0, 1)), end: ymd(new Date(year, 11, 31)), year, month: null };
+  // The leave year starts on 1 April and ends on 31 March. Store the year in
+  // which that leave year starts so adjustments and maternity checks share
+  // the same key across the whole entitlement system.
+  const leaveYear = month >= 4 ? year : year - 1;
+  return {
+    start: ymd(new Date(leaveYear, 3, 1)),
+    end: ymd(new Date(leaveYear + 1, 2, 31)),
+    year: leaveYear,
+    month: null,
+  };
 }
 
 function daysBetweenInclusive(fromStr, toStr) {
@@ -86,15 +99,17 @@ function daysBetweenInclusive(fromStr, toStr) {
 }
 
 // Once a nurse has a Pending or Approved Maternity leave request starting in
-// a given calendar year, they can't also request Annual leave anywhere in
-// that same year. Checked against the YEAR OF from_date directly from the
-// string (not Date parsing, which is timezone-sensitive around year
-// boundaries) — matches the `type` string, never the request being decided.
+// a given leave year, they can't also request Annual leave anywhere in that
+// same leave year. The leave year starts in April and is keyed by its start
+// year (e.g. Apr 2025-Mar 2026 is leave year 2025).
 async function isAnnualBlockedByMaternity(nurseId, year) {
   const { rows } = await pool.query(
     `SELECT id FROM leave_requests
       WHERE nurse_id = $1 AND type = 'Maternity' AND status IN ('Pending','Approved')
-        AND EXTRACT(YEAR FROM from_date) = $2
+        AND (
+          EXTRACT(YEAR FROM from_date) -
+          CASE WHEN EXTRACT(MONTH FROM from_date) < 4 THEN 1 ELSE 0 END
+        ) = $2
       LIMIT 1`,
     [nurseId, year],
   );
@@ -141,7 +156,8 @@ async function effectiveCapsForNurses(nurses) {
   const out = {};
   for (const n of nurses) {
     out[n.id] = {};
-    for (const type of Object.keys(LEAVE_ENTITLEMENTS)) out[n.id][type] = LEAVE_ENTITLEMENTS[type].days;
+    for (const type of Object.keys(LEAVE_ENTITLEMENTS))
+      out[n.id][type] = LEAVE_ENTITLEMENTS[type].days;
   }
   if (nurses.length === 0) return out;
 
@@ -357,7 +373,16 @@ async function createAdjustment({
        (nurse_id, type, days, period_year, period_month, reason, created_by, created_by_name)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      RETURNING *`,
-    [nurseId, type, days, periodYear, periodMonth ?? null, reason, createdBy ?? null, createdByName ?? null],
+    [
+      nurseId,
+      type,
+      days,
+      periodYear,
+      periodMonth ?? null,
+      reason,
+      createdBy ?? null,
+      createdByName ?? null,
+    ],
   );
   return rows[0];
 }

@@ -108,6 +108,13 @@ type NurseRecord = {
   target_hours: number;
 };
 
+type PeriodHours = {
+  period_start: string;
+  period_end: string;
+  total_hours: number;
+  total_shifts: number;
+};
+
 // Roles that are facility-wide: no ward is managed on the Staff page for them.
 // Mirrors isNoWardRole in staff.tsx (coverage/head nurses incl. the Day
 // variant, porters). Interns are excluded — they DO get a ward via rotation.
@@ -269,14 +276,30 @@ function NurseDashboard() {
     refetchInterval: 60000,
   });
 
+  const { data: latestArchivedPeriod } = useQuery<PeriodHours | null>({
+    queryKey: ["dashboard-latest-archived-period"],
+    enabled: !!nurseId,
+    refetchInterval: 60000,
+    queryFn: async () => {
+      const rows = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
+      return rows[0] ?? null;
+    },
+  });
+
   const { data: periodLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["my-period-logs-dash", nurseId],
+    queryKey: ["my-period-logs-dash", nurseId, latestArchivedPeriod?.period_end],
     enabled: !!nurseId,
     queryFn: () => {
       const lookback = new Date();
       lookback.setDate(lookback.getDate() - 27);
       const lb = ymd(lookback);
-      return api.get<ShiftLog[]>(`/shift-logs?nurse_id=${nurseId}&from=${lb}&hours_not_null=true`);
+      const periodStart = latestArchivedPeriod
+        ? addDaysToYmd(latestArchivedPeriod.period_end, 1)
+        : lb;
+      const periodEnd = addDaysToYmd(periodStart, 27);
+      return api.get<ShiftLog[]>(
+        `/shift-logs?nurse_id=${nurseId}&period_start=${periodStart}&from=${periodStart}&to=${periodEnd}&hours_not_null=true`,
+      );
     },
   });
 
@@ -289,7 +312,7 @@ function NurseDashboard() {
     periodEnd: string;
     rows: { shift: string; pre_leave_shift: string | null }[];
   }>({
-    queryKey: ["my-period-assignments-dash", nurseId],
+    queryKey: ["my-period-assignments-dash", nurseId, latestArchivedPeriod?.period_end],
     enabled: !!nurseId,
     queryFn: async () => {
       const lookback = new Date();
@@ -300,7 +323,9 @@ function NurseDashboard() {
           { shift_date: string }[]
         >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
         .catch(() => []);
-      const periodStart = winRow[0]?.shift_date ?? lb;
+      const periodStart = latestArchivedPeriod
+        ? addDaysToYmd(latestArchivedPeriod.period_end, 1)
+        : (winRow[0]?.shift_date ?? lb);
       const periodEnd = addDaysToYmd(periodStart, 27);
       const rows = await api
         .get<
