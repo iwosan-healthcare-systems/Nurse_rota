@@ -65,6 +65,18 @@ function ymd(d) {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+function leaveYearForDate(dateValue) {
+  if (dateValue instanceof Date) {
+    const year = dateValue.getFullYear();
+    const month = dateValue.getMonth() + 1;
+    return month >= 4 ? year : year - 1;
+  }
+  const [yearStr, monthStr] = String(dateValue).slice(0, 10).split("-");
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  return month >= 4 ? year : year - 1;
+}
+
 // The current tracking window for a period type, as of right now (Lagos
 // wall-clock date — matches how "today" is computed elsewhere in this file's
 // caller, leave-requests.js). `month` is 1-12; only meaningful when
@@ -102,16 +114,21 @@ function daysBetweenInclusive(fromStr, toStr) {
 // a given leave year, they can't also request Annual leave anywhere in that
 // same leave year. The leave year starts in April and is keyed by its start
 // year (e.g. Apr 2025-Mar 2026 is leave year 2025).
-async function isAnnualBlockedByMaternity(nurseId, year) {
-  const { rows } = await pool.query(
+async function isAnnualBlockedByMaternity(nurseId, year, opts = {}) {
+  const queryable = opts.queryable ?? pool;
+  const params = [nurseId, year];
+  const excludeClause = opts.excludeRequestId ? `AND id <> $${params.length + 1}` : "";
+  if (opts.excludeRequestId) params.push(opts.excludeRequestId);
+  const { rows } = await queryable.query(
     `SELECT id FROM leave_requests
       WHERE nurse_id = $1 AND type = 'Maternity' AND status IN ('Pending','Approved')
         AND (
           EXTRACT(YEAR FROM from_date) -
           CASE WHEN EXTRACT(MONTH FROM from_date) < 4 THEN 1 ELSE 0 END
         ) = $2
+        ${excludeClause}
       LIMIT 1`,
-    [nurseId, year],
+    params,
   );
   return rows.length > 0;
 }
@@ -123,7 +140,10 @@ async function annualBlockedByMaternityForNurses(nurseIds, year) {
   const { rows } = await pool.query(
     `SELECT DISTINCT nurse_id FROM leave_requests
       WHERE nurse_id = ANY($1) AND type = 'Maternity' AND status IN ('Pending','Approved')
-        AND EXTRACT(YEAR FROM from_date) = $2`,
+        AND (
+          EXTRACT(YEAR FROM from_date) -
+          CASE WHEN EXTRACT(MONTH FROM from_date) < 4 THEN 1 ELSE 0 END
+        ) = $2`,
     [nurseIds, year],
   );
   return new Set(rows.map((r) => r.nurse_id));
@@ -459,6 +479,7 @@ module.exports = {
   getEntitlementUsageForNurses,
   wouldExceedEntitlement,
   isAnnualBlockedByMaternity,
+  leaveYearForDate,
   createAdjustment,
   getAdjustmentHistory,
   getOverrides,

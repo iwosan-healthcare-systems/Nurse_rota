@@ -157,7 +157,7 @@ type EntitlementInfo = {
   exhausted: boolean;
   // Set on "Annual" when it's hidden not because the day cap is used up, but
   // because this nurse has a Pending/Approved Maternity leave request this
-  // year — Annual is blocked for the rest of that year either way.
+  // leave year — Annual is blocked for the rest of that leave year either way.
   blockedReason?: "maternity" | null;
   period: "year" | "month";
   windowStart: string;
@@ -2169,8 +2169,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               <>
                 {maternityBlocked.length > 0 && (
                   <p className="text-xs text-rose-600 dark:text-rose-400 mt-1">
-                    {maternityBlocked.join(", ")} hidden — an active Maternity leave request this
-                    year blocks Annual leave until next year.
+                    {maternityBlocked.join(", ")} hidden — a pending or approved Maternity leave
+                    request this leave year blocks Annual leave until next leave year.
                   </p>
                 )}
                 {capExhausted.length > 0 && (

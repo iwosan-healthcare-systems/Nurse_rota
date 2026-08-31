@@ -2,7 +2,11 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
-const { wouldExceedEntitlement, isAnnualBlockedByMaternity } = require("../lib/leave-entitlements");
+const {
+  wouldExceedEntitlement,
+  isAnnualBlockedByMaternity,
+  leaveYearForDate,
+} = require("../lib/leave-entitlements");
 const { getNextPeriodDates, checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
 const { periodStartForShiftDate } = require("../lib/period-start");
 const { getSickEmergencyMaxDays, getShiftSwitchMinNoticeHours } = require("../lib/leave-settings");
@@ -259,13 +263,13 @@ router.post(
         });
       }
 
-      // A nurse with a Pending/Approved Maternity leave request this year
-      // can't also take Annual leave for the rest of that same year.
+      // A nurse with a Pending/Approved Maternity leave request in this leave
+      // year can't also take Annual leave for the rest of that leave year.
       if (type === "Annual") {
-        const blocked = await isAnnualBlockedByMaternity(nurse_id, Number(from_date.slice(0, 4)));
+        const blocked = await isAnnualBlockedByMaternity(nurse_id, leaveYearForDate(from_date));
         if (blocked) {
           return res.status(422).json({
-            error: `${nurse_name} has an active Maternity leave request this year — Annual leave can't be requested until next year.`,
+            error: `${nurse_name} has a pending or approved Maternity leave request in this leave year - Annual leave can't be requested until next leave year.`,
             code: "ANNUAL_BLOCKED_BY_MATERNITY",
           });
         }
@@ -529,6 +533,7 @@ router.patch(
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
 
+    const updates = Object.fromEntries(fields.map((f) => [f, req.body[f]]));
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
     const values = fields.map((f) => req.body[f]);
     values.push(req.params.id);
@@ -538,6 +543,39 @@ router.patch(
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+
+      const { rows: currentRows } = await client.query(
+        "SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE",
+        [req.params.id],
+      );
+      const current = currentRows[0];
+      if (!current) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Leave request not found" });
+      }
+
+      const nextType = updates.type ?? current.type;
+      const nextStatus = updates.status ?? current.status;
+      const nextFromDate = updates.from_date ?? current.from_date;
+      if (
+        nextType === "Annual" &&
+        ["Pending", "Approved"].includes(nextStatus) &&
+        current.nurse_id &&
+        !userRoles.includes("admin")
+      ) {
+        const blocked = await isAnnualBlockedByMaternity(
+          current.nurse_id,
+          leaveYearForDate(nextFromDate),
+          { queryable: client, excludeRequestId: current.id },
+        );
+        if (blocked) {
+          await client.query("ROLLBACK");
+          return res.status(422).json({
+            error: `${current.nurse_name} has a pending or approved Maternity leave request in this leave year - Annual leave can't be requested until next leave year.`,
+            code: "ANNUAL_BLOCKED_BY_MATERNITY",
+          });
+        }
+      }
 
       const { rows } = await client.query(
         `UPDATE leave_requests SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
