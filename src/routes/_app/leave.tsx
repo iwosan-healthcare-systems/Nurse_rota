@@ -1,6 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -184,6 +184,28 @@ function addDaysLeaveYmd(dateStr: string, n: number) {
 function todayYmd() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+async function refreshLeavePageData(
+  qc: QueryClient,
+  options: { includeAssignments?: boolean } = {},
+) {
+  const tasks = [
+    qc.invalidateQueries({ queryKey: ["leave"], refetchType: "active" }),
+    qc.invalidateQueries({ queryKey: ["leave-entitlements"], refetchType: "active" }),
+    qc.invalidateQueries({ queryKey: ["leave-entitlements-all"], refetchType: "active" }),
+  ];
+
+  if (options.includeAssignments) {
+    tasks.push(
+      qc.invalidateQueries({ queryKey: ["assignments"], refetchType: "active" }),
+      qc.invalidateQueries({ queryKey: ["my-assignment"], refetchType: "active" }),
+      qc.invalidateQueries({ queryKey: ["my-today-assignment"], refetchType: "active" }),
+      qc.invalidateQueries({ queryKey: ["my-upcoming"], refetchType: "active" }),
+    );
+  }
+
+  await Promise.all(tasks);
 }
 
 function LeavePage() {
@@ -456,8 +478,7 @@ function LeavePage() {
               ])
               .catch(() => {});
           }
-          qc.invalidateQueries({ queryKey: ["leave"] });
-          qc.invalidateQueries({ queryKey: ["assignments"] });
+          await refreshLeavePageData(qc, { includeAssignments: true });
           return;
         }
       }
@@ -490,16 +511,9 @@ function LeavePage() {
           ])
           .catch(() => {});
       }
-      qc.invalidateQueries({ queryKey: ["leave"] });
-      // When approved, the backend now flips shift_assignments to LEAVE.
-      // Invalidate all caches that show shift data so the nurse's dashboard
-      // and shift page reflect the change without a manual refresh.
-      if (status === "Approved") {
-        qc.invalidateQueries({ queryKey: ["assignments"] });
-        qc.invalidateQueries({ queryKey: ["my-assignment"] });
-        qc.invalidateQueries({ queryKey: ["my-today-assignment"] });
-        qc.invalidateQueries({ queryKey: ["my-upcoming"] });
-      }
+      // When approved, the backend now flips shift_assignments to LEAVE, so
+      // assignment-backed views need to refetch along with the request list.
+      await refreshLeavePageData(qc, { includeAssignments: status === "Approved" });
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to update leave request");
     }
@@ -665,7 +679,7 @@ function LeavePage() {
             .catch(() => {});
         }
       }
-      qc.invalidateQueries({ queryKey: ["leave"] });
+      await refreshLeavePageData(qc, { includeAssignments: status === "Approved" });
     } catch {
       toast.error("Failed to update switch request");
     }
@@ -999,8 +1013,7 @@ function LeaveTable({
         `${revertIsFullRange ? "Reverted" : "Partially reverted"} approved leave for ${reverting.nurse_name} (${revertRange.from} – ${revertRange.to}): ${revertReason.trim()}`,
         reverting.from_date,
       );
-      qc.invalidateQueries({ queryKey: ["leave"] });
-      qc.invalidateQueries({ queryKey: ["assignments"] });
+      await refreshLeavePageData(qc, { includeAssignments: true });
       setReverting(null);
       setRevertReason("");
     } catch (err) {
@@ -1608,7 +1621,7 @@ function EditLeaveModal({ row, onClose }: { row: LeaveRow; onClose: () => void }
     try {
       await api.patch(`/leave-requests/${row.id}`, { type, from_date: from, to_date: to });
       toast.success("Leave request updated");
-      qc.invalidateQueries({ queryKey: ["leave-requests"] });
+      await refreshLeavePageData(qc);
       onClose();
     } catch (err: any) {
       toast.error(err?.message ?? "Failed to update leave request");
@@ -1943,7 +1956,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       });
       toast.success("Request submitted");
       logAudit("Submitted leave request", targetNurseName);
-      qc.invalidateQueries({ queryKey: ["leave"] });
+      await refreshLeavePageData(qc);
       onClose();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to submit request");
@@ -2543,7 +2556,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       });
       toast.success("Shift switch request submitted for approval");
       logAudit(`Shift switch request submitted: ${nurseA?.name} ↔ ${nurseB?.name}`, date);
-      qc.invalidateQueries({ queryKey: ["leave"] });
+      await refreshLeavePageData(qc);
       onClose();
     } catch {
       toast.error("Failed to submit shift switch request");
