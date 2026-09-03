@@ -30,6 +30,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { usePasswordMinLength } from "@/lib/use-password-min-length";
+import { SHIFT_TIMES, type ShiftCode } from "@/lib/auto-schedule";
 import * as ExcelJS from "exceljs";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
@@ -149,6 +150,35 @@ function formatWards(wards: string[]): string | null {
   return f.length ? f.join("|") : null;
 }
 
+function ymd(d: Date) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function addDaysYmd(dateStr: string, days: number) {
+  const d = new Date(dateStr.slice(0, 10) + "T00:00:00");
+  d.setDate(d.getDate() + days);
+  return ymd(d);
+}
+
+type StaffAssignment = {
+  nurse_id: string;
+  shift: ShiftCode;
+  shift_date: string;
+  pre_leave_shift?: ShiftCode | null;
+};
+
+function assignedHoursForShift(shift: ShiftCode | null | undefined) {
+  if (shift === "M" || shift === "MWC") return SHIFT_TIMES.M.hours;
+  if (shift === "N" || shift === "NC") return SHIFT_TIMES.N.hours;
+  return 0;
+}
+
+function assignedHoursForRotaCell(a: StaffAssignment) {
+  return a.shift === "LEAVE"
+    ? assignedHoursForShift(a.pre_leave_shift)
+    : assignedHoursForShift(a.shift);
+}
+
 type Nurse = {
   id: string;
   name: string;
@@ -196,6 +226,17 @@ function StaffPage() {
     queryKey: ["nurses"],
     queryFn: () => api.get<Nurse[]>("/nurses"),
   });
+
+  // Locked roles always see their own facility regardless of the dropdown state.
+  const effectiveFilterFacility = lockedFacility ?? filterFacility;
+  const currentPeriodFacilityNurseIds = useMemo(
+    () =>
+      effectiveFilterFacility
+        ? nurses.filter((n) => n.facility === effectiveFilterFacility).map((n) => n.id)
+        : null,
+    [nurses, effectiveFilterFacility],
+  );
+  const currentPeriodFacilityNurseKey = currentPeriodFacilityNurseIds?.join(",") ?? "";
 
   const { data: profileRows = [] } = useQuery({
     queryKey: ["profile-names"],
@@ -252,32 +293,102 @@ function StaffPage() {
     queryFn: () => api.get<{ name: string; facility: string | null }[]>("/wards"),
   });
 
-  // Hours from shift_logs for the current period (period_start of the most recent
-  // published batch). Falls back to last 28 days so the window always covers one period.
-  const periodStart = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 27);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-  }, []);
+  const { data: latestArchivedPeriod } = useQuery<{ period_end: string } | null>({
+    queryKey: ["staff-latest-archived-period"],
+    refetchInterval: 60 * 1000,
+    queryFn: async () => {
+      const rows = await api
+        .get<{ period_end: string }[]>("/nurse-period-hours?limit=1")
+        .catch(() => []);
+      return rows[0] ?? null;
+    },
+  });
 
-  const { data: shiftLogs = [] } = useQuery<{ nurse_id: string; hours_logged: number | null }[]>({
-    queryKey: ["staff-shift-logs-current", periodStart],
-    staleTime: 2 * 60 * 1000,
-    queryFn: () =>
-      api.get<{ nurse_id: string; hours_logged: number | null }[]>(
-        `/shift-logs?from=${periodStart}&ended_at_not_null=true`,
-      ),
+  // Current rota period, matching the Rota page's period anchor logic.
+  const { data: currentPeriodStart } = useQuery<string>({
+    queryKey: [
+      "schedule-window-start",
+      "staff",
+      effectiveFilterFacility,
+      currentPeriodFacilityNurseKey,
+      latestArchivedPeriod?.period_end,
+    ],
+    enabled: latestArchivedPeriod !== undefined,
+    refetchInterval: 60 * 1000,
+    queryFn: async () => {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const todayStr = ymd(today);
+
+      if (latestArchivedPeriod?.period_end) {
+        return addDaysYmd(latestArchivedPeriod.period_end, 1);
+      }
+      if (effectiveFilterFacility && currentPeriodFacilityNurseIds?.length === 0) {
+        return todayStr;
+      }
+
+      const lookback = new Date(today);
+      lookback.setDate(lookback.getDate() - 27);
+      const tomorrow = new Date(today);
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const nurseFilter =
+        currentPeriodFacilityNurseIds && currentPeriodFacilityNurseIds.length > 0
+          ? `&nurse_ids=${currentPeriodFacilityNurseIds.join(",")}`
+          : "";
+
+      const [current, future] = await Promise.all([
+        api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${ymd(lookback)}&limit=1${nurseFilter}`,
+          )
+          .catch(() => [] as { shift_date: string }[]),
+        api
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${ymd(tomorrow)}&limit=1${nurseFilter}`,
+          )
+          .catch(() => [] as { shift_date: string }[]),
+      ]);
+      return (current[0]?.shift_date ?? future[0]?.shift_date ?? todayStr).slice(0, 10);
+    },
+  });
+
+  const currentPeriodEnd = useMemo(
+    () => (currentPeriodStart ? addDaysYmd(currentPeriodStart, 27) : null),
+    [currentPeriodStart],
+  );
+
+  const { data: currentPeriodAssignments = [] } = useQuery<StaffAssignment[]>({
+    queryKey: [
+      "assignments",
+      "staff-current-period",
+      currentPeriodStart,
+      currentPeriodEnd,
+      effectiveFilterFacility,
+      currentPeriodFacilityNurseKey,
+    ],
+    enabled: !!currentPeriodStart && !!currentPeriodEnd,
+    refetchInterval: 60 * 1000,
+    queryFn: () => {
+      if (effectiveFilterFacility && currentPeriodFacilityNurseIds?.length === 0) {
+        return Promise.resolve([] as StaffAssignment[]);
+      }
+      const nurseFilter =
+        currentPeriodFacilityNurseIds && currentPeriodFacilityNurseIds.length > 0
+          ? `&nurse_ids=${currentPeriodFacilityNurseIds.join(",")}`
+          : "";
+      return api.get<StaffAssignment[]>(
+        `/shift-assignments?from=${currentPeriodStart}&to=${currentPeriodEnd}${nurseFilter}`,
+      );
+    },
   });
 
   const hoursMap = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of shiftLogs) {
-      if (l.hours_logged != null) {
-        m.set(l.nurse_id, (m.get(l.nurse_id) ?? 0) + Number(l.hours_logged));
-      }
+    for (const a of currentPeriodAssignments) {
+      m.set(a.nurse_id, (m.get(a.nurse_id) ?? 0) + assignedHoursForRotaCell(a));
     }
     return m;
-  }, [shiftLogs]);
+  }, [currentPeriodAssignments]);
 
   const delMut = useMutation({
     mutationFn: (id: string) => api.del(`/nurses/${id}`),
@@ -289,9 +400,6 @@ function StaffPage() {
     },
     onError: (e: Error) => toast.error(e.message),
   });
-
-  // Locked roles always see their own facility regardless of the dropdown state.
-  const effectiveFilterFacility = lockedFacility ?? filterFacility;
 
   const filtered = useMemo(
     () =>
@@ -590,8 +698,14 @@ function StaffPage() {
                         const hrs = hoursMap.get(n.id) ?? 0;
                         const display =
                           hrs < 1 && hrs > 0 ? `${Math.round(hrs * 60)}m` : `${Math.round(hrs)}h`;
+                        const periodLabel =
+                          currentPeriodStart && currentPeriodEnd
+                            ? ` for ${currentPeriodStart} to ${currentPeriodEnd}`
+                            : "";
                         return (
-                          <span title={`${hrs.toFixed(2)}h worked / ${n.target_hours}h target`}>
+                          <span
+                            title={`${hrs.toFixed(2)}h assigned on rota${periodLabel} / ${n.target_hours}h target`}
+                          >
                             {display}
                             <span className="text-muted-foreground">/{n.target_hours}h</span>
                           </span>

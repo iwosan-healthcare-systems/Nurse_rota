@@ -90,6 +90,31 @@ function fmtHoursLog(decHours: number): string {
   return `${hStr} ${mStr}`;
 }
 
+function num(value: number | string | null | undefined): number {
+  const n = Number(value ?? 0);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function fmtPercent(value: number): string {
+  const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
+  const rounded = Math.round(safe * 10) / 10;
+  return Number.isInteger(rounded) ? `${rounded.toFixed(0)}%` : `${rounded.toFixed(1)}%`;
+}
+
+function periodProgress(row: PeriodHours) {
+  const completed = num(row.total_hours);
+  const assigned = num(row.assigned_hours);
+  const percentage = assigned > 0 ? (completed / assigned) * 100 : 0;
+  const isCompleted = assigned > 0 && percentage >= 100;
+  return {
+    completed,
+    assigned,
+    percentage,
+    barValue: Math.min(100, Math.max(0, percentage)),
+    status: isCompleted ? "Completed" : `${fmtPercent(percentage)} completed`,
+  };
+}
+
 type Nurse = {
   id: string;
   employee_id?: string | null;
@@ -155,6 +180,7 @@ type PeriodHours = {
   period_start: string;
   period_end: string;
   total_hours: number;
+  assigned_hours: number | null;
   total_shifts: number;
 };
 type LeaveRequest = {
@@ -1088,6 +1114,7 @@ function ReportsContent() {
       const nurseMap = new Map(nurses.map((n) => [n.id, n]));
       const rows = filteredPeriodSummaries.map((p) => {
         const nurse = nurseMap.get(p.nurse_id);
+        const progress = periodProgress(p);
         return {
           Name: nurse?.name ?? "Unknown",
           Role: nurse?.role ?? "",
@@ -1095,7 +1122,11 @@ function ReportsContent() {
           Facility: nurse?.facility ?? "",
           "Period Start": fmtDate(p.period_start),
           "Period End": fmtDate(p.period_end),
-          "Total Hours": Number(p.total_hours).toFixed(2),
+          "Hours Completed": progress.completed.toFixed(2),
+          "Hours Assigned": progress.assigned.toFixed(2),
+          "Total Hours": `${progress.completed.toFixed(2)} / ${progress.assigned.toFixed(2)}`,
+          "Progress %": fmtPercent(progress.percentage),
+          Status: progress.status,
           "Total Shifts": p.total_shifts,
         };
       });
@@ -2963,11 +2994,13 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">Period</th>
                       <th className="text-right px-4 py-3 font-semibold">Shifts</th>
                       <th className="text-right px-4 py-3 font-semibold">Total Hours</th>
+                      <th className="text-left px-4 py-3 font-semibold">Progress</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pagedPeriodSummaries.map((p) => {
                       const nurse = nurses.find((n) => n.id === p.nurse_id);
+                      const progress = periodProgress(p);
                       return (
                         <tr
                           key={p.nurse_id + p.period_start}
@@ -2978,8 +3011,19 @@ ${sections}
                             {fmtDate(p.period_start)} → {fmtDate(p.period_end)}
                           </td>
                           <td className="px-4 py-3 text-right tabular-nums">{p.total_shifts}</td>
-                          <td className="px-4 py-3 text-right tabular-nums font-semibold">
-                            {fmtHoursLog(Number(p.total_hours))}
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            <div className="font-semibold">
+                              {fmtHoursLog(progress.completed)} completed
+                            </div>
+                            <div className="text-xs text-muted-foreground">
+                              / {fmtHoursLog(progress.assigned)} assigned
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 min-w-44">
+                            <div className="mb-2 text-xs">
+                              <span className="font-medium">{progress.status}</span>
+                            </div>
+                            <Progress value={progress.barValue} />
                           </td>
                         </tr>
                       );

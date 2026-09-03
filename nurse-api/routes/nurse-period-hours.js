@@ -10,16 +10,39 @@ router.get(
     const params = [];
 
     if (req.query.nurse_id) {
-      conditions.push(`nurse_id = $${params.length + 1}`);
+      conditions.push(`nph.nurse_id = $${params.length + 1}`);
       params.push(req.query.nurse_id);
     }
     if (req.query.period_start) {
-      conditions.push(`period_start = $${params.length + 1}`);
+      conditions.push(`nph.period_start = $${params.length + 1}`);
       params.push(req.query.period_start);
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    let query = `SELECT * FROM nurse_period_hours ${where} ORDER BY period_start DESC`;
+    let query = `
+      SELECT nph.*,
+             COALESCE(assigned.assigned_hours, 0) AS assigned_hours
+        FROM nurse_period_hours nph
+        LEFT JOIN LATERAL (
+          SELECT ROUND(
+                   SUM(
+                     CASE
+                       WHEN sa.shift = 'LEAVE' AND sa.pre_leave_shift IN ('M', 'MWC') THEN 9
+                       WHEN sa.shift = 'LEAVE' AND sa.pre_leave_shift IN ('N', 'NC') THEN 15
+                       WHEN sa.shift IN ('M', 'MWC') THEN 9
+                       WHEN sa.shift IN ('N', 'NC') THEN 15
+                       ELSE 0
+                     END
+                   )::numeric,
+                   2
+                 ) AS assigned_hours
+            FROM shift_assignments sa
+           WHERE sa.nurse_id = nph.nurse_id
+             AND sa.shift_date BETWEEN nph.period_start AND nph.period_end
+             AND sa.status = 'published'
+        ) assigned ON TRUE
+      ${where}
+       ORDER BY nph.period_start DESC`;
     if (req.query.limit) {
       query += ` LIMIT $${params.length + 1}`;
       params.push(parseInt(req.query.limit, 10));
