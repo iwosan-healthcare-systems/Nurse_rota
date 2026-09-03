@@ -142,10 +142,29 @@ async function fetchWithRetry(url, options, to) {
 // Low-level send — deliberately never throws or rejects with an error the
 // caller has to handle; logs and returns instead, so nothing in the app's
 // real approve/decline/submit flow can ever fail because email did.
-async function sendMail({ to, subject, title, bodyHtml, ctaText, ctaUrl }) {
-  if (!to) return;
+function recipientList(value) {
+  const values = Array.isArray(value) ? value : [value];
+  const seen = new Set();
+  const out = [];
+  for (const item of values) {
+    const email = String(item ?? "").trim();
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
+async function sendMail({ to, cc, subject, title, bodyHtml, ctaText, ctaUrl }) {
+  const toList = recipientList(to);
+  if (!toList.length) return;
+  const toKeys = new Set(toList.map((email) => email.toLowerCase()));
+  const ccList = recipientList(cc).filter((email) => !toKeys.has(email.toLowerCase()));
+  const toLabel = toList.join(", ");
+  const ccLabel = ccList.length ? ` cc ${ccList.join(", ")}` : "";
   if (!configured) {
-    console.log(`[mailer] (not configured) would send "${subject}" to ${to}`);
+    console.log(`[mailer] (not configured) would send "${subject}" to ${toLabel}${ccLabel}`);
     return;
   }
   await enqueueSend(async () => {
@@ -166,21 +185,24 @@ async function sendMail({ to, subject, title, bodyHtml, ctaText, ctaUrl }) {
             message: {
               subject,
               body: { contentType: "HTML", content: html },
-              toRecipients: [{ emailAddress: { address: to } }],
+              toRecipients: toList.map((address) => ({ emailAddress: { address } })),
+              ...(ccList.length
+                ? { ccRecipients: ccList.map((address) => ({ emailAddress: { address } })) }
+                : {}),
             },
             saveToSentItems: false,
           }),
         },
-        to,
+        toLabel,
       );
       if (!res.ok) {
         const body = await res.text().catch(() => "");
-        console.error(`[mailer] send failed (${res.status}) to ${to}: ${body}`);
+        console.error(`[mailer] send failed (${res.status}) to ${toLabel}${ccLabel}: ${body}`);
       } else {
-        console.log(`[mailer] sent "${subject}" to ${to}`);
+        console.log(`[mailer] sent "${subject}" to ${toLabel}${ccLabel}`);
       }
     } catch (err) {
-      console.error(`[mailer] send error to ${to}:`, err.message);
+      console.error(`[mailer] send error to ${toLabel}${ccLabel}:`, err.message);
     }
   });
 }

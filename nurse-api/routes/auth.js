@@ -33,6 +33,68 @@ function computeExpiresInDays(passwordChangedAt, expiryDays) {
   return Math.floor((expiresAt.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
 }
 
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (char) => {
+    const map = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+    return map[char];
+  });
+}
+
+function uniqueEmails(values) {
+  const seen = new Set();
+  const out = [];
+  for (const value of values) {
+    const email = String(value ?? "").trim();
+    const key = email.toLowerCase();
+    if (!email || seen.has(key)) continue;
+    seen.add(key);
+    out.push(email);
+  }
+  return out;
+}
+
+function excludeEmail(values, emailToExclude) {
+  const excluded = String(emailToExclude ?? "")
+    .trim()
+    .toLowerCase();
+  return uniqueEmails(values).filter((email) => email.toLowerCase() !== excluded);
+}
+
+async function getAccountCreatedCcEmails() {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT lower(trim(p.email)) AS email
+       FROM profiles p
+       JOIN user_roles ur ON ur.user_id = p.id
+      WHERE ur.role IN ('admin', 'hr_admin')
+        AND p.is_active = true
+        AND p.email IS NOT NULL
+        AND trim(p.email) != ''`,
+  );
+  return uniqueEmails(rows.map((row) => row.email));
+}
+
+function sendAccountCreatedEmail({ email, fullName, password, ccEmails }) {
+  const safeName = escapeHtml(fullName || "there");
+  const safeEmail = escapeHtml(email);
+  const safePassword = escapeHtml(password);
+  const cc = excludeEmail(ccEmails, email);
+
+  return sendMail({
+    to: email,
+    cc,
+    subject: "Your Nurses Rota account has been created",
+    title: "Your account has been created",
+    bodyHtml: `<p>Hi ${safeName},</p>
+<p>Your Nurses Rota account has been created. Sign in to the portal with the details below, then update your password when prompted.</p>
+<p><strong>Username:</strong> ${safeEmail}</p>
+<p><strong>Default password:</strong></p>
+<p style="font-size:20px;font-weight:700;letter-spacing:1px;color:#1b2559;margin:14px 0;font-family:Consolas,Menlo,monospace;">${safePassword}</p>
+<p>Please keep this password private and change it when you first log in.</p>`,
+    ctaText: "Open Portal",
+    ctaUrl: portalUrl("/login"),
+  });
+}
+
 // Public (no requireAuth — /api/portal-settings is auth-gated at the mount
 // level, but the logged-out forgot-password flow still needs to show/enforce
 // the real minimum, not a stale hardcoded guess) — just the one number, not
@@ -447,6 +509,10 @@ router.post(
     }
 
     const hash = await bcrypt.hash(password, 12);
+    const accountCreatedCcEmails = await getAccountCreatedCcEmails().catch((err) => {
+      console.error("[auth] account-created cc lookup failed:", err.message);
+      return [];
+    });
 
     const client = await pool.connect();
     try {
@@ -474,6 +540,12 @@ router.post(
       }
 
       await client.query("COMMIT");
+      sendAccountCreatedEmail({
+        email: normalizedEmail,
+        fullName: full_name || normalizedEmail,
+        password,
+        ccEmails: accountCreatedCcEmails,
+      }).catch(() => {});
       res.json({ id: userId });
     } catch (err) {
       await client.query("ROLLBACK");
@@ -679,6 +751,10 @@ router.post(
     const existingEmails = new Set(existing.map((r) => r.email));
 
     const hash = await bcrypt.hash(default_password, 12);
+    const accountCreatedCcEmails = await getAccountCreatedCcEmails().catch((err) => {
+      console.error("[auth] account-created cc lookup failed:", err.message);
+      return [];
+    });
     const created = [];
     const skipped = [];
 
@@ -706,6 +782,7 @@ router.post(
           [rows[0].id, nurse.name],
         );
         created.push({ name: nurse.name, email });
+        existingEmails.add(email);
       }
       await client.query("COMMIT");
     } catch (err) {
@@ -713,6 +790,15 @@ router.post(
       throw err;
     } finally {
       client.release();
+    }
+
+    for (const account of created) {
+      sendAccountCreatedEmail({
+        email: account.email,
+        fullName: account.name,
+        password: default_password,
+        ccEmails: accountCreatedCcEmails,
+      }).catch(() => {});
     }
 
     res.json({ created, skipped });

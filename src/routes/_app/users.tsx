@@ -454,7 +454,7 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
         full_name: form.fullName || form.email,
       });
       await api.post("/user-roles", { user_id: userId, role: form.role });
-      toast.success(`User created — ${form.email} can log in immediately`);
+      toast.success(`User created; account email queued for ${form.email}`);
       void logAudit(
         "Created user login",
         `${form.fullName || form.email} (${form.email}) — ${roleLabel(form.role)}`,
@@ -526,6 +526,9 @@ function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreate
               onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
               className={inputCls}
             />
+            <p className="text-xs text-muted-foreground mt-1">
+              The user will receive this password by email after the account is created.
+            </p>
           </div>
 
           <div>
@@ -651,7 +654,8 @@ function BulkCreateModal({ onClose }: { onClose: () => void }) {
                   className={inputCls}
                 />
                 <p className="text-xs text-muted-foreground mt-1">
-                  All new accounts will use this password — staff must change it on first login.
+                  All new accounts will use this password. Staff will receive it by email and must
+                  change it on first login.
                 </p>
               </div>
 

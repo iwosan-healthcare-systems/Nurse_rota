@@ -1746,7 +1746,7 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
       });
 
       logAudit("Created login", `${nurse.name} (${email}) — role: ${role}`);
-      toast.success(`Login created for ${nurse.name} — can log in immediately`);
+      toast.success(`Login created for ${nurse.name}; account email queued`);
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to create login");
@@ -1816,7 +1816,8 @@ function CreateLoginModal({ nurse, onClose }: { nurse: Nurse; onClose: () => voi
             </button>
           </div>
           <p className="mt-1 text-xs text-muted-foreground">
-            Auto-generated. Share these credentials securely with the nurse before clicking Create.
+            Auto-generated. The nurse will receive this password by email after the login is
+            created.
           </p>
         </div>
         <div>
