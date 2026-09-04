@@ -148,6 +148,9 @@ function RotaPage() {
   const canEdit = canEditRota;
   const canGenerate = canAutoGenerate;
   const canSubmit = canSubmitApproval;
+  // Full rota generation is admin-only, but adding a newly-created/reactivated
+  // staff member to an existing rota is a narrower Head Nurse/Admin action.
+  const canScheduleNewStaff = canGenerate || (canEdit && canSubmit);
   const qc = useQueryClient();
 
   const { data: workflowStatus } = useQuery<{
@@ -543,6 +546,10 @@ function RotaPage() {
 
   // Combined: true while the window start OR the assignments are still loading.
   const isLoading = windowLoading || assignmentsLoading;
+  const facilityHasCurrentSchedule = useMemo(
+    () => !isLoading && assignments.length > 0,
+    [isLoading, assignments],
+  );
 
   // Filled locum requests for this window — used to highlight locum cells.
   const { data: locumFilled = [] } = useQuery({
@@ -909,7 +916,7 @@ function RotaPage() {
   // Nurses in the selected ward who have zero assignments in the current period —
   // i.e. newly added or reactivated staff that need their own schedule generated.
   const unscheduledWardNurses = useMemo(() => {
-    if (!selectedWard || !canGenerate || isLoading) return [];
+    if (!selectedWard || !canScheduleNewStaff || isLoading) return [];
     const assignedIds = new Set(assignments.map((a) => a.nurse_id));
     return nurses.filter(
       (n) =>
@@ -921,15 +928,15 @@ function RotaPage() {
         parseWards(n.ward)[0] === selectedWard &&
         !assignedIds.has(n.id),
     );
-  }, [selectedWard, canGenerate, isLoading, assignments, nurses, effectiveFacility]);
+  }, [selectedWard, canScheduleNewStaff, isLoading, assignments, nurses, effectiveFacility]);
 
-  // Nurses in the selected ward who have draft-only assignments while the ward
-  // overall is published — these were generated for new/reactivated staff and
-  // are awaiting a direct publish (no approval chain required).
+  // Nurses in the selected ward who have draft-only assignments. In published
+  // units these can be published directly; in submitted/CNO-approved units they
+  // are submitted into the normal review path.
   const newStaffWithDraft = useMemo(() => {
-    if (!selectedWard || wardStatusMap.get(selectedWard) !== "published") return [];
-    const publishedNurseIds = new Set(
-      assignments.filter((a) => a.status === "published").map((a) => a.nurse_id),
+    if (!selectedWard) return [];
+    const nonDraftNurseIds = new Set(
+      assignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
     );
     const draftNurseIds = new Set(
       assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
@@ -943,9 +950,9 @@ function RotaPage() {
         !isInternType(n.role) &&
         parseWards(n.ward)[0] === selectedWard &&
         draftNurseIds.has(n.id) &&
-        !publishedNurseIds.has(n.id),
+        !nonDraftNurseIds.has(n.id),
     );
-  }, [selectedWard, wardStatusMap, assignments, nurses, effectiveFacility]);
+  }, [selectedWard, assignments, nurses, effectiveFacility]);
 
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
@@ -998,9 +1005,13 @@ function RotaPage() {
     } as Record<FacilityWideGroup, string>;
   }, [assignments, nurses, effectiveFacility]);
 
-  // Per-group: nurses in a published facility-wide group who have zero assignments.
+  // Per-group: facility-wide nurses who have zero assignments but belong to a
+  // group/window that already has a rota context. This covers existing groups
+  // and first-in-group cases like the first Porter added after other units were
+  // already generated.
   const unscheduledFwMap = useMemo(() => {
-    if (!canGenerate || !effectiveFacility) return new Map<FacilityWideGroup, typeof nurses>();
+    if (!canScheduleNewStaff || !effectiveFacility)
+      return new Map<FacilityWideGroup, typeof nurses>();
     const assignedIds = new Set(assignments.map((a) => a.nurse_id));
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
@@ -1011,19 +1022,29 @@ function RotaPage() {
     };
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
-      if (facilityWideStatusMap[key] === "published") {
+      if (facilityWideStatusMap[key] !== "none" || facilityHasCurrentSchedule) {
         const unscheduled = getGroup(key).filter((n) => !assignedIds.has(n.id));
         if (unscheduled.length) result.set(key, unscheduled);
       }
     }
     return result;
-  }, [canGenerate, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
+  }, [
+    canScheduleNewStaff,
+    effectiveFacility,
+    assignments,
+    nurses,
+    facilityWideStatusMap,
+    facilityHasCurrentSchedule,
+  ]);
 
-  // Per-group: nurses in a published facility-wide group who have only draft assignments.
+  // Per-group: facility-wide nurses who have only draft assignments in this
+  // period. For published groups these can be published directly; for submitted
+  // or CNO-approved groups they can be moved into review.
   const draftOnlyFwMap = useMemo(() => {
-    if (!canGenerate || !effectiveFacility) return new Map<FacilityWideGroup, typeof nurses>();
-    const publishedIds = new Set(
-      assignments.filter((a) => a.status === "published").map((a) => a.nurse_id),
+    if (!canScheduleNewStaff || !effectiveFacility)
+      return new Map<FacilityWideGroup, typeof nurses>();
+    const nonDraftIds = new Set(
+      assignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
     );
     const draftIds = new Set(
       assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
@@ -1037,15 +1058,15 @@ function RotaPage() {
     };
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
-      if (facilityWideStatusMap[key] === "published") {
+      if (facilityWideStatusMap[key] !== "none") {
         const draftOnly = getGroup(key).filter(
-          (n) => draftIds.has(n.id) && !publishedIds.has(n.id),
+          (n) => draftIds.has(n.id) && !nonDraftIds.has(n.id),
         );
         if (draftOnly.length) result.set(key, draftOnly);
       }
     }
     return result;
-  }, [canGenerate, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
+  }, [canScheduleNewStaff, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
@@ -1389,7 +1410,7 @@ function RotaPage() {
   // Generate a schedule from today to end-of-period for nurses in the selected ward
   // who have no assignments yet — new staff or reactivated staff.
   async function handleGenerateForUnscheduled() {
-    if (!effectiveFacility || !selectedWard || !canGenerate) return;
+    if (!effectiveFacility || !selectedWard || !canScheduleNewStaff) return;
     if (!unscheduledWardNurses.length) return;
 
     const today = todayYmd();
@@ -1541,7 +1562,7 @@ function RotaPage() {
     key: FacilityWideGroup,
     targetNurses: (typeof nurses)[number][],
   ) {
-    if (!effectiveFacility || !canGenerate || !targetNurses.length) return;
+    if (!effectiveFacility || !canScheduleNewStaff || !targetNurses.length) return;
     setBusy(true);
     try {
       const today = todayYmd();
@@ -2465,27 +2486,25 @@ function RotaPage() {
                     {windowLockStatus === "cno_approved" && "CNO Approved — awaiting publication"}
                     {windowLockStatus === "submitted" && "Submitted — awaiting CNO approval"}
                   </span>
-                  {/* New/reactivated staff in a published ward — generate their draft first */}
+                  {/* New/reactivated staff in a locked ward — generate their draft first */}
+                  {canScheduleNewStaff && unscheduledWardNurses.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => void handleGenerateForUnscheduled()}
+                      disabled={busy}
+                      className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                      {busy
+                        ? "Generating..."
+                        : unscheduledWardNurses.length === 1
+                          ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
+                          : `Generate for ${unscheduledWardNurses.length} new staff`}
+                    </button>
+                  )}
+                  {/* Draft exists for new staff in a published ward — publish directly to existing rota */}
                   {windowLockStatus === "published" &&
-                    canGenerate &&
-                    unscheduledWardNurses.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => void handleGenerateForUnscheduled()}
-                        disabled={busy}
-                        className="h-9 px-4 rounded-md bg-emerald-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-emerald-700 disabled:opacity-50"
-                      >
-                        <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
-                        {busy
-                          ? "Generating…"
-                          : unscheduledWardNurses.length === 1
-                            ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
-                            : `Generate for ${unscheduledWardNurses.length} new staff`}
-                      </button>
-                    )}
-                  {/* Draft exists for new staff — submit to publish directly to existing rota */}
-                  {windowLockStatus === "published" &&
-                    canGenerate &&
+                    canScheduleNewStaff &&
                     newStaffWithDraft.length > 0 && (
                       <button
                         type="button"
@@ -2501,11 +2520,29 @@ function RotaPage() {
                             : `Submit for ${newStaffWithDraft.length} staff`}
                       </button>
                     )}
+                  {/* Draft exists for new staff while the ward is already in review */}
+                  {windowLockStatus !== "published" &&
+                    canSubmit &&
+                    newStaffWithDraft.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSubmitRota()}
+                        disabled={busy}
+                        className="h-9 px-4 rounded-md bg-blue-600 text-white text-sm font-semibold inline-flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        <Send className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                        {busy
+                          ? "Submitting..."
+                          : newStaffWithDraft.length === 1
+                            ? `Submit for ${newStaffWithDraft[0].name.split(" ")[0]}`
+                            : `Submit for ${newStaffWithDraft.length} staff`}
+                      </button>
+                    )}
                 </>
               ) : (
                 <>
                   {/* Generate for new / reactivated staff in this ward */}
-                  {unscheduledWardNurses.length > 0 && (
+                  {canScheduleNewStaff && unscheduledWardNurses.length > 0 && (
                     <button
                       type="button"
                       onClick={() => void handleGenerateForUnscheduled()}
@@ -2577,6 +2614,18 @@ function RotaPage() {
               const status = facilityWideStatusMap[key];
               const isSelected = selectedFacilityWide === key;
               const isLocked = ["submitted", "cno_approved", "published"].includes(status);
+              const unscheduledFwNurses = unscheduledFwMap.get(key) ?? [];
+              const draftOnlyFwNurses = draftOnlyFwMap.get(key) ?? [];
+              const showNewStaffGenerate =
+                canScheduleNewStaff &&
+                unscheduledFwNurses.length > 0 &&
+                !(canGenerate && status === "none");
+              const showNewStaffDirectPublish =
+                canScheduleNewStaff && status === "published" && draftOnlyFwNurses.length > 0;
+              const showNewStaffReviewSubmit =
+                canSubmit &&
+                (status === "submitted" || status === "cno_approved") &&
+                draftOnlyFwNurses.length > 0;
               const chipCls: Record<string, string> = {
                 none: "border-border",
                 draft: "border-amber-200 dark:border-amber-700",
@@ -2642,6 +2691,24 @@ function RotaPage() {
                         <Wand2 className="h-3 w-3" /> Generate
                       </button>
                     )}
+                    {showNewStaffGenerate && (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleGenerateForUnscheduledFw(key, unscheduledFwNurses);
+                        }}
+                        disabled={busy}
+                        className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 disabled:opacity-50"
+                      >
+                        <CalendarDays className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+                        {busy
+                          ? "..."
+                          : unscheduledFwNurses.length === 1
+                            ? `Generate for ${unscheduledFwNurses[0].name.split(" ")[0]}`
+                            : `Generate for ${unscheduledFwNurses.length} staff`}
+                      </button>
+                    )}
                     {status === "draft" && isRegenNeededFor(key) ? (
                       <button
                         type="button"
@@ -2691,32 +2758,13 @@ function RotaPage() {
                           <Clock className="h-3 w-3" />
                           {statusLabel[status]}
                         </span>
-                        {/* New/reactivated nurse in a published group — generate their draft */}
-                        {status === "published" && (unscheduledFwMap.get(key)?.length ?? 0) > 0 && (
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void handleGenerateForUnscheduledFw(key, unscheduledFwMap.get(key)!);
-                            }}
-                            disabled={busy}
-                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-600 disabled:opacity-50"
-                          >
-                            <CalendarDays className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
-                            {busy
-                              ? "…"
-                              : unscheduledFwMap.get(key)!.length === 1
-                                ? `Generate for ${unscheduledFwMap.get(key)![0].name.split(" ")[0]}`
-                                : `Generate for ${unscheduledFwMap.get(key)!.length} staff`}
-                          </button>
-                        )}
                         {/* Draft exists for new staff — submit directly to published rota */}
-                        {status === "published" && (draftOnlyFwMap.get(key)?.length ?? 0) > 0 && (
+                        {showNewStaffDirectPublish && (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              void handlePublishNewFwStaff(draftOnlyFwMap.get(key)!);
+                              void handlePublishNewFwStaff(draftOnlyFwNurses);
                             }}
                             disabled={busy}
                             className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white border-blue-600 disabled:opacity-50"
@@ -2724,9 +2772,27 @@ function RotaPage() {
                             <CheckCircle className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
                             {busy
                               ? "…"
-                              : draftOnlyFwMap.get(key)!.length === 1
-                                ? `Submit for ${draftOnlyFwMap.get(key)![0].name.split(" ")[0]}`
-                                : `Submit for ${draftOnlyFwMap.get(key)!.length} staff`}
+                              : draftOnlyFwNurses.length === 1
+                                ? `Submit for ${draftOnlyFwNurses[0].name.split(" ")[0]}`
+                                : `Submit for ${draftOnlyFwNurses.length} staff`}
+                          </button>
+                        )}
+                        {showNewStaffReviewSubmit && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void handleSubmitFacilityWide(key);
+                            }}
+                            disabled={busy}
+                            className="h-7 px-2 rounded border text-[11px] font-medium inline-flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white border-blue-600 disabled:opacity-50"
+                          >
+                            <Send className={`h-3 w-3 ${busy ? "animate-spin" : ""}`} />
+                            {busy
+                              ? "..."
+                              : draftOnlyFwNurses.length === 1
+                                ? `Submit for ${draftOnlyFwNurses[0].name.split(" ")[0]}`
+                                : `Submit for ${draftOnlyFwNurses.length} staff`}
                           </button>
                         )}
                       </>
@@ -2820,6 +2886,24 @@ function RotaPage() {
                 className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
               >
                 <CalendarDays className="h-4 w-4" /> Generate Now (Admin Override)
+              </button>
+            ) : canScheduleNewStaff &&
+              effectiveFacility &&
+              selectedWard &&
+              facilityHasCurrentSchedule &&
+              unscheduledWardNurses.length > 0 ? (
+              <button
+                type="button"
+                onClick={() => void handleGenerateForUnscheduled()}
+                disabled={busy}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-emerald-600 text-white text-sm hover:bg-emerald-700 disabled:opacity-50"
+              >
+                <CalendarDays className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />
+                {busy
+                  ? "Generating..."
+                  : unscheduledWardNurses.length === 1
+                    ? `Generate for ${unscheduledWardNurses[0].name.split(" ")[0]}`
+                    : `Generate for ${unscheduledWardNurses.length} staff`}
               </button>
             ) : canGenerate ? (
               <p className="text-xs text-muted-foreground">

@@ -13,6 +13,15 @@ const ROLE_GROUP_LABELS = {
   intern: "Nurse Intern",
 };
 
+// Keep in sync with the rota scheduler: these role groups are scheduled at
+// facility level, so a ward value would make staff appear in the wrong bucket.
+const NO_WARD_ROLE =
+  /^matron$|^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i;
+
+function wardForRole(role, ward) {
+  return role && NO_WARD_ROLE.test(role) ? null : ward || null;
+}
+
 // Notifies head_nurse/chief_matron/admin when a newly-created nurse lands in
 // a ward or facility-wide role group that already has a rota cycle in
 // progress (draft/submitted/cno_approved/published) — otherwise they'd have
@@ -128,7 +137,14 @@ router.post(
     const { rows } = await pool.query(
       `INSERT INTO nurses (name, email, role, facility, ward, employee_id)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [name, email || null, role || "nurse", facility || null, ward || null, employee_id || null],
+      [
+        name,
+        email || null,
+        role || "nurse",
+        facility || null,
+        wardForRole(role || "nurse", ward),
+        employee_id || null,
+      ],
     );
     res.status(201).json(rows[0]);
     notifyNewStaff(rows[0]).catch(() => {});
@@ -157,7 +173,7 @@ router.post(
             n.email || null,
             n.role || "nurse",
             n.facility || null,
-            n.ward || null,
+            wardForRole(n.role || "nurse", n.ward),
             n.employee_id || null,
           ],
         );
@@ -225,11 +241,9 @@ router.patch(
           "profile_id",
         ]
       : ["ward"];
-    // Nurses in facility-wide roles (Coverage/Head Nurse incl. the Day variant,
-    // Interns, Porters) must never carry a ward. Enforce this server-side so
+    // Nurses in facility-wide roles (Matrons, Coverage/Head Nurse incl. the Day
+    // variant, Interns, Porters) must never carry a ward. Enforce this server-side so
     // historical data or direct-DB edits can't leave stale wards.
-    const NO_WARD_ROLE =
-      /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i;
     if (req.body.role && NO_WARD_ROLE.test(req.body.role)) {
       req.body.ward = null;
     }
