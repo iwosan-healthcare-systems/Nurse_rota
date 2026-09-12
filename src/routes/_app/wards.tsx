@@ -2,21 +2,14 @@ import { createFileRoute } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { useState, useId } from "react";
-import { Building2, Plus, Trash2, Loader2, Pencil, Download } from "lucide-react";
+import { useMemo, useState, useId } from "react";
+import { Building2, Plus, Trash2, Loader2, Pencil } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import {
-  IKOYI_WARD_MINIMUMS,
-  IKOYI_WARD_NAMES,
-  IKEJA_WARD_MINIMUMS,
-  IKEJA_WARD_NAMES,
-  LIGALI_WARD_MINIMUMS,
-  LIGALI_WARD_NAMES,
-} from "@/lib/auto-schedule";
+import { FACILITY_LOCATIONS } from "@/lib/geo-fence";
 
 export const Route = createFileRoute("/_app/wards")({
   head: () => ({
@@ -31,7 +24,12 @@ export const Route = createFileRoute("/_app/wards")({
   component: WardsPage,
 });
 
-const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
+const WARD_QUERY_KEYS = [
+  ["wards"],
+  ["gen-wards"],
+  ["wards-by-facility"],
+  ["wards-simple"],
+] as const;
 
 type Ward = {
   id: string;
@@ -43,12 +41,23 @@ type Ward = {
   min_night_na: number;
 };
 
+type StaffFacilityRow = {
+  facility: string | null;
+};
+
+type FacilitySettings = {
+  facilities?: Record<string, unknown>;
+};
+
+function refreshWardQueries(qc: ReturnType<typeof useQueryClient>) {
+  return Promise.all(WARD_QUERY_KEYS.map((queryKey) => qc.invalidateQueries({ queryKey })));
+}
+
 function WardsPage() {
   const { canManageWards, nurseFacility, isAdmin, activeRole } = useAuth();
   const qc = useQueryClient();
   const [showAdd, setShowAdd] = useState(false);
   const [editingWard, setEditingWard] = useState<Ward | null>(null);
-  const [seeding, setSeeding] = useState(false);
 
   const isMultiFacility = isAdmin || activeRole === "cno" || activeRole === "hr_admin";
   const defaultFacility = nurseFacility && !isMultiFacility ? nurseFacility : "";
@@ -59,19 +68,52 @@ function WardsPage() {
     queryFn: () => api.get<Ward[]>("/wards"),
   });
 
+  const { data: staffFacilities = [] } = useQuery({
+    queryKey: ["ward-facility-staff"],
+    queryFn: () => api.get<StaffFacilityRow[]>("/nurses"),
+  });
+
+  const { data: settingsFacilities = Object.keys(FACILITY_LOCATIONS) } = useQuery({
+    queryKey: ["ward-facility-settings"],
+    queryFn: async () => {
+      const fallback = Object.keys(FACILITY_LOCATIONS);
+      try {
+        const { value } = await api.get<{ value?: FacilitySettings }>(
+          "/portal-settings/gps_settings",
+        );
+        const names = Object.keys(value?.facilities ?? {});
+        return names.length ? names : fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    refetchOnMount: "always",
+    staleTime: 0,
+  });
+
+  const facilityOptions = useMemo(() => {
+    const names = new Set<string>();
+    for (const facility of settingsFacilities) {
+      if (facility.trim()) names.add(facility.trim());
+    }
+    for (const ward of wards) if (ward.facility?.trim()) names.add(ward.facility.trim());
+    for (const staff of staffFacilities) {
+      if (staff.facility?.trim()) names.add(staff.facility.trim());
+    }
+    if (selectedFacility.trim()) names.add(selectedFacility.trim());
+    if (defaultFacility.trim()) names.add(defaultFacility.trim());
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [defaultFacility, selectedFacility, settingsFacilities, staffFacilities, wards]);
+
+  const filterOptions = isMultiFacility
+    ? facilityOptions
+    : selectedFacility
+      ? [selectedFacility]
+      : [];
+
   const visibleWards = selectedFacility
     ? wards.filter((w) => w.facility === selectedFacility)
     : wards;
-
-  const missingIkoyiWards = IKOYI_WARD_NAMES.filter(
-    (n) => !wards.some((w) => w.name === n && w.facility === "Ikoyi"),
-  );
-  const missingIkejaWards = IKEJA_WARD_NAMES.filter(
-    (n) => !wards.some((w) => w.name === n && w.facility === "Ikeja"),
-  );
-  const missingLigaliWards = LIGALI_WARD_NAMES.filter(
-    (n) => !wards.some((w) => w.name === n && w.facility === "Ligali"),
-  );
 
   async function del(w: Ward) {
     if (!confirm(`Remove ward "${w.name}"?`)) return;
@@ -79,41 +121,9 @@ function WardsPage() {
       await api.del(`/wards/${w.id}`);
       toast.success("Ward removed");
       logAudit("Removed ward", w.name);
-      qc.invalidateQueries({ queryKey: ["wards"] });
-      qc.invalidateQueries({ queryKey: ["gen-wards"] });
-      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
-      qc.invalidateQueries({ queryKey: ["wards-simple"] });
+      await refreshWardQueries(qc);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to remove ward");
-    }
-  }
-
-  async function seedFacilityWards(
-    facilityName: string,
-    wardNames: readonly string[],
-    wardMinimums: Record<string, object>,
-  ) {
-    setSeeding(true);
-    try {
-      for (const name of wardNames) {
-        const row = { name, facility: facilityName, ...wardMinimums[name] };
-        const existing = wards.find((w) => w.name === name && w.facility === facilityName);
-        if (existing) {
-          await api.patch(`/wards/${existing.id}`, wardMinimums[name]);
-        } else {
-          await api.post("/wards", row);
-        }
-      }
-      toast.success(`All ${wardNames.length} ${facilityName} wards seeded / updated`);
-      logAudit(`Seeded ${facilityName} ward defaults`, wardNames.join(", "));
-      qc.invalidateQueries({ queryKey: ["wards"] });
-      qc.invalidateQueries({ queryKey: ["gen-wards"] });
-      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
-      qc.invalidateQueries({ queryKey: ["wards-simple"] });
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : String(e));
-    } finally {
-      setSeeding(false);
     }
   }
 
@@ -136,150 +146,87 @@ function WardsPage() {
         }
       />
 
-      {!selectedFacility ? (
-        <div className="flex flex-col items-center justify-center py-24 gap-6">
-          <Building2 className="h-10 w-10 text-muted-foreground" />
-          <div className="text-center">
-            <p className="font-semibold text-lg">Select a facility</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Ward rules are configured per facility
-            </p>
-          </div>
-          <div className="flex gap-3">
-            {FACILITIES.map((f) => (
-              <button
-                key={f}
-                type="button"
-                onClick={() => setSelectedFacility(f)}
-                className="h-10 px-5 rounded-md border bg-card text-sm font-medium hover:bg-muted transition"
-              >
-                {f}
-              </button>
-            ))}
-          </div>
+      {filterOptions.length > 0 && (
+        <div className="flex items-center gap-2 mb-5 flex-wrap">
+          <Building2 className="h-4 w-4 text-muted-foreground shrink-0" />
+          {isMultiFacility && (
+            <button
+              type="button"
+              onClick={() => setSelectedFacility("")}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                selectedFacility === ""
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card hover:bg-muted"
+              }`}
+            >
+              All Facilities
+            </button>
+          )}
+          {filterOptions.map((f) => (
+            <button
+              key={f}
+              type="button"
+              onClick={() => setSelectedFacility(f)}
+              className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
+                selectedFacility === f
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card hover:bg-muted"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
         </div>
+      )}
+
+      {isLoading ? (
+        <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
+      ) : visibleWards.length === 0 ? (
+        <EmptyState
+          icon={<Building2 className="h-6 w-6" />}
+          title="No wards configured"
+          description={
+            canManageWards
+              ? selectedFacility
+                ? "Add wards to define minimum staffing rules for this facility or branch."
+                : "Select a facility before adding wards."
+              : "Ask an administrator to configure wards."
+          }
+          action={
+            canManageWards &&
+            selectedFacility && (
+              <button
+                type="button"
+                onClick={() => setShowAdd(true)}
+                className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
+              >
+                <Plus className="h-4 w-4" /> Add ward
+              </button>
+            )
+          }
+        />
       ) : (
-        <>
-          <div className="flex items-center gap-2 mb-5">
-            {(isMultiFacility ? FACILITIES : [selectedFacility as (typeof FACILITIES)[number]]).map(
-              (f) => (
-                <button
-                  key={f}
-                  type="button"
-                  onClick={() => setSelectedFacility(f)}
-                  className={`px-4 py-1.5 rounded-full text-sm font-medium border transition ${
-                    selectedFacility === f
-                      ? "bg-primary text-primary-foreground border-primary"
-                      : "bg-card hover:bg-muted"
-                  }`}
-                >
-                  {f}
-                </button>
-              ),
-            )}
-          </div>
-
-          {selectedFacility === "Ikoyi" && canManageWards && missingIkoyiWards.length > 0 && (
-            <SeedBanner
-              count={missingIkoyiWards.length}
-              names={missingIkoyiWards}
-              seeding={seeding}
-              onSeed={() => seedFacilityWards("Ikoyi", IKOYI_WARD_NAMES, IKOYI_WARD_MINIMUMS)}
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          {visibleWards.map((w) => (
+            <WardCard
+              key={w.id}
+              ward={w}
+              canManage={canManageWards}
+              onEdit={() => setEditingWard(w)}
+              onDelete={() => del(w)}
             />
-          )}
-          {selectedFacility === "Ikeja" && canManageWards && missingIkejaWards.length > 0 && (
-            <SeedBanner
-              count={missingIkejaWards.length}
-              names={missingIkejaWards}
-              seeding={seeding}
-              onSeed={() => seedFacilityWards("Ikeja", IKEJA_WARD_NAMES, IKEJA_WARD_MINIMUMS)}
-            />
-          )}
-          {selectedFacility === "Ligali" && canManageWards && missingLigaliWards.length > 0 && (
-            <SeedBanner
-              count={missingLigaliWards.length}
-              names={missingLigaliWards}
-              seeding={seeding}
-              onSeed={() => seedFacilityWards("Ligali", LIGALI_WARD_NAMES, LIGALI_WARD_MINIMUMS)}
-            />
-          )}
-
-          {isLoading ? (
-            <p className="text-sm text-muted-foreground py-12 text-center">Loading…</p>
-          ) : visibleWards.length === 0 ? (
-            <EmptyState
-              icon={<Building2 className="h-6 w-6" />}
-              title="No wards configured"
-              description={
-                canManageWards
-                  ? ["Ikoyi", "Ikeja", "Ligali"].includes(selectedFacility)
-                    ? "Click 'Sync defaults' above to populate wards, or add them manually."
-                    : "Add wards to define minimum staffing rules per shift."
-                  : "Ask an administrator to configure wards."
-              }
-              action={
-                canManageWards && (
-                  <button
-                    type="button"
-                    onClick={() => setShowAdd(true)}
-                    className="inline-flex items-center gap-2 h-9 px-3 rounded-md bg-primary text-primary-foreground text-sm"
-                  >
-                    <Plus className="h-4 w-4" /> Add ward
-                  </button>
-                )
-              }
-            />
-          ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {visibleWards.map((w) => (
-                <WardCard
-                  key={w.id}
-                  ward={w}
-                  canManage={canManageWards}
-                  onEdit={() => setEditingWard(w)}
-                  onDelete={() => del(w)}
-                />
-              ))}
-            </div>
-          )}
-        </>
+          ))}
+        </div>
       )}
 
       {showAdd && <AddWardModal facility={selectedFacility} onClose={() => setShowAdd(false)} />}
-      {editingWard && <EditWardModal ward={editingWard} onClose={() => setEditingWard(null)} />}
-    </div>
-  );
-}
-
-function SeedBanner({
-  count,
-  names,
-  seeding,
-  onSeed,
-}: {
-  count: number;
-  names: string[];
-  seeding: boolean;
-  onSeed: () => void;
-}) {
-  return (
-    <div className="mb-4 flex items-start gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800 dark:bg-blue-950/30">
-      <Download className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" />
-      <div className="flex-1">
-        <p className="text-sm font-medium text-blue-900 dark:text-blue-200">
-          {count} ward{count > 1 ? "s" : ""} not yet created
-        </p>
-        <p className="text-xs text-blue-800 dark:text-blue-300 mt-0.5">{names.join(", ")}</p>
-      </div>
-      <button
-        type="button"
-        disabled={seeding}
-        onClick={onSeed}
-        className="h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-medium inline-flex items-center gap-1.5 hover:bg-blue-700 disabled:opacity-50 shrink-0"
-      >
-        {seeding && <Loader2 className="h-3 w-3 animate-spin" />}
-        {seeding ? "Syncing…" : "Sync defaults"}
-      </button>
+      {editingWard && (
+        <EditWardModal
+          ward={editingWard}
+          facilityOptions={facilityOptions}
+          onClose={() => setEditingWard(null)}
+        />
+      )}
     </div>
   );
 }
@@ -349,15 +296,9 @@ function WardCard({
   );
 }
 
-function AddWardModal({
-  facility: defaultFacility,
-  onClose,
-}: {
-  facility: string;
-  onClose: () => void;
-}) {
+function AddWardModal({ facility, onClose }: { facility: string; onClose: () => void }) {
   const qc = useQueryClient();
-  const [selectedFac, setSelectedFac] = useState(defaultFacility || FACILITIES[0]);
+  const selectedFacility = facility.trim();
   const [form, setForm] = useState({
     name: "",
     min_morning_nurses: 2,
@@ -369,15 +310,16 @@ function AddWardModal({
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    if (!selectedFacility) {
+      toast.error("Select a facility before adding a ward");
+      return;
+    }
     setBusy(true);
     try {
-      await api.post("/wards", { ...form, facility: selectedFac });
+      await api.post("/wards", { ...form, facility: selectedFacility });
       toast.success("Ward added");
       logAudit("Added ward", form.name);
-      qc.invalidateQueries({ queryKey: ["wards"] });
-      qc.invalidateQueries({ queryKey: ["gen-wards"] });
-      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
-      qc.invalidateQueries({ queryKey: ["wards-simple"] });
+      await refreshWardQueries(qc);
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to add ward");
@@ -394,20 +336,15 @@ function AddWardModal({
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor="ward-facility" className="text-sm font-medium">
-            Facility
+            Facility / branch
           </label>
-          <select
+          <input
             id="ward-facility"
-            value={selectedFac}
-            onChange={(e) => setSelectedFac(e.target.value)}
-            className={inputCls}
-          >
-            {FACILITIES.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+            type="text"
+            readOnly
+            value={selectedFacility}
+            className={`${inputCls} bg-muted/40`}
+          />
         </div>
         <div>
           <label htmlFor="ward-name" className="text-sm font-medium">
@@ -465,10 +402,24 @@ function AddWardModal({
   );
 }
 
-function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
+function EditWardModal({
+  ward,
+  facilityOptions,
+  onClose,
+}: {
+  ward: Ward;
+  facilityOptions: string[];
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
+  const editFacilityOptions = useMemo(() => {
+    const names = new Set(facilityOptions);
+    if (ward.facility?.trim()) names.add(ward.facility.trim());
+    return [...names].sort((a, b) => a.localeCompare(b));
+  }, [facilityOptions, ward.facility]);
   const [form, setForm] = useState({
     name: ward.name,
+    facility: ward.facility ?? "",
     min_morning_nurses: ward.min_morning_nurses,
     min_morning_na: ward.min_morning_na,
     min_night_nurses: ward.min_night_nurses,
@@ -478,15 +429,17 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    const facility = form.facility.trim();
+    if (!facility) {
+      toast.error("Facility or branch name is required");
+      return;
+    }
     setBusy(true);
     try {
-      await api.patch(`/wards/${ward.id}`, form);
+      await api.patch(`/wards/${ward.id}`, { ...form, facility });
       toast.success("Ward updated");
       logAudit("Updated ward", form.name);
-      qc.invalidateQueries({ queryKey: ["wards"] });
-      qc.invalidateQueries({ queryKey: ["gen-wards"] });
-      qc.invalidateQueries({ queryKey: ["wards-by-facility"] });
-      qc.invalidateQueries({ queryKey: ["wards-simple"] });
+      await refreshWardQueries(qc);
       onClose();
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : "Failed to update ward");
@@ -513,6 +466,25 @@ function EditWardModal({ ward, onClose }: { ward: Ward; onClose: () => void }) {
             onChange={(e) => setForm({ ...form, name: e.target.value })}
             className={inputCls}
           />
+        </div>
+        <div>
+          <label htmlFor="edit-ward-facility" className="text-sm font-medium">
+            Facility / branch
+          </label>
+          <select
+            id="edit-ward-facility"
+            required
+            value={form.facility}
+            onChange={(e) => setForm({ ...form, facility: e.target.value })}
+            className={inputCls}
+          >
+            <option value="">Select facility</option>
+            {editFacilityOptions.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <NumField

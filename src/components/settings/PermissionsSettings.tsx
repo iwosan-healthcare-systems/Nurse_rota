@@ -262,12 +262,16 @@ export function PermissionsSettings() {
   // tab — its own search param (permTab) on the same route, kept in sync the
   // same way the outer tab is, so a refresh lands back on this sub-tab too.
   const { permTab } = useSearch({ from: "/_app/system-settings" });
-  const navigate = useNavigate({ from: "/_app/system-settings" });
+  const navigate = useNavigate();
   const [subTab, setSubTabState] = useState<"by-role" | "by-user">(permTab ?? "by-role");
+  useEffect(() => {
+    setSubTabState(permTab ?? "by-role");
+  }, [permTab]);
   function setSubTab(next: "by-role" | "by-user") {
     setSubTabState(next);
     navigate({
-      search: (prev: { permTab?: "by-role" | "by-user" }) => ({ ...prev, permTab: next }),
+      to: "/system-settings",
+      search: (prev) => ({ ...prev, tab: "permissions", permTab: next }),
       replace: true,
     });
   }
