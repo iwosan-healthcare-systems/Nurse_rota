@@ -211,6 +211,7 @@ function WardsPage() {
             <WardCard
               key={w.id}
               ward={w}
+              showFacility={!selectedFacility}
               canManage={canManageWards}
               onEdit={() => setEditingWard(w)}
               onDelete={() => del(w)}
@@ -233,11 +234,13 @@ function WardsPage() {
 
 function WardCard({
   ward: w,
+  showFacility,
   canManage,
   onEdit,
   onDelete,
 }: {
   ward: Ward;
+  showFacility: boolean;
   canManage: boolean;
   onEdit: () => void;
   onDelete: () => void;
@@ -248,6 +251,12 @@ function WardCard({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-semibold truncate">{w.name}</h3>
+          {showFacility && (
+            <p className="mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs font-medium text-muted-foreground">
+              <Building2 className="h-3 w-3 shrink-0" />
+              <span className="truncate">{w.facility || "No facility assigned"}</span>
+            </p>
+          )}
         </div>
         {canManage && (
           <div className="flex items-center gap-1 shrink-0">
