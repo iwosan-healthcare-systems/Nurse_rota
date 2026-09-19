@@ -55,7 +55,7 @@ const LEAVE_ENTITLEMENTS = {
   Annual: { days: 15, period: "year" },
   "Study Leave": { days: 5, period: "year" },
   "Compassionate Leave": { days: 5, period: "year" },
-  Maternity: { days: 84, period: "year" }, // 12 weeks
+  Maternity: { days: 84, period: "year" },
   Sick: { days: 12, period: "month" },
 };
 
@@ -106,8 +106,42 @@ function currentWindow(period) {
   };
 }
 
+const WORKING_SHIFT_CODES_SQL = "'M','MWC','N','NC'";
+
 function daysBetweenInclusive(fromStr, toStr) {
   return Math.max(0, Math.round((new Date(toStr) - new Date(fromStr)) / 86400000) + 1);
+}
+
+function chargeableDayPredicate(dayExpr, nurseExpr) {
+  return `(
+    EXTRACT(ISODOW FROM ${dayExpr})::int BETWEEN 1 AND 5
+    OR EXISTS (
+      SELECT 1 FROM shift_assignments sa
+      WHERE sa.nurse_id = ${nurseExpr}
+        AND sa.shift_date = ${dayExpr}::date
+        AND (
+          sa.shift IN (${WORKING_SHIFT_CODES_SQL})
+          OR sa.pre_leave_shift IN (${WORKING_SHIFT_CODES_SQL})
+        )
+    )
+  )`;
+}
+
+async function countChargeableLeaveDays(nurseId, fromDate, toDate, opts = {}) {
+  const queryable = opts.queryable ?? pool;
+  const windowStart = opts.windowStart ?? fromDate;
+  const windowEnd = opts.windowEnd ?? toDate;
+  const { rows } = await queryable.query(
+    `SELECT COALESCE(COUNT(*), 0) AS days
+       FROM generate_series(
+         GREATEST($2::date, $4::date),
+         LEAST($3::date, $5::date),
+         INTERVAL '1 day'
+       ) AS d(day)
+      WHERE ${chargeableDayPredicate("d.day", "$1")}`,
+    [nurseId, fromDate, toDate, windowStart, windowEnd],
+  );
+  return Number(rows[0]?.days ?? 0);
 }
 
 // Once a nurse has a Pending or Approved Maternity leave request starting in
@@ -211,15 +245,45 @@ async function effectiveCapsForNurses(nurses) {
 // simultaneous requests can't jointly blow past the cap before any of them
 // are individually decided; Rejected/Expired never count) for one nurse/type,
 // clipped to the current tracking window.
-async function daysUsedFromRequests(nurseId, type, windowStart, windowEnd) {
-  const { rows } = await pool.query(
-    `SELECT COALESCE(SUM(
-       GREATEST(0, (LEAST(to_date, $4::date) - GREATEST(from_date, $3::date)) + 1)
-     ), 0) AS days
-     FROM leave_requests
-     WHERE nurse_id = $1 AND type = $2 AND status IN ('Pending','Approved')
-       AND from_date <= $4::date AND to_date >= $3::date`,
-    [nurseId, type, windowStart, windowEnd],
+async function daysUsedFromRequests(nurseId, type, windowStart, windowEnd, opts = {}) {
+  const queryable = opts.queryable ?? pool;
+  const params = [nurseId, type, windowStart, windowEnd];
+  const excludeClause = opts.excludeRequestId ? `AND lr.id <> $${params.length + 1}` : "";
+  if (opts.excludeRequestId) params.push(opts.excludeRequestId);
+
+  if (type === "Sick") {
+    const { rows } = await queryable.query(
+      `SELECT COALESCE(SUM(
+         GREATEST(0, (LEAST(lr.to_date, $4::date) - GREATEST(lr.from_date, $3::date)) + 1)
+       ), 0) AS days
+       FROM leave_requests lr
+       WHERE lr.nurse_id = $1
+         AND lr.type = $2
+         AND lr.status IN ('Pending','Approved')
+         AND lr.from_date <= $4::date
+         AND lr.to_date >= $3::date
+         ${excludeClause}`,
+      params,
+    );
+    return Number(rows[0]?.days ?? 0);
+  }
+
+  const { rows } = await queryable.query(
+    `SELECT COALESCE(COUNT(*), 0) AS days
+       FROM leave_requests lr
+       JOIN LATERAL generate_series(
+         GREATEST(lr.from_date, $3::date),
+         LEAST(lr.to_date, $4::date),
+         INTERVAL '1 day'
+       ) AS d(day) ON true
+      WHERE lr.nurse_id = $1
+        AND lr.type = $2
+        AND lr.status IN ('Pending','Approved')
+        AND lr.from_date <= $4::date
+        AND lr.to_date >= $3::date
+        ${excludeClause}
+        AND ${chargeableDayPredicate("d.day", "lr.nurse_id")}`,
+    params,
   );
   return Number(rows[0]?.days ?? 0);
 }
@@ -280,7 +344,7 @@ async function getEntitlementUsage(nurseId) {
 // too — a day credited for pre-system leave is just as real as one from an
 // app-submitted request when deciding whether there's room left. The cap
 // used is the nurse's EFFECTIVE cap (individual/role override applied).
-async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
+async function wouldExceedEntitlement(nurseId, type, fromDate, toDate, opts = {}) {
   const entitlement = LEAVE_ENTITLEMENTS[type];
   if (!entitlement) return null;
 
@@ -289,7 +353,7 @@ async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
   const cap = await effectiveCap(nurseId, role, type);
 
   const { start, end, year, month } = currentWindow(entitlement.period);
-  const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end);
+  const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end, opts);
   const usedFromAdjustments = await daysUsedFromAdjustments(
     nurseId,
     type,
@@ -302,7 +366,11 @@ async function wouldExceedEntitlement(nurseId, type, fromDate, toDate) {
   const overlapStart = fromDate > start ? fromDate : start;
   const overlapEnd = toDate < end ? toDate : end;
   const requestedDaysInWindow =
-    overlapStart <= overlapEnd ? daysBetweenInclusive(overlapStart, overlapEnd) : 0;
+    overlapStart <= overlapEnd
+      ? type === "Sick"
+        ? daysBetweenInclusive(overlapStart, overlapEnd)
+        : await countChargeableLeaveDays(nurseId, overlapStart, overlapEnd, opts)
+      : 0;
 
   if (used + requestedDaysInWindow > cap) {
     return { cap, used, requestedDaysInWindow, period: entitlement.period };
@@ -327,16 +395,38 @@ async function getEntitlementUsageForNurses(nurses) {
   for (const [type, { period }] of Object.entries(LEAVE_ENTITLEMENTS)) {
     const { start, end, year, month } = currentWindow(period);
 
-    const { rows: reqRows } = await pool.query(
-      `SELECT nurse_id, COALESCE(SUM(
-         GREATEST(0, (LEAST(to_date, $3::date) - GREATEST(from_date, $2::date)) + 1)
-       ), 0) AS days
-       FROM leave_requests
-       WHERE nurse_id = ANY($1) AND type = $4 AND status IN ('Pending','Approved')
-         AND from_date <= $3::date AND to_date >= $2::date
-       GROUP BY nurse_id`,
-      [nurseIds, start, end, type],
-    );
+    const { rows: reqRows } =
+      type === "Sick"
+        ? await pool.query(
+            `SELECT lr.nurse_id, COALESCE(SUM(
+               GREATEST(0, (LEAST(lr.to_date, $3::date) - GREATEST(lr.from_date, $2::date)) + 1)
+             ), 0) AS days
+             FROM leave_requests lr
+             WHERE lr.nurse_id = ANY($1)
+               AND lr.type = $4
+               AND lr.status IN ('Pending','Approved')
+               AND lr.from_date <= $3::date
+               AND lr.to_date >= $2::date
+             GROUP BY lr.nurse_id`,
+            [nurseIds, start, end, type],
+          )
+        : await pool.query(
+            `SELECT lr.nurse_id, COALESCE(COUNT(*), 0) AS days
+               FROM leave_requests lr
+               JOIN LATERAL generate_series(
+                 GREATEST(lr.from_date, $2::date),
+                 LEAST(lr.to_date, $3::date),
+                 INTERVAL '1 day'
+               ) AS d(day) ON true
+              WHERE lr.nurse_id = ANY($1)
+                AND lr.type = $4
+                AND lr.status IN ('Pending','Approved')
+                AND lr.from_date <= $3::date
+                AND lr.to_date >= $2::date
+                AND ${chargeableDayPredicate("d.day", "lr.nurse_id")}
+              GROUP BY lr.nurse_id`,
+            [nurseIds, start, end, type],
+          );
     const { rows: adjRows } = await pool.query(
       period === "month"
         ? `SELECT nurse_id, COALESCE(SUM(days), 0) AS days FROM leave_entitlement_adjustments
@@ -478,6 +568,7 @@ module.exports = {
   getEntitlementUsage,
   getEntitlementUsageForNurses,
   wouldExceedEntitlement,
+  countChargeableLeaveDays,
   isAnnualBlockedByMaternity,
   leaveYearForDate,
   createAdjustment,

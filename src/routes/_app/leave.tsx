@@ -1823,8 +1823,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     !!nextPeriodEnd &&
     from <= nextPeriodEnd;
 
-  // Remaining entitlement for the target nurse — Annual 15/yr, Study/
-  // Compassionate 5/yr, Maternity 12wk/yr, Sick 12/month. Admin can still
+  // Remaining entitlement for the target nurse - Annual 15/yr, Study/
+  // Compassionate 5/yr, Maternity 84/yr in working/rostered days; Sick 12/month
+  // in calendar days. Admin can still
   // submit past the limit (matches the backend's own admin bypass), so the
   // dropdown isn't narrowed for them — everyone else has exhausted types
   // removed from what they can even select.
@@ -1878,6 +1879,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
 
   // Keep the selected type valid when the allowed list narrows.
   const effectiveType = allowedTypes.includes(type) ? type : allowedTypes[0];
+  const isSickEmergencyType = effectiveType === "Sick" || effectiveType === "Emergency";
+  const selectedEntitlementDayUnit =
+    effectiveType === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
 
   // Type must be picked LAST — which types are even allowed depends on who the
   // request is for and which dates are chosen, so those have to be locked in
@@ -1886,16 +1890,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
   // changes out from under them once the real constraints are known.
   const typeSelectionBlocked = (staffMode && !targetNurseId) || !datesReady || checkingDates;
 
-  // Sick/Emergency: `to` auto-defaults to the configured max span (see the
-  // From/Type onChange handlers below), but the user can still pick
-  // something further out — this flags that case for an inline error
-  // instead of the picker silently refusing the date (submit() below
-  // re-checks this as the final guard).
+  // Sick/Emergency stays calendar-day based, unlike the entitlement types
+  // that skip non-rostered weekends.
   const isSickEmergencyRangeExceeded =
-    (effectiveType === "Sick" || effectiveType === "Emergency") &&
-    !!from &&
-    !!to &&
-    to > addDaysLeaveYmd(from, sickEmergencyMaxOffset);
+    isSickEmergencyType && !!from && !!to && to > addDaysLeaveYmd(from, sickEmergencyMaxOffset);
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -1911,10 +1909,10 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
       toast.error("End date cannot be before the start date");
       return;
     }
-    if (effectiveType === "Sick" || effectiveType === "Emergency") {
+    if (isSickEmergencyType) {
       if (to > addDaysLeaveYmd(from, sickEmergencyMaxOffset)) {
         toast.error(
-          `${effectiveType} leave can only be requested for up to ${sickEmergencyMaxDays} day(s) from the start date.`,
+          `${effectiveType} leave can only be requested for up to ${sickEmergencyMaxDays} calendar day(s) from the start date.`,
         );
         return;
       }
@@ -2054,12 +2052,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => {
                 const v = e.target.value;
                 setFrom(v);
-                // Sick/Emergency: default `to` straight to the configured max
-                // span every time `from` moves — the user can still pick a
-                // different `to` afterwards (isSickEmergencyRangeExceeded
-                // below flags it with an inline error rather than the picker
-                // silently refusing it).
-                if (effectiveType === "Sick" || effectiveType === "Emergency") {
+                if (isSickEmergencyType && v) {
                   setTo(addDaysLeaveYmd(v, sickEmergencyMaxOffset));
                 } else if (!to || to < v) {
                   setTo(v);
@@ -2081,16 +2074,16 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
               onChange={(e) => setTo(e.target.value)}
               className={inputCls}
             />
-            {(effectiveType === "Sick" || effectiveType === "Emergency") &&
+            {isSickEmergencyType &&
               (isSickEmergencyRangeExceeded ? (
                 <p className="text-xs text-destructive mt-1">
-                  {effectiveType} leave can't be more than {sickEmergencyMaxDays} day(s) from the
-                  start date.
+                  {effectiveType} leave can't be more than {sickEmergencyMaxDays} calendar day(s)
+                  from the start date.
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {effectiveType} leave is capped at {sickEmergencyMaxDays} day(s) from the start
-                  date.
+                  {effectiveType} leave is capped at {sickEmergencyMaxDays} calendar day(s) from
+                  the start date.
                 </p>
               ))}
           </div>
@@ -2144,11 +2137,6 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             onChange={(e) => {
               const v = e.target.value;
               setType(v);
-              // Switching TO Sick/Emergency (e.g. from Annual) — default `to`
-              // straight to the configured max span, same as picking `from`
-              // does. The user can still widen it afterwards;
-              // isSickEmergencyRangeExceeded catches that with an inline
-              // error instead of silently blocking.
               if ((v === "Sick" || v === "Emergency") && from) {
                 setTo(addDaysLeaveYmd(from, sickEmergencyMaxOffset));
               }
@@ -2202,7 +2190,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
           {entitlementUsage?.[effectiveType] && (
             <p className="text-xs text-muted-foreground mt-1">
               {effectiveType}: {entitlementUsage[effectiveType].used} of{" "}
-              {entitlementUsage[effectiveType].cap} day(s) used{" "}
+              {entitlementUsage[effectiveType].cap} {selectedEntitlementDayUnit} used{" "}
               {entitlementUsage[effectiveType].period === "month" ? "this month" : "this year"} ·{" "}
               {entitlementUsage[effectiveType].remaining} remaining
             </p>
@@ -2230,7 +2218,9 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={busy || checkingDates || datesInApprovalRota || isSickEmergencyRangeExceeded}
+            disabled={
+              busy || checkingDates || datesInApprovalRota || isSickEmergencyRangeExceeded
+            }
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >

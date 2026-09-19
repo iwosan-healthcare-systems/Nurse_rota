@@ -62,6 +62,10 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
         AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
       WHERE sa.nurse_id = ANY($1) AND sa.status = 'draft' AND sa.shift != 'LEAVE'
         AND sa.shift_date BETWEEN $2 AND $3
+        AND (
+          EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+          OR sa.shift IN ('M','MWC','N','NC')
+        )
       LIMIT 1`,
     [nurseIds, periodStart, periodEnd],
   );

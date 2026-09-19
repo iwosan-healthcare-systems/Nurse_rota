@@ -211,6 +211,10 @@ async function reapplyApprovedLeave(queryable, nurseIds, minDate, maxDate) {
       WHERE sa.nurse_id = ANY($1)
         AND sa.shift_date BETWEEN $2 AND $3
         AND sa.shift != 'LEAVE'
+        AND (
+          EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+          OR sa.shift IN ('M','MWC','N','NC')
+        )
         AND EXISTS (
           SELECT 1 FROM leave_requests lr
           WHERE lr.nurse_id = sa.nurse_id
@@ -617,6 +621,10 @@ router.patch(
           WHERE sa.nurse_id = ANY($1)
             AND sa.status = 'draft'
             AND sa.shift != 'LEAVE'
+            AND (
+              EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+              OR sa.shift IN ('M','MWC','N','NC')
+            )
             AND sa.shift_date BETWEEN $2 AND $3`,
         [nurseIdArr, shift_date_from, shift_date_to],
       );
@@ -915,6 +923,10 @@ router.post(
         WHERE sa.nurse_id = ANY($1)
           AND sa.shift_date BETWEEN $2 AND $3
           AND sa.shift != 'LEAVE'
+          AND (
+            EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+            OR sa.shift IN ('M','MWC','N','NC')
+          )
           AND EXISTS (
             SELECT 1 FROM leave_requests lr
             WHERE lr.nurse_id = sa.nurse_id

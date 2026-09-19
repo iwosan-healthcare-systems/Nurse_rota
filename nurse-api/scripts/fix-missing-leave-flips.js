@@ -34,6 +34,10 @@ const FIND_MISMATCHES_SQL = `
      AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
     LEFT JOIN nurses n ON n.id = sa.nurse_id
    WHERE sa.shift != 'LEAVE'
+     AND (
+       EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+       OR sa.shift IN ('M','MWC','N','NC')
+     )
    ORDER BY n.name, sa.shift_date
 `;
 
@@ -85,6 +89,10 @@ async function main() {
          AND lr.type != 'Swap'
          AND sa.shift_date BETWEEN lr.from_date AND lr.to_date
          AND sa.shift != 'LEAVE'
+         AND (
+           EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
+           OR sa.shift IN ('M','MWC','N','NC')
+         )
     `);
     await client.query(
       `INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`,

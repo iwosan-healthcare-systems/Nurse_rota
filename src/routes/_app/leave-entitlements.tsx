@@ -71,6 +71,10 @@ function fmtDate(d: string) {
   });
 }
 
+function entitlementDayUnit(type: string) {
+  return type === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
+}
+
 function LeaveEntitlementsPage() {
   const { isAdmin, activeRole, nurseId, fullName, canManageLeaveEntitlements } = useAuth();
   // Viewing the admin-wide table is a plain role check, matching the
@@ -138,6 +142,7 @@ function OwnEntitlements({
           : e.remaining <= Math.max(1, Math.ceil(e.cap * 0.2))
             ? "border-amber-300 bg-amber-50 dark:bg-amber-950/20"
             : "border-border bg-card";
+        const dayUnit = entitlementDayUnit(t);
         return (
           <div key={t} className={`rounded-xl border p-5 shadow-soft ${cls}`}>
             <p className="text-sm font-semibold">{t}</p>
@@ -149,7 +154,7 @@ function OwnEntitlements({
               <span className="text-base font-normal text-muted-foreground">left</span>
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              {e.used} of {e.cap} day(s) used{" "}
+              {e.used} of {e.cap} {dayUnit} used{" "}
               {e.period === "month" ? "this month" : "this leave year"}
             </p>
             {e.exhausted && (
@@ -296,12 +301,13 @@ function ManageEntitlements({ canAdjust }: { canAdjust: boolean }) {
                         : e.remaining <= Math.max(1, Math.ceil(e.cap * 0.2))
                           ? "bg-amber-100 text-amber-700"
                           : "bg-emerald-100 text-emerald-700";
+                      const dayUnit = entitlementDayUnit(t);
                       return (
                         <td key={t} className="px-4 py-3 text-center">
                           <div className="inline-flex items-center gap-1.5">
                             <span
                               className={`inline-flex items-center justify-center px-2 py-0.5 rounded-full text-xs font-semibold tabular-nums ${cls}`}
-                              title={`${e.usedFromRequests} day(s) from system requests + ${e.usedFromAdjustments} manually adjusted = ${e.used} of ${e.cap} used ${e.period === "month" ? "this month" : "this leave year"}`}
+                              title={`${e.usedFromRequests} ${dayUnit} from system requests + ${e.usedFromAdjustments} manually adjusted = ${e.used} of ${e.cap} used ${e.period === "month" ? "this month" : "this leave year"}`}
                             >
                               {e.used}/{e.cap}
                             </span>

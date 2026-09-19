@@ -4,6 +4,7 @@ const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const {
   wouldExceedEntitlement,
+  countChargeableLeaveDays,
   isAnnualBlockedByMaternity,
   leaveYearForDate,
 } = require("../lib/leave-entitlements");
@@ -166,6 +167,21 @@ router.get(
   }),
 );
 
+router.get(
+  "/chargeable-days",
+  wrap(async (req, res) => {
+    const { nurse_id, from, to } = req.query;
+    if (!nurse_id || !from || !to) {
+      return res.status(400).json({ error: "nurse_id, from, and to are required" });
+    }
+    if (to < from) {
+      return res.status(400).json({ error: "to must be on or after from" });
+    }
+    const days = await countChargeableLeaveDays(nurse_id, from, to);
+    res.json({ days });
+  }),
+);
+
 // Roles allowed to create a shift-switch (type "Swap") on someone else's behalf.
 // Mirrors canRequestShiftSwitch in auth-context.tsx (admin bypass is implicit via requireRole-style check below).
 const SWITCH_INITIATOR_ROLES = ["admin", "cno", "chief_matron"];
@@ -194,7 +210,7 @@ router.post(
       const maxToDate = addDaysYmd(from_date, maxDays - 1);
       if (to_date > maxToDate) {
         return res.status(400).json({
-          error: `${type} leave can only be requested for up to ${maxDays} day(s) from the start date.`,
+          error: `${type} leave can only be requested for up to ${maxDays} calendar day(s) from the start date.`,
         });
       }
     }
@@ -247,8 +263,9 @@ router.post(
       }
     }
 
-    // Entitlement cap (Annual 15/yr, Study/Compassionate 5/yr, Maternity 12wk/yr,
-    // Sick 12/month) — hard block once exhausted, admin can still override.
+    // Entitlement cap (Annual 15/yr, Study/Compassionate 5/yr, Maternity 84/yr
+    // in working/rostered days; Sick 12/month in calendar days) - hard block
+    // once exhausted, admin can still override.
     // Pending + Approved both count as "used" so several simultaneous
     // requests can't jointly exceed the cap before any is individually
     // decided. Untracked types (Swap, Emergency, Public Holiday, Leave of
@@ -257,8 +274,9 @@ router.post(
     if (nurse_id && !requesterRoles.includes("admin")) {
       const overage = await wouldExceedEntitlement(nurse_id, type, from_date, to_date);
       if (overage) {
+        const dayUnit = type === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
         return res.status(422).json({
-          error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} day(s) allowed ${overage.period === "month" ? "this month" : "this year"} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
+          error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} ${dayUnit} allowed ${overage.period === "month" ? "this month" : "this year"} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
           code: "LEAVE_ENTITLEMENT_EXCEEDED",
         });
       }
@@ -557,6 +575,52 @@ router.patch(
       const nextType = updates.type ?? current.type;
       const nextStatus = updates.status ?? current.status;
       const nextFromDate = updates.from_date ?? current.from_date;
+      const nextToDate = updates.to_date ?? current.to_date;
+      const nextFromYmd = String(nextFromDate).slice(0, 10);
+      const nextToYmd = String(nextToDate).slice(0, 10);
+      const dateOrTypeChanged = ["from_date", "to_date", "type"].some((field) =>
+        fields.includes(field),
+      );
+
+      if (dateOrTypeChanged && nextToYmd < nextFromYmd) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "End date cannot be before the start date" });
+      }
+
+      if (dateOrTypeChanged && (nextType === "Sick" || nextType === "Emergency")) {
+        const maxDays = await getSickEmergencyMaxDays();
+        const maxToDate = addDaysYmd(nextFromYmd, maxDays - 1);
+        if (nextToYmd > maxToDate) {
+          await client.query("ROLLBACK");
+          return res.status(400).json({
+            error: `${nextType} leave can only be requested for up to ${maxDays} calendar day(s) from the start date.`,
+          });
+        }
+      }
+
+      if (
+        dateOrTypeChanged &&
+        current.nurse_id &&
+        !userRoles.includes("admin") &&
+        ["Pending", "Approved"].includes(nextStatus)
+      ) {
+        const overage = await wouldExceedEntitlement(
+          current.nurse_id,
+          nextType,
+          nextFromYmd,
+          nextToYmd,
+          { queryable: client, excludeRequestId: current.id },
+        );
+        if (overage) {
+          const dayUnit = nextType === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
+          await client.query("ROLLBACK");
+          return res.status(422).json({
+            error: `${current.nurse_name} has already used ${overage.used} of ${overage.cap} ${nextType} ${dayUnit} allowed ${overage.period === "month" ? "this month" : "this year"} - this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
+            code: "LEAVE_ENTITLEMENT_EXCEEDED",
+          });
+        }
+      }
+
       if (
         nextType === "Annual" &&
         ["Pending", "Approved"].includes(nextStatus) &&
@@ -565,7 +629,7 @@ router.patch(
       ) {
         const blocked = await isAnnualBlockedByMaternity(
           current.nurse_id,
-          leaveYearForDate(nextFromDate),
+          leaveYearForDate(nextFromYmd),
           { queryable: client, excludeRequestId: current.id },
         );
         if (blocked) {
@@ -622,6 +686,10 @@ router.patch(
               WHERE nurse_id = $1
                 AND shift_date BETWEEN $2 AND $3
                 AND shift != 'LEAVE'
+                AND (
+                  EXTRACT(ISODOW FROM shift_date)::int BETWEEN 1 AND 5
+                  OR shift IN ('M','MWC','N','NC')
+                )
               RETURNING shift_date, pre_leave_shift`
             : `UPDATE shift_assignments
                 SET pre_leave_shift = shift,
@@ -629,6 +697,10 @@ router.patch(
               WHERE nurse_id = $1
                 AND shift_date BETWEEN $2 AND $3
                 AND shift != 'LEAVE'
+                AND (
+                  EXTRACT(ISODOW FROM shift_date)::int BETWEEN 1 AND 5
+                  OR shift IN ('M','MWC','N','NC')
+                )
               RETURNING shift_date, pre_leave_shift`,
           hasLeaveTypeColumn
             ? [leave.nurse_id, leave.from_date, leave.to_date, leave.type]
