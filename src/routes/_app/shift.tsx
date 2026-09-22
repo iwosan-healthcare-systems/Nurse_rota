@@ -2,6 +2,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { currentRotaStart } from "@/lib/rota-window";
+import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -78,13 +80,6 @@ type PeriodHours = {
 
 function todayYmd() {
   const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
-function nextPeriodStart(periodEnd: string | undefined, fallback: string): string {
-  if (!periodEnd) return fallback;
-  const d = new Date(periodEnd.slice(0, 10) + "T00:00:00");
-  d.setDate(d.getDate() + 1);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
@@ -349,36 +344,19 @@ function ShiftPage() {
     },
   });
 
-  const { data: latestArchivedPeriod } = useQuery<PeriodHours | null>({
-    queryKey: ["latest-archived-period-hours"],
-    refetchInterval: 60000,
-    queryFn: async () => {
-      const arr = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
-      return arr[0] ?? null;
-    },
-  });
+  const { data: livePeriod } = useCurrentRotaPeriod();
 
   // Running hours this period from shift_logs (live sum)
   const { data: currentPeriodLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["my-period-logs", nurseId, latestArchivedPeriod?.period_end],
-    enabled: !!nurseId,
+    queryKey: ["my-period-logs", nurseId, livePeriod?.start],
+    enabled: !!nurseId && !!livePeriod,
     refetchInterval: 60000,
     queryFn: async () => {
-      // Start the live total after the latest archived period. This prevents
-      // the trailing 28-day fallback from including the period just closed.
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-
-      const periodStart = nextPeriodStart(latestArchivedPeriod?.period_end, lb);
-      const periodEnd = new Date(periodStart.slice(0, 10) + "T00:00:00");
-      periodEnd.setDate(periodEnd.getDate() + 27);
-      const pe = `${periodEnd.getFullYear()}-${String(periodEnd.getMonth() + 1).padStart(2, "0")}-${String(periodEnd.getDate()).padStart(2, "0")}`;
-
+      const { start: periodStart, end: pe } = livePeriod!;
       return api
         .get<
           ShiftLog[]
-        >(`/shift-logs?nurse_id=${nurseId}&is_locum=false&period_start=${periodStart}&from=${periodStart}&to=${pe}`)
+        >(`/shift-logs?nurse_id=${nurseId}&is_locum=false&from=${periodStart}&to=${pe}`)
         .catch(() => []);
     },
   });
@@ -431,15 +409,13 @@ function ShiftPage() {
     officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
 
     void (async () => {
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
       const winRows = await api
-        .get<
-          { shift_date: string }[]
-        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
+        .get<{ shift_date: string }[]>(`/shift-assignments?status=published&limit=1`)
         .catch(() => []);
-      const periodStart = nextPeriodStart(periodHours?.period_end, winRows[0]?.shift_date ?? today);
+      const periodStart = currentRotaStart(
+        winRows[0]?.shift_date ?? assignmentDate,
+        assignmentDate,
+      );
       await api
         .post("/shift-logs", {
           nurse_id: nurseId,
@@ -516,13 +492,13 @@ function ShiftPage() {
       pendingGeoRef.current = null;
 
       // Find the period start
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
       const winRows = await api.get<{ shift_date: string }[]>(
-        `/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`,
+        `/shift-assignments?status=published&limit=1`,
       );
-      const periodStart = nextPeriodStart(periodHours?.period_end, winRows[0]?.shift_date ?? today);
+      const periodStart = currentRotaStart(
+        winRows[0]?.shift_date ?? assignment.shift_date,
+        assignment.shift_date,
+      );
 
       const recordedLate = (lateMins ?? 0) > 0;
 
@@ -1172,36 +1148,26 @@ function AllNursesShiftView() {
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
 
-  const lookback = new Date();
-  lookback.setDate(lookback.getDate() - 27);
-  const lbStr = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-
   const { data: nurses = [] } = useQuery<NurseRow[]>({
     queryKey: ["nurses"],
     queryFn: () => api.get<NurseRow[]>("/nurses"),
   });
 
-  const { data: latestPeriod } = useQuery<PeriodHours | null>({
-    queryKey: ["all-latest-period-hours"],
-    refetchInterval: 60000,
-    queryFn: async () => {
-      const rows = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
-      return rows[0] ?? null;
-    },
-  });
-
-  const currentPeriodStart = latestPeriod?.period_end
-    ? (() => {
-        const d = new Date(latestPeriod.period_end.slice(0, 10) + "T00:00:00");
-        d.setDate(d.getDate() + 1);
-        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      })()
-    : lbStr;
+  const { data: livePeriod } = useCurrentRotaPeriod();
+  const currentPeriodStart = livePeriod?.start;
 
   const { data: logs = [] } = useQuery<AllShiftLog[]>({
     queryKey: ["all-shift-logs-current", currentPeriodStart],
+    enabled: !!livePeriod,
     refetchInterval: 60000,
-    queryFn: () => api.get<AllShiftLog[]>(`/shift-logs?from=${currentPeriodStart}`),
+    queryFn: async () => {
+      const [periodLogs, activeLogs] = await Promise.all([
+        api.get<AllShiftLog[]>(`/shift-logs?from=${livePeriod!.start}&to=${livePeriod!.end}`),
+        api.get<AllShiftLog[]>("/shift-logs?ended_at_null=true"),
+      ]);
+      // Keep the previous period's final night shift visible until it ends.
+      return [...new Map([...periodLogs, ...activeLogs].map((log) => [log.id, log])).values()];
+    },
   });
 
   // Build per-nurse totals
@@ -1230,22 +1196,20 @@ function AllNursesShiftView() {
         isSwap: l.is_swap,
       });
     }
-    if (l.is_late) {
+    if (l.is_late && l.shift_date.slice(0, 10) >= currentPeriodStart!) {
       lateMap.set(l.nurse_id, (lateMap.get(l.nurse_id) ?? 0) + 1);
     }
   }
 
   // Total hours each nurse is rostered for in the current period, computed from her
-  // own published shift_assignments — not the manually-set target_hours field. Period
-  // boundaries are found the same way as the per-nurse dashboard's currentPeriodLogs
-  // query: the earliest published assignment within the trailing 27-day window marks
-  // the period start, then the full 28-day block is fetched from there.
+  // own published shift_assignments, using the same calendar period as live totals.
   const { data: periodAssignments = [] } = useQuery<
     { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
   >({
     queryKey: ["all-period-assignments", currentPeriodStart],
+    enabled: !!livePeriod,
     queryFn: async () => {
-      const periodStart = currentPeriodStart;
+      const periodStart = livePeriod!.start;
       const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
       periodEndDate.setDate(periodEndDate.getDate() + 27);
       const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, "0")}-${String(periodEndDate.getDate()).padStart(2, "0")}`;

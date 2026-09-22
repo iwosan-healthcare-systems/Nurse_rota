@@ -2,6 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { useState, useMemo, useEffect } from "react";
 import {
   Download,
@@ -254,13 +255,6 @@ function todayYmd() {
   return ymd(new Date());
 }
 
-// Same 28-day lookback used for "current period" shift-log queries.
-function periodLookbackYmd() {
-  const d = new Date();
-  d.setDate(d.getDate() - 27);
-  return ymd(d);
-}
-
 // Shift switch requests are stored as leave_requests with type="Swap" and a reason
 // field starting with this sentinel — mirrors parseSwitch in leave.tsx.
 const SWITCH_PREFIX = "SHIFT_SWITCH|";
@@ -507,14 +501,16 @@ function ReportsContent() {
     queryFn: () => api.get<LeaveRequest[]>("/leave-requests"),
   });
 
-  // Current period regular shift logs (last 28 days) — locum and missed excluded
+  const { data: livePeriod } = useCurrentRotaPeriod();
+  // Use the rota's calendar boundaries, even if archiving is delayed.
   const { data: shiftLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["shift-logs-current"],
+    queryKey: ["shift-logs-current", livePeriod?.start],
+    enabled: !!livePeriod,
+    refetchInterval: 60000,
     queryFn: () => {
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = `${lookback.getFullYear()}-${String(lookback.getMonth() + 1).padStart(2, "0")}-${String(lookback.getDate()).padStart(2, "0")}`;
-      return api.get<ShiftLog[]>(`/shift-logs?is_locum=false&is_missed=false&from=${lb}`);
+      return api.get<ShiftLog[]>(
+        `/shift-logs?is_locum=false&is_missed=false&from=${livePeriod!.start}&to=${livePeriod!.end}`,
+      );
     },
   });
 
@@ -547,7 +543,7 @@ function ReportsContent() {
   // All saved period summaries
   const { data: periodSummaries = [] } = useQuery<PeriodHours[]>({
     queryKey: ["period-hours-all"],
-    staleTime: 30 * 60 * 1000,
+    refetchInterval: 60000,
     queryFn: () => api.get<PeriodHours[]>("/nurse-period-hours"),
   });
 
@@ -850,9 +846,14 @@ function ReportsContent() {
     const leaveTotal = [...leaveHoursMap.values()].reduce((s, h) => s + h, 0);
     const regularTotal = Math.max(totalLoggedHours - leaveTotal, 0);
     const swapTotal = [...swapHoursMap.values()].reduce((s, h) => s + h, 0);
-    const lookback = periodLookbackYmd();
+    if (!livePeriod) return [];
     const locumPeriodTotal = locumShiftLogs
-      .filter((l) => scopedNurseIds.has(l.nurse_id) && l.shift_date.slice(0, 10) >= lookback)
+      .filter(
+        (l) =>
+          scopedNurseIds.has(l.nurse_id) &&
+          l.shift_date.slice(0, 10) >= livePeriod.start &&
+          l.shift_date.slice(0, 10) <= livePeriod.end,
+      )
       .reduce((s, l) => s + (l.hours_logged != null ? Number(l.hours_logged) : 0), 0);
     const order = ["Regular", "Locum", "Additional (Swap)", "Leave Credited"];
     return [
@@ -863,15 +864,19 @@ function ReportsContent() {
     ]
       .filter((d) => d.value > 0)
       .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
-  }, [totalLoggedHours, leaveHoursMap, swapHoursMap, locumShiftLogs, scopedNurseIds]);
+  }, [totalLoggedHours, leaveHoursMap, swapHoursMap, locumShiftLogs, scopedNurseIds, livePeriod]);
 
   // Missed shifts by type (current period), Roster vs Locum
   const missedByTypeData: CategoryDatum[] = useMemo(() => {
-    const lookback = periodLookbackYmd();
+    if (!livePeriod) return [];
     let roster = 0;
     let locum = 0;
     for (const l of scopedMissedLogs) {
-      if (l.shift_date.slice(0, 10) < lookback) continue;
+      if (
+        l.shift_date.slice(0, 10) < livePeriod.start ||
+        l.shift_date.slice(0, 10) > livePeriod.end
+      )
+        continue;
       if (l.is_locum) locum++;
       else roster++;
     }
@@ -882,7 +887,7 @@ function ReportsContent() {
     ]
       .filter((d) => d.value > 0)
       .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
-  }, [scopedMissedLogs]);
+  }, [scopedMissedLogs, livePeriod]);
 
   // Approved leave by type, all time within current facility scope
   const leaveByTypeData: CategoryDatum[] = useMemo(() => {
@@ -1030,7 +1035,7 @@ function ReportsContent() {
   async function closePeriod() {
     if (
       !confirm(
-        "Close the current period? This will save all nurses' hours to the period archive and reset their monthly hour counter to 0.",
+        "Archive the oldest completed period? Hours already earned after the archived period will be preserved.",
       )
     )
       return;
@@ -1043,7 +1048,7 @@ function ReportsContent() {
       }>("/rpc/auto-close-period");
       toast.success(
         result.closed
-          ? `Period closed — ${fmtDate(result.period_start!)} to ${fmtDate(result.period_end!)}; hours archived and counters reset`
+          ? `Period closed — ${fmtDate(result.period_start!)} to ${fmtDate(result.period_end!)}; hours archived and current totals updated`
           : "No completed period is ready to close yet",
       );
       qc.invalidateQueries({ queryKey: ["nurses"] });

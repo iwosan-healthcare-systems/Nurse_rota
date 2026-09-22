@@ -3,6 +3,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { currentRotaStart, rotaToday } from "@/lib/rota-window";
 import { logAudit } from "@/lib/audit";
 import { NURSE_TIER_ROLES } from "@/lib/auth-context";
 import {
@@ -192,6 +193,16 @@ function RotaPage() {
   // View state
   const [busy, setBusy] = useState(false);
   const [startOffset, setStartOffset] = useState(0);
+  const [calendarDay, setCalendarDay] = useState(rotaToday);
+  useEffect(() => {
+    const refreshDay = () => setCalendarDay(rotaToday());
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+    };
+  }, []);
   const [selectedFacility, setSelectedFacility] = useState(lockedFacility ?? "");
   const [selectedWard, setSelectedWard] = useState("");
   const [selectedFacilityWide, setSelectedFacilityWide] = useState("");
@@ -346,9 +357,8 @@ function RotaPage() {
   const [shiftPicker, setShiftPicker] = useState<ShiftPicker | null>(null);
 
   // ── Auto-detect the active schedule window start ──────────────────────────
-  // Strategy: a 28-day window started at most 27 days ago still contains today.
-  // Search backwards 27 days for the earliest assignment — that is the window start.
-  // If none found in that range, fall forward to the next upcoming window.
+  // Find a stable cycle boundary; the calendar advances it below even if
+  // period-hours archiving is delayed. A trailing lookback is not a boundary.
   // Scoped to the effective facility (via nurse IDs) so admin users switching between
   // facilities with different schedule start dates see the correct period anchor.
   const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
@@ -363,9 +373,8 @@ function RotaPage() {
       today.setHours(0, 0, 0, 0);
       const todayStr = ymd(today);
 
-      // Once a period is archived, its next calendar day is the current
-      // rota period. Do not let the trailing lookback rediscover the closed
-      // period's final shift date (especially an overnight shift).
+      // An archive provides a known boundary. The calendar advances this
+      // anchor below if later periods have ended without being archived.
       if (latestArchivedPeriod?.period_end) {
         const nextStart = new Date(
           latestArchivedPeriod.period_end.slice(0, 10) + "T00:00:00",
@@ -373,10 +382,6 @@ function RotaPage() {
         nextStart.setDate(nextStart.getDate() + 1);
         return ymd(nextStart);
       }
-
-      const lookback = new Date(today);
-      lookback.setDate(lookback.getDate() - 27);
-      const lookbackStr = ymd(lookback);
 
       // When a specific facility is selected, scope the anchor to that facility's
       // nurses only — prevents Ikeja's schedule start from bleeding into Ligali's view.
@@ -386,26 +391,13 @@ function RotaPage() {
         : [];
       const nurseFilter = facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
 
-      // Run both window checks in parallel: current (last 27 days) and future (tomorrow+).
-      // If a current window is found, we use it; otherwise fall back to the future one.
-      // Parallel fetch halves the waterfall when no current window exists.
+      // Without an archive, the first assignment anchors the 28-day cycle.
+      // Looking back 27 days can select a date in the middle of an old rota.
       const statusParam = isNurseTier ? "&status=published" : "";
-      const tomorrow = new Date(today);
-      tomorrow.setDate(tomorrow.getDate() + 1);
-      const [current, future] = await Promise.all([
-        api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?from=${lookbackStr}&limit=1${statusParam}${nurseFilter}`)
-          .catch(() => [] as { shift_date: string }[]),
-        api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${statusParam}${nurseFilter}`)
-          .catch(() => [] as { shift_date: string }[]),
-      ]);
-      if (current[0]?.shift_date) return current[0].shift_date.slice(0, 10);
-      return (future[0]?.shift_date ?? todayStr).slice(0, 10);
+      const first = await api.get<{ shift_date: string }[]>(
+        `/shift-assignments?limit=1${statusParam}${nurseFilter}`,
+      );
+      return (first[0]?.shift_date ?? todayStr).slice(0, 10);
     },
     enabled: latestArchivedPeriod !== undefined,
   });
@@ -418,7 +410,7 @@ function RotaPage() {
       // Slice to 10 chars ("YYYY-MM-DD") before parsing — the DB can return a full
       // ISO timestamp (e.g. "2024-01-15T00:00:00+00:00") and appending "T00:00:00"
       // to that produces an unparseable string → Invalid Date → NaN-NaN-NaN.
-      const d = new Date(scheduleWindowStart.slice(0, 10) + "T00:00:00");
+      const d = new Date(currentRotaStart(scheduleWindowStart, calendarDay) + "T00:00:00");
       d.setHours(0, 0, 0, 0);
       if (!isNaN(d.getTime())) return d;
     }
@@ -426,7 +418,7 @@ function RotaPage() {
     t.setHours(0, 0, 0, 0);
     t.setDate(t.getDate() + 1);
     return t;
-  }, [scheduleWindowStart]);
+  }, [scheduleWindowStart, calendarDay]);
 
   const startDate = useMemo(() => {
     const d = new Date(anchor);

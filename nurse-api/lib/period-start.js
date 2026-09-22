@@ -2,18 +2,14 @@ const pool = require("../db");
 
 async function periodStartForShiftDate(shiftDate, fallback) {
   const { rows } = await pool.query(
-    `SELECT period_end::text
-       FROM nurse_period_hours
-      WHERE period_end < $1::date
-      ORDER BY period_end DESC
-      LIMIT 1`,
+    `SELECT (anchor + (($1::date - anchor) / 28) * 28)::text AS period_start
+       FROM (
+         SELECT MIN(shift_date)::date AS anchor FROM shift_assignments
+         WHERE status = 'published' AND shift_date <= $1::date
+       ) cycle`,
     [shiftDate],
   );
-  if (!rows[0]?.period_end) return fallback || shiftDate;
-
-  const nextStart = new Date(rows[0].period_end.slice(0, 10) + "T00:00:00");
-  nextStart.setDate(nextStart.getDate() + 1);
-  return nextStart.toISOString().slice(0, 10);
+  return rows[0]?.period_start || fallback || shiftDate;
 }
 
 module.exports = { periodStartForShiftDate };
