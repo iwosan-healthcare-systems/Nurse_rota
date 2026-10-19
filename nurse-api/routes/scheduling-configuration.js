@@ -63,7 +63,10 @@ router.post(
 router.post(
   "/facilities/:facilityId/versions",
   manage(),
-  wrap((req) => service.create(req.user.userId, req.params.facilityId, req.body), 201),
+  wrap(
+    (req) => service.create(req.user.userId, req.params.facilityId, req.body, { single: true }),
+    201,
+  ),
 );
 router.put(
   "/facilities/:facilityId/versions/:versionId",

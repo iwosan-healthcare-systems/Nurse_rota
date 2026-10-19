@@ -36,9 +36,7 @@ async function creditConfiguredLeave(pool, now = new Date()) {
          (nurse_id,shift_date,shift_type,started_at,expected_end_at,ended_at,period_start,
           hours_logged,is_leave,is_missed,is_locum,is_swap,leave_request_id,scheduling_definition)
          SELECT $1,$2::date,$3::text,$4,$5,$5,
-          COALESCE((SELECT anchor+(($2::date-anchor)/28)*28 FROM
-            (SELECT MIN(shift_date)::date AS anchor FROM shift_assignments
-              WHERE status='published' AND shift_date<=$2::date) cycle),$2::date),
+          COALESCE(rota_period_start($2::date),$2::date),
           $6,true,false,false,false,$7,$8::jsonb
          WHERE NOT EXISTS (SELECT 1 FROM shift_logs WHERE nurse_id=$1 AND shift_date=$2::date)
          RETURNING nurse_id,hours_logged`,

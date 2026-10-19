@@ -214,7 +214,13 @@ router.get(
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    let query = `SELECT *,shift_date::text FROM shift_assignments ${where} ORDER BY shift_assignments.shift_date`;
+    // include_period adds the rota period each shift falls in, so clients can
+    // group by period without knowing its length (monthly or legacy 28-day).
+    const periodColumn =
+      req.query.include_period === "true"
+        ? ",rota_period_start(shift_date)::text AS period_start,rota_period_end(shift_date)::text AS period_end"
+        : "";
+    let query = `SELECT *,shift_date::text${periodColumn} FROM shift_assignments ${where} ORDER BY shift_assignments.shift_date`;
     if (req.query.limit) {
       query += ` LIMIT $${params.length + 1}`;
       params.push(parseInt(req.query.limit, 10));

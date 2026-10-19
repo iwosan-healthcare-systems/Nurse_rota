@@ -1,5 +1,6 @@
 // Facility policy shared by administrator requests and recurring generation.
 const { UUID } = require("./scheduling-configuration");
+const { periodFor } = require("./rota-periods");
 const { validDate, addDays } = require("./configured-scheduler");
 const { persistRotaDraft, DraftConflict } = require("./persist-rota-draft");
 const legacy = require("./auto-schedule.generated");
@@ -70,19 +71,11 @@ function createPolicyService({
           rows: [clock],
         } = await db.query("SELECT (now() AT TIME ZONE 'Africa/Lagos')::date::text AS today");
         if (start <= clock.today) fail(422, "Activation must begin in a future rota period");
-        const {
-          rows: [epoch],
-        } = await db.query(
-          "SELECT MIN(a.shift_date)::text AS anchor FROM shift_assignments a JOIN nurses n ON n.id=a.nurse_id WHERE n.facility=$1 AND a.status='published'",
-          [facility.legacy_facility],
-        );
-        const previous = await db.query(
-          "SELECT period_anchor::text FROM scheduling_policy_events WHERE facility_id=$1 AND state='active' ORDER BY sequence LIMIT 1",
-          [facilityId],
-        );
-        const anchor = epoch.anchor ?? previous.rows[0]?.period_anchor ?? start;
-        if (((Date.parse(start) - Date.parse(anchor)) / 86400000) % 28 !== 0)
-          fail(422, "Choose a 28-day boundary aligned with the facility published rota");
+        // Rota periods are calendar months (after any earlier 28-day periods).
+        const bounds = await periodFor(db, start);
+        if (!bounds || bounds.start !== start)
+          fail(422, "Choose the first day of a rota period (the 1st of a month)");
+        const anchor = start;
         const existing = await db.query(
           "SELECT 1 FROM shift_assignments a JOIN nurses n ON n.id=a.nurse_id WHERE n.facility=$1 AND a.shift_date>=$2 LIMIT 1",
           [facility.legacy_facility, start],
@@ -94,7 +87,7 @@ function createPolicyService({
           );
         const pending = await db.query(
           "SELECT 1 FROM leave_requests l JOIN nurses n ON n.id=l.nurse_id WHERE n.facility=$1 AND l.status='Pending' AND l.from_date<=$3 AND l.to_date>=$2 LIMIT 1",
-          [facility.legacy_facility, start, addDays(start, 27)],
+          [facility.legacy_facility, start, bounds.end],
         );
         if (pending.rows.length) fail(409, "Resolve pending leave before activation");
         const fresh = await generateRun(
@@ -135,8 +128,9 @@ function createPolicyService({
     if (!policy) return null;
     if (policy.state === "paused")
       return { handled: true, skipped: true, reason: "Configured generation is paused" };
-    if (((Date.parse(startDate) - Date.parse(policy.period_anchor)) / 86400000) % 28 !== 0)
-      fail(422, "Generation must start at the activated facility rota boundary");
+    const bounds = await periodFor(db, startDate);
+    if (!bounds || bounds.start !== startDate)
+      fail(422, "Generation must start on the first day of a rota period");
     const {
       rows: [source],
     } = await db.query("SELECT * FROM scheduling_runs WHERE id=$1 AND facility_id=$2", [
@@ -172,7 +166,7 @@ function createPolicyService({
     // A mid-period addition writes only from the joining date; earlier dates of
     // the period belong to schedules already reviewed for everyone else.
     const ids = selected.map((n) => n.id),
-      end = addDays(startDate, 27),
+      end = bounds.end,
       first = fromDate ?? startDate;
     await db.query("SELECT id FROM nurses WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE", [ids]);
     const { rows: existing } = await db.query(
@@ -266,13 +260,13 @@ function createPolicyService({
          ORDER BY p.sequence DESC LIMIT 1`,
         [facilityName],
       );
-      return policy?.state === "active"
-        ? {
-            periodStart: policy.effective_from,
-            periodEnd: addDays(policy.effective_from, 27),
-            hasActive: false,
-          }
-        : null;
+      if (policy?.state !== "active") return null;
+      const bounds = await periodFor(pool, policy.effective_from);
+      return {
+        periodStart: policy.effective_from,
+        periodEnd: bounds?.end ?? addDays(policy.effective_from, 27),
+        hasActive: false,
+      };
     },
     async pauseScheduling(userId, facilityId, body) {
       assertBody(body, []);
@@ -321,7 +315,7 @@ function createPolicyService({
         `SELECT n.id,n.name,n.role,n.ward FROM nurses n
          WHERE n.facility=$1 AND n.is_active=true AND NOT EXISTS (
            SELECT 1 FROM shift_assignments a
-           WHERE a.nurse_id=n.id AND a.shift_date BETWEEN $2::date AND $2::date+27)
+           WHERE a.nurse_id=n.id AND a.shift_date BETWEEN $2::date AND rota_period_end($2::date))
          ORDER BY n.name`,
         [facility.legacy_facility, startDate],
       );
@@ -338,11 +332,14 @@ function createPolicyService({
         !UUID.test(body.nurseId)
       )
         fail(400, "Choose a period, staff member and first date");
-      if (body.fromDate < body.startDate || body.fromDate > addDays(body.startDate, 27))
-        fail(422, "The first date must fall within the selected 28-day period");
       return transaction(
         async (db) => {
           const facility = await facilityFor(db, userId, facilityId, true);
+          const bounds = await periodFor(db, body.startDate);
+          if (!bounds || bounds.start !== body.startDate)
+            fail(422, "Choose the first day of a rota period");
+          if (body.fromDate < body.startDate || body.fromDate > bounds.end)
+            fail(422, "The first date must fall within the selected rota period");
           const {
             rows: [clock],
           } = await db.query("SELECT (now() AT TIME ZONE 'Africa/Lagos')::date::text AS today");

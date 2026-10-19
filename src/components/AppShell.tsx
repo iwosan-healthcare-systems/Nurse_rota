@@ -34,7 +34,7 @@ import {
   Settings,
   Hospital,
 } from "lucide-react";
-import logo from "@/assets/logo.jpeg";
+import { useHospitalBranding, useMyHospitals } from "@/lib/hospital-branding";
 import { cn } from "@/lib/utils";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { api, getToken } from "@/lib/api";
@@ -104,12 +104,7 @@ function HospitalSwitcher({
   hospitalId: string | null;
   onSwitch: (id: string) => void;
 }) {
-  const { data } = useQuery({
-    queryKey: ["my-hospitals"],
-    enabled,
-    staleTime: 5 * 60 * 1000,
-    queryFn: () => api.get<{ hospitals: { id: string; name: string }[] }>("/hospitals/mine"),
-  });
+  const { data } = useMyHospitals(enabled);
   const hospitals = data?.hospitals ?? [];
   const current = hospitals.find((h) => h.id === hospitalId);
   if (!current) return null;
@@ -1826,6 +1821,7 @@ function RoleSelectionScreen({
   selectRole: (role: AppRole) => void;
   signOut: () => void;
 }) {
+  const branding = useHospitalBranding();
   const { roleLabel, roleDescription } = useAuth();
   const [selected, setSelected] = useState<AppRole>(roles[0]);
 
@@ -1844,11 +1840,7 @@ function RoleSelectionScreen({
       >
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 rounded-lg bg-white grid place-items-center overflow-hidden border">
-            <img
-              src={logo}
-              alt="Iwosan Lagoon Hospitals"
-              className="h-full w-full object-contain"
-            />
+            <img src={branding.logo} alt={branding.name} className="h-full w-full object-contain" />
           </div>
           <div className="min-w-0">
             <p className="text-lg font-bold leading-tight">Choose your role</p>
@@ -1908,22 +1900,18 @@ function SidebarContent({
   items: (typeof nav)[number][];
   onClose?: () => void;
 }) {
+  // The current hospital's logo and name (the application logo when it has none).
+  const branding = useHospitalBranding();
   return (
     <>
       <div className="px-5 py-5 flex items-center justify-between border-b border-sidebar-border">
         <div className="flex items-center gap-2.5">
           <div className="h-10 w-10 rounded-lg bg-white grid place-items-center overflow-hidden border border-sidebar-border">
-            <img
-              src={logo}
-              alt="Iwosan Lagoon Hospitals"
-              className="h-full w-full object-contain"
-            />
+            <img src={branding.logo} alt={branding.name} className="h-full w-full object-contain" />
           </div>
           <div>
             <p className="text-sm font-bold leading-tight">Nurses Rota</p>
-            <p className="text-[11px] text-sidebar-foreground/60 leading-tight">
-              Iwosan Lagoon Hospitals
-            </p>
+            <p className="text-[11px] text-sidebar-foreground/60 leading-tight">{branding.name}</p>
           </div>
         </div>
         {onClose && (

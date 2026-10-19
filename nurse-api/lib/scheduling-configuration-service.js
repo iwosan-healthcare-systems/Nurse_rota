@@ -1,6 +1,7 @@
 const { createHash } = require("node:crypto");
 const { persistRotaDraft, DraftConflict } = require("./persist-rota-draft");
 const { createPolicyService, isLiveCompatible } = require("./scheduling-policy");
+const { periodFor, daysInclusive } = require("./rota-periods");
 const {
   UUID,
   validateConfiguration,
@@ -141,13 +142,17 @@ function createSchedulingConfigurationService(pool) {
         [ids, body.startDate],
       );
       const anchorDate = body.anchorDate ?? epochs[0]?.anchor ?? body.startDate;
+      // Runs cover the rest of the rota period holding the start (a calendar
+      // month after any earlier 28-day periods; see migration 053).
+      const bounds = await periodFor(db, body.startDate);
+      const days = bounds ? daysInclusive(body.startDate, bounds.end) : 28;
       const { rows: previousAssignments } = await db.query(
         "SELECT nurse_id, shift_date::text, shift, pre_leave_shift FROM shift_assignments WHERE nurse_id = ANY($1::uuid[]) AND status = 'published' AND shift_date BETWEEN $2 AND $3 ORDER BY shift_date,nurse_id",
         [ids, addDays(body.startDate, -366), addDays(body.startDate, -1)],
       );
       const { rows: leave } = await db.query(
         "SELECT nurse_id, from_date::text, to_date::text, status, type FROM leave_requests WHERE nurse_id = ANY($1::uuid[]) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2 ORDER BY nurse_id,from_date,to_date,type",
-        [ids, body.startDate, addDays(body.startDate, 27)],
+        [ids, body.startDate, addDays(body.startDate, days - 1)],
       );
       try {
         const inputs = {
@@ -158,6 +163,7 @@ function createSchedulingConfigurationService(pool) {
           previousAssignments,
           startDate: body.startDate,
           anchorDate,
+          days,
         };
         const result = {
           ...generateConfiguredPreview({
@@ -169,6 +175,7 @@ function createSchedulingConfigurationService(pool) {
             previousAssignments,
             startDate: body.startDate,
             anchorDate,
+            days,
           }),
           configurationId: version.id,
           activationAvailable: true,
@@ -450,7 +457,9 @@ function createSchedulingConfigurationService(pool) {
         warnings: result.valid ? configurationWarnings(body.configuration) : [],
       };
     },
-    async create(userId, facilityId, body) {
+    // With { single: true } (the HTTP API) a facility keeps one current
+    // configuration: once it exists, it is updated rather than versioned again.
+    async create(userId, facilityId, body, { single = false } = {}) {
       assertBody(body, ["configuration", "sourceVersionId"]);
       if (body.configuration !== undefined && body.sourceVersionId !== undefined)
         fail(400, "Choose configuration or sourceVersionId, not both");
@@ -479,6 +488,14 @@ function createSchedulingConfigurationService(pool) {
           );
         }
         checked(configuration, wards);
+        if (single) {
+          const { rows: existing } = await db.query(
+            "SELECT 1 FROM scheduling_config_versions WHERE facility_id = $1 LIMIT 1",
+            [facilityId],
+          );
+          if (existing.length)
+            fail(409, "This facility already has a scheduling configuration. Update it instead.");
+        }
         const { rows } = await db.query(
           `INSERT INTO scheduling_config_versions
            (organization_id, facility_id, version, configuration, created_by, updated_by)

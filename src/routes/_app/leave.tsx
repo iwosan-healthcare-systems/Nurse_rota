@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
+import { rotaPeriodEndFor } from "@/lib/rota-window";
 
 export const Route = createFileRoute("/_app/leave")({
   validateSearch: (search: Record<string, unknown>) => ({
@@ -148,6 +149,7 @@ type ActiveTab = "leave" | "switches";
 type WorkflowStatus = {
   firstRotaPublished: boolean;
   nextPeriodStart?: string;
+  nextPeriodEnd?: string;
   leaveClosureDate?: string;
   publishDeadline?: string;
   leaveIsClosed?: boolean;
@@ -1860,14 +1862,11 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     staleTime: 5 * 60 * 1000,
     queryFn: () => api.get<WorkflowStatus>("/rpc/workflow-status"),
   });
-  // The closure window only applies to the period being closed (next period ≤ nextPeriodStart + 27 days).
+  // The closure window only applies to the period being closed (nextPeriodStart → nextPeriodEnd).
   // Leave for dates beyond that period has its own future closure window and must not be blocked now.
   const nextPeriodStart = workflowStatus?.nextPeriodStart;
-  const nextPeriodEnd = nextPeriodStart
-    ? new Date(new Date(nextPeriodStart + "T00:00:00").getTime() + 27 * 86400000)
-        .toISOString()
-        .slice(0, 10)
-    : null;
+  const nextPeriodEnd =
+    workflowStatus?.nextPeriodEnd ?? (nextPeriodStart ? rotaPeriodEndFor(nextPeriodStart) : null);
   // Only actually restrict once we KNOW the picked date falls in the closing
   // window — before the user has chosen a from date (or before workflowStatus
   // has loaded), there's nothing to evaluate yet, so this must default to

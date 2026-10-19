@@ -30,19 +30,59 @@ router.get(
   wrap(async (req, res) => {
     const { rows } = await platform(req, () =>
       pool.query(
-        `SELECT h.id, h.name FROM hospitals h
+        `SELECT h.id, h.name, CASE WHEN h.id = $3 THEN h.logo END AS logo FROM hospitals h
          WHERE $2 OR EXISTS (SELECT 1 FROM hospital_memberships m
                              WHERE m.hospital_id = h.id AND m.user_id = $1)
          ORDER BY h.created_at, h.name`,
-        [req.user.userId, req.user.isSuperAdmin],
+        [req.user.userId, req.user.isSuperAdmin, req.hospitalId],
       ),
     );
     res.json({
-      hospitals: rows,
+      hospitals: rows.map(({ logo, ...h }) => h),
       current_hospital_id: req.hospitalId,
+      // The current hospital's own logo; null means use the application's logo.
+      current_logo: rows.find((h) => h.id === req.hospitalId)?.logo ?? null,
       is_super_admin: req.user.isSuperAdmin,
     });
   }),
+);
+
+// Hospital logos: a PNG, JPEG, WebP or SVG data URL (the browser downsizes photos),
+// or null to fall back to the application's logo.
+const LOGO = /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
+async function saveLogo(req, res, hospitalId) {
+  const logo = req.body?.logo ?? null;
+  if (logo !== null && (typeof logo !== "string" || logo.length > 550000 || !LOGO.test(logo)))
+    return res
+      .status(400)
+      .json({ error: "Upload a PNG, JPEG, WebP or SVG image of about 400 KB or less" });
+  const { rows } = await platform(req, () =>
+    pool.query(
+      `UPDATE hospitals SET logo = $2, logo_updated_at = CASE WHEN $2::text IS NULL THEN NULL ELSE now() END
+       WHERE id = $1 RETURNING id`,
+      [hospitalId, logo],
+    ),
+  );
+  if (!rows[0]) return res.status(404).json({ error: "Hospital not found" });
+  await pool.query(
+    "INSERT INTO audit_logs (action, actor_id, actor_name, target) VALUES ($1,$2,$3,$4)",
+    [
+      logo ? "Hospital logo updated" : "Hospital logo removed",
+      req.user.userId,
+      req.user.full_name ?? null,
+      hospitalId,
+    ],
+  );
+  res.json({ logo });
+}
+// The current hospital's administrator manages its own logo.
+router.put(
+  "/current/logo",
+  (req, res, next) =>
+    (req.user.roles || []).includes("admin")
+      ? next()
+      : res.status(403).json({ error: "Only administrators can change the hospital logo" }),
+  wrap((req, res) => saveLogo(req, res, req.hospitalId)),
 );
 
 // Facility (site) names in the current hospital: its GPS sites, wards and staff.
@@ -86,7 +126,7 @@ router.get(
   wrap(async (req, res) => {
     const { rows } = await platform(req, () =>
       pool.query(
-        `SELECT h.id, h.name, h.created_at,
+        `SELECT h.id, h.name, h.created_at, h.logo,
            (SELECT COUNT(*)::int FROM hospital_memberships m WHERE m.hospital_id = h.id) AS members,
            (SELECT COUNT(*)::int FROM nurses n WHERE n.hospital_id = h.id AND n.is_active) AS staff
          FROM hospitals h ORDER BY h.created_at, h.name`,
@@ -132,8 +172,10 @@ router.post(
         const {
           rows: [hospital],
         } = await client.query(
-          "INSERT INTO hospitals (name) VALUES ($1) RETURNING id, name, created_at",
-          [setup.name],
+          `INSERT INTO hospitals (name, logo, logo_updated_at)
+           VALUES ($1, $2, CASE WHEN $2::text IS NULL THEN NULL ELSE now() END)
+           RETURNING id, name, created_at`,
+          [setup.name, setup.logo],
         );
         // Roles created for this hospital belong to it; every chosen role is enabled.
         for (const role of setup.roles.custom)
@@ -246,6 +288,15 @@ router.get(
       ),
     );
     res.json({ roles: rows });
+  }),
+);
+
+router.put(
+  "/:id/logo",
+  superAdmin,
+  wrap((req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid hospital" });
+    return saveLogo(req, res, req.params.id);
   }),
 );
 

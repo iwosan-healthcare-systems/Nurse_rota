@@ -7,6 +7,7 @@ import { ApiError, api } from "@/lib/api";
 import { useAuth, type AppRole } from "@/lib/auth-context";
 import { DEFAULT_CAPABILITIES } from "@/lib/capability-definitions";
 import { NAV_DEFINITIONS, getEffectiveRoles } from "@/lib/menu-permissions";
+import { HospitalLogoField } from "./HospitalLogoField";
 
 // Every setting a hospital runs on is entered here. Nothing is copied from
 // another hospital and no field is pre-filled; the server validates the same.
@@ -182,6 +183,7 @@ export function HospitalSetupWizard({
   const [name, setName] = useState("");
   const [adminName, setAdminName] = useState("");
   const [adminEmail, setAdminEmail] = useState("");
+  const [logo, setLogo] = useState<string | null>(null);
   const [radius, setRadius] = useState("");
   const [sites, setSites] = useState<Site[]>([{ name: "", locations: [blankLocation()] }]);
   const [security, setSecurity] = useState({ min: "", expiry: "", idle: "" });
@@ -365,6 +367,7 @@ export function HospitalSetupWizard({
     ];
     return {
       name: name.trim(),
+      logo,
       roles: { enabled: enabledRoles ?? [], custom: newRoles },
       admin: { full_name: adminName.trim(), email: adminEmail.trim() },
       gps: {
@@ -462,6 +465,9 @@ export function HospitalSetupWizard({
               onChange={(e) => setName(e.target.value)}
             />
           </label>
+          <div className="sm:col-span-2">
+            <HospitalLogoField value={logo} onChange={setLogo} label="Hospital logo (optional)" />
+          </div>
           <p className="text-sm text-muted-foreground sm:col-span-2">
             The hospital's first administrator receives an account with a temporary password and
             sets up its wards, staff and scheduling.
@@ -680,7 +686,8 @@ export function HospitalSetupWizard({
       {step === 4 && (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            Rota periods are 28 days. Deadlines count back from the next period's start.
+            Rota periods are calendar months. Deadlines count back from the next period's start (the
+            1st).
           </p>
           <div className="grid gap-3 sm:grid-cols-2">
             {DEADLINES.map((d) => (
@@ -897,6 +904,7 @@ export function HospitalSetupWizard({
         <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
           {[
             ["Hospital", name],
+            ["Logo", logo ? "Uploaded" : "None (application logo is used)"],
             ["Roles", ["Administrator", ...roles.map((r) => r.label)].join(", ")],
             ["Administrator", `${adminName} (${adminEmail})`],
             [

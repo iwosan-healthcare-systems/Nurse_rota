@@ -106,12 +106,12 @@ function generateConfiguredPreview({
     anchorDate > startDate ||
     !Number.isInteger(days) ||
     days < 1 ||
-    days > 28
+    days > 31
   )
     throw new PreviewError([
       {
         path: "startDate",
-        message: "Use a valid start date, an anchor on/before it, and 1-28 days",
+        message: "Use a valid start date, an anchor on/before it, and 1-31 days",
       },
     ]);
   const dates = Array.from({ length: days }, (_, i) => addDays(startDate, i));

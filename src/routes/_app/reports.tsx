@@ -14,6 +14,7 @@ import {
   type AttendanceDefinition,
 } from "@/lib/attendance-report";
 import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
+import { rememberRotaPeriod, rotaPeriodEndFor } from "@/lib/rota-window";
 import { useState, useMemo, useEffect } from "react";
 import {
   Download,
@@ -234,6 +235,8 @@ type ArchiveAssignment = {
   // lookup for archive/history display, so a later role change doesn't
   // rewrite what was actually published at the time.
   nurse_role: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern" | "naday";
 const FW_LABELS: Record<FacilityWideGroup, string> = {
@@ -332,9 +335,7 @@ function dateRange(start: string, end: string): string[] {
 }
 
 function scheduleEndDate(startDate: string): string {
-  const d = new Date(startDate.slice(0, 10) + "T00:00:00");
-  d.setDate(d.getDate() + 27);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return rotaPeriodEndFor(startDate);
 }
 
 // ── Archive grouping (mirrors approvals.tsx groupIntoWindows) ────────────────
@@ -388,7 +389,13 @@ function groupArchiveWindows(
         (new Date(sorted[i].shift_date).getTime() - new Date(cluster[0].shift_date).getTime()) /
           86400000,
       );
-      if (diff > 14 || spanDays >= 28) {
+      // Rows carry their rota period when the hospital is known; otherwise split
+      // at a data gap or a full legacy 28-day span.
+      const newPeriod =
+        sorted[i].period_start && cluster[0].period_start
+          ? sorted[i].period_start !== cluster[0].period_start
+          : spanDays >= 28;
+      if (diff > 14 || newPeriod) {
         windows.push(makeArchiveWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
@@ -411,8 +418,10 @@ function makeArchiveWindow(
   roleGroup: FacilityWideGroup | null,
 ): ArchiveWindow {
   const dates = rows.map((r) => r.shift_date).sort();
+  const period = rows.find((r) => r.period_start);
+  rememberRotaPeriod(period?.period_start, period?.period_end);
   return {
-    startDate: dates[0],
+    startDate: period?.period_start ?? dates[0],
     endDate: dates[dates.length - 1],
     ward,
     facility,
@@ -576,7 +585,9 @@ function ReportsContent() {
       const sixMonthsAgo = new Date();
       sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
       const cutoff = `${sixMonthsAgo.getFullYear()}-${String(sixMonthsAgo.getMonth() + 1).padStart(2, "0")}-${String(sixMonthsAgo.getDate()).padStart(2, "0")}`;
-      return api.get<ArchiveAssignment[]>(`/shift-assignments?status=published&from=${cutoff}`);
+      return api.get<ArchiveAssignment[]>(
+        `/shift-assignments?status=published&from=${cutoff}&include_period=true`,
+      );
     },
     enabled: tab === "schedules",
   });

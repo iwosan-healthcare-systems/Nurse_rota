@@ -268,6 +268,12 @@ async function scenarios(t) {
       });
       assert.equal(invalid.status, 422);
       assert.ok((await invalid.json()).errors.length > 0);
+      const second = await fetch(`${base}/versions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ configuration: version.configuration }),
+      });
+      assert.equal(second.status, 409, "One current configuration per facility");
       assert.equal(
         (await fetch(`${base}/versions/${version.id}/activate`, { method: "POST" })).status,
         404,
@@ -325,7 +331,8 @@ async function scenarios(t) {
           result.staff.map((n) => n.id),
           [nurseId],
         );
-        assert.equal(result.assignments.length, 28);
+        // A mid-month start runs to the end of its rota period (September).
+        assert.equal(result.assignments.length, 10);
         assert.equal(result.assignments[0].shift, "LEAVE");
         assert.equal(result.configurationRevision, 1);
         assert.equal(result.activationAvailable, true);
@@ -356,7 +363,7 @@ async function scenarios(t) {
           body: JSON.stringify({ revision: 1, startDate: "2026-09-21" }),
         });
         assert.equal(response.status, 200);
-        assert.equal((await response.json()).assignments.length, 28);
+        assert.equal((await response.json()).assignments.length, 10);
         assert.equal(
           (
             await fetch(`${base}/versions/${draft.id}/preview`, {
@@ -418,7 +425,8 @@ async function scenarios(t) {
         });
         assert.ok(run.runId);
         assert.match(run.inputFingerprint, /^[a-f0-9]{64}$/);
-        assert.equal(run.assignments.length, 28);
+        // 21-30 September: the rest of the monthly rota period.
+        assert.equal(run.assignments.length, 10);
         const original = await service.getRun(admin, a, run.runId);
         const config2 = structuredClone(configuration);
         config2.shifts[0].name = "Changed Morning";
@@ -506,7 +514,7 @@ async function scenarios(t) {
         configuration.wardPolicies.forEach((p) => (p.specialRule = "none"));
         configuration.requirements.forEach((r) => (r.minimum = 0));
         const draft = await service.create(admin, a, { configuration });
-        const body = { revision: 1, startDate: "2026-11-16" };
+        const body = { revision: 1, startDate: "2026-11-01" };
         const run = await service.saveRun(admin, a, draft.id, body);
         assert.equal(run.hasBlockingIssues, false);
         const url = `${base}/runs/${run.runId}/draft`;
@@ -531,14 +539,14 @@ async function scenarios(t) {
         });
         assert.equal(response.status, 201);
         const saved = await response.json();
-        assert.equal(saved.written, 28);
+        assert.equal(saved.written, 30); // November
         const rows = (
           await pool.query(
             "SELECT * FROM shift_assignments WHERE scheduling_run_id=$1 ORDER BY shift_date",
             [run.runId],
           )
         ).rows;
-        assert.equal(rows.length, 28);
+        assert.equal(rows.length, 30);
         assert.ok(rows.every((r) => r.status === "draft"));
         await pool.query("UPDATE shift_assignments SET status='published' WHERE id=$1", [
           rows[0].id,
@@ -562,7 +570,7 @@ async function scenarios(t) {
               [run.runId],
             )
           ).rows[0].n,
-          28,
+          30,
         );
         await pool.query(
           "UPDATE shift_assignments SET shift=CASE WHEN shift='OFF' THEN 'M' ELSE 'OFF' END WHERE id=$1",
@@ -578,7 +586,7 @@ async function scenarios(t) {
         );
         const later = await service.saveRun(admin, a, draft.id, {
           revision: 1,
-          startDate: "2026-12-14",
+          startDate: "2026-12-01",
         });
         await pool.query("UPDATE nurses SET target_hours=target_hours+1 WHERE profile_id=$1", [
           reader,
@@ -589,12 +597,12 @@ async function scenarios(t) {
         );
         const fresh = await service.saveRun(admin, a, draft.id, {
           revision: 1,
-          startDate: "2026-12-14",
+          startDate: "2026-12-01",
         });
         const nurseId = fresh.staff[0].id;
         const pending = (
           await pool.query(
-            "INSERT INTO leave_requests(nurse_id,nurse_name,type,status,from_date,to_date) VALUES ($1,'Test','Annual','Pending','2026-12-14','2026-12-15') RETURNING id",
+            "INSERT INTO leave_requests(nurse_id,nurse_name,type,status,from_date,to_date) VALUES ($1,'Test','Annual','Pending','2026-12-01','2026-12-15') RETURNING id",
             [nurseId],
           )
         ).rows[0].id;
@@ -609,7 +617,7 @@ async function scenarios(t) {
         const customDraft = await service.create(admin, a, { configuration: custom });
         const customRun = await service.saveRun(admin, a, customDraft.id, {
           revision: 1,
-          startDate: "2026-12-14",
+          startDate: "2026-12-01",
         });
         await assert.rejects(
           service.createDraftFromRun(admin, a, customRun.runId, {}),
@@ -739,9 +747,10 @@ async function scenarios(t) {
           w.specialRule = "none";
         });
         const draft = await service.create(admin, b, { configuration });
+        const DAYS_JAN = 31;
         const run = await service.saveRun(admin, b, draft.id, {
           revision: 1,
-          startDate: "2044-01-04",
+          startDate: "2044-01-01",
         });
         assert.equal(run.hasBlockingIssues, false, JSON.stringify(run.diagnostics));
         const ids = run.staff.map((n) => n.id);
@@ -755,13 +764,13 @@ async function scenarios(t) {
         assert.equal((await post(`runs/${run.runId}/activate`)).status, 409);
         const fresh = await service.saveRun(admin, b, draft.id, {
           revision: 1,
-          startDate: "2044-01-04",
+          startDate: "2044-01-01",
         });
         const activated = await post(`runs/${fresh.runId}/activate`);
         assert.equal(activated.status, 201, JSON.stringify(await activated.json()));
-        assert.equal((await service.activePolicy(admin, b, "2044-01-03")).policy, null);
+        assert.equal((await service.activePolicy(admin, b, "2043-12-31")).policy, null);
         assert.equal(
-          (await service.activePolicy(admin, b, "2044-01-04")).policy.source_run_id,
+          (await service.activePolicy(admin, b, "2044-01-01")).policy.source_run_id,
           fresh.runId,
         );
         assert.equal((await service.initialAutomaticPeriod("Other")).periodStart, fresh.startDate);
@@ -785,7 +794,7 @@ async function scenarios(t) {
           dryRun: true,
         });
         assert.equal(dry.written, 0);
-        assert.equal(dry.assignments, ids.length * 28);
+        assert.equal(dry.assignments, ids.length * DAYS_JAN);
         assert.equal(await count("scheduling_runs"), beforeRuns);
         assert.equal(await count("shift_assignments"), beforeCells);
         const automatic = await service.generateAutomaticUnit({
@@ -793,7 +802,7 @@ async function scenarios(t) {
           startDate: fresh.startDate,
           nurseIds: ids,
         });
-        assert.equal(automatic.written, ids.length * 28);
+        assert.equal(automatic.written, ids.length * DAYS_JAN);
         const stored = (
           await pool.query("SELECT * FROM scheduling_runs WHERE id=$1", [automatic.runId])
         ).rows[0];
@@ -879,7 +888,7 @@ async function scenarios(t) {
           { method: "DELETE" },
         );
         assert.equal(remove.status, 409);
-        assert.equal(await count("shift_assignments"), beforeCells + ids.length * 28);
+        assert.equal(await count("shift_assignments"), beforeCells + ids.length * DAYS_JAN);
         // Approval changes remain possible; regeneration cannot overwrite them.
         await pool.query(
           "UPDATE shift_assignments SET status='submitted' WHERE nurse_id=ANY($1::uuid[]) AND shift_date=$2",
@@ -946,7 +955,7 @@ async function scenarios(t) {
           (e) => e.status === 422,
         );
         assert.equal(await count("scheduling_runs"), resumeRuns);
-        assert.equal(await count("shift_assignments"), beforeCells + ids.length * 28);
+        assert.equal(await count("shift_assignments"), beforeCells + ids.length * DAYS_JAN);
         await pool.query("UPDATE nurses SET role='Nurse' WHERE id=$1", [ids[0]]);
         assert.equal(
           (
@@ -956,7 +965,7 @@ async function scenarios(t) {
               nurseIds: ids,
             })
           ).written,
-          ids.length * 28,
+          ids.length * 29,
         );
         // A nurse who joins mid-period is scheduled from their first date only,
         // leaving everyone else's already generated cells untouched.
@@ -968,7 +977,7 @@ async function scenarios(t) {
         const others = async () =>
           (
             await pool.query(
-              "SELECT id,shift,status,updated_at FROM shift_assignments WHERE nurse_id=ANY($1::uuid[]) AND shift_date BETWEEN '2044-02-01' AND '2044-02-28' ORDER BY id",
+              "SELECT id,shift,status,updated_at FROM shift_assignments WHERE nurse_id=ANY($1::uuid[]) AND shift_date BETWEEN '2044-02-01' AND '2044-02-29' ORDER BY id",
               [ids],
             )
           ).rows;
@@ -988,16 +997,16 @@ async function scenarios(t) {
         const added = await post("add-staff", addBody);
         const addedBody = await added.json();
         assert.equal(added.status, 201, JSON.stringify(addedBody));
-        assert.equal(addedBody.written, 19);
+        assert.equal(addedBody.written, 20);
         const joinerCells = (
           await pool.query(
             "SELECT shift_date::text,status,scheduling_run_id FROM shift_assignments WHERE nurse_id=$1 ORDER BY shift_date",
             [joiner.id],
           )
         ).rows;
-        assert.equal(joinerCells.length, 19);
+        assert.equal(joinerCells.length, 20);
         assert.equal(joinerCells[0].shift_date, "2044-02-10");
-        assert.equal(joinerCells.at(-1).shift_date, "2044-02-28");
+        assert.equal(joinerCells.at(-1).shift_date, "2044-02-29");
         assert.ok(
           joinerCells.every((c) => c.status === "draft" && c.scheduling_run_id === addedBody.runId),
         );
@@ -1052,7 +1061,7 @@ async function scenarios(t) {
         ).rows.map((n) => n.id);
         const generating = service.generateAutomaticUnit({
           facilityName: "Other",
-          startDate: "2044-02-29",
+          startDate: "2044-03-01",
           nurseIds: ids,
         });
         const rejected = assert.rejects(generating, (e) => e.status === 409);
@@ -1325,6 +1334,42 @@ async function scenarios(t) {
         assert.deepEqual(saved[0].scheduling_definition, resolved.scheduled_shift);
       },
     );
+    await t.test("rota periods are calendar months after any legacy 28-day periods", async () => {
+      const db = await pool.connect();
+      const period = async (d) =>
+        (
+          await db.query(
+            "SELECT rota_period_start($1::date)::text AS start, rota_period_end($1::date)::text AS end",
+            [d],
+          )
+        ).rows[0];
+      try {
+        await db.query("BEGIN");
+        await db.query(
+          "UPDATE hospitals SET legacy_period_anchor=NULL, legacy_period_until=NULL WHERE id=app_current_hospital()",
+        );
+        assert.deepEqual(await period("2027-02-14"), { start: "2027-02-01", end: "2027-02-28" });
+        assert.deepEqual(await period("2028-02-29"), { start: "2028-02-01", end: "2028-02-29" });
+        assert.deepEqual(await period("2026-12-31"), { start: "2026-12-01", end: "2026-12-31" });
+        // Legacy periods 24 Aug-20 Sep and 21 Sep-18 Oct finish as they are; the
+        // rest of October is one transition period, then calendar months.
+        await db.query(
+          "UPDATE hospitals SET legacy_period_anchor='2026-08-24', legacy_period_until='2026-10-18' WHERE id=app_current_hospital()",
+        );
+        assert.deepEqual(await period("2026-08-24"), { start: "2026-08-24", end: "2026-09-20" });
+        assert.deepEqual(await period("2026-10-18"), { start: "2026-09-21", end: "2026-10-18" });
+        assert.deepEqual(await period("2026-10-19"), { start: "2026-10-19", end: "2026-10-31" });
+        assert.deepEqual(await period("2026-10-31"), { start: "2026-10-19", end: "2026-10-31" });
+        assert.deepEqual(await period("2026-11-01"), { start: "2026-11-01", end: "2026-11-30" });
+        await assert.rejects(
+          db.query("UPDATE hospitals SET legacy_period_until=NULL WHERE id=app_current_hospital()"),
+          /hospitals_legacy_periods/,
+        );
+      } finally {
+        await db.query("ROLLBACK");
+        db.release();
+      }
+    });
     await t.test(
       "archive resolves saved windows and closes completed periods transactionally",
       async () => {
@@ -1383,7 +1428,7 @@ async function scenarios(t) {
         const result = await module.exports.closeCompletedPeriod();
         assert.equal(result.closed, true);
         assert.equal(result.period_start, "2000-01-01");
-        assert.equal(result.period_end, "2000-01-28");
+        assert.equal(result.period_end, "2000-01-31", "Periods are calendar months");
         const {
           rows: [archive],
         } = await pool.query(
@@ -3287,19 +3332,8 @@ async function scenarios(t) {
       Object.assign(theatre, { scope: "facility", approvalGroup: "head", category: "none" });
 
       // Activation must start on the facility's 28-day boundary in the future.
-      const {
-        rows: [epoch],
-      } = await pool.query(
-        `SELECT COALESCE(
-           (SELECT MIN(a.shift_date)::text FROM shift_assignments a JOIN nurses n ON n.id=a.nurse_id
-             WHERE n.facility='Other' AND a.status='published'),
-           (SELECT period_anchor::text FROM scheduling_policy_events
-             WHERE facility_id=$1 AND state='active' ORDER BY sequence LIMIT 1)) AS anchor`,
-        [b],
-      );
-      let start = epoch.anchor;
-      while (start < "2046-01-01")
-        start = new Date(Date.parse(start) + 28 * 86400000).toISOString().slice(0, 10);
+      // Rota periods are calendar months, so a later period starts on the 1st.
+      const start = "2046-01-01";
 
       const draft = await service.create(admin, b, { configuration });
       const run = await service.saveRun(admin, b, draft.id, { revision: 1, startDate: start });
@@ -3311,7 +3345,7 @@ async function scenarios(t) {
       const headUnit = await post("generate-active", { startDate: start, unit: "group:head" });
       const headBody = await headUnit.json();
       assert.equal(headUnit.status, 201, JSON.stringify(headBody));
-      assert.equal(headBody.written, 28);
+      assert.equal(headBody.written, 31); // January 2046
       const headCells = (
         await pool.query(
           "SELECT DISTINCT nurse_id FROM shift_assignments WHERE scheduling_run_id=$1",

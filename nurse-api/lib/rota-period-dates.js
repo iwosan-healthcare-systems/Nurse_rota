@@ -41,6 +41,7 @@ async function getNextPeriodDates({ simulateToday } = {}) {
     `
     SELECT
       ($1::date + 1)::text                                              AS next_period_start,
+      rota_period_end($1::date + 1)::text                               AS next_period_end,
       ($1::date + 1 - ($3::int * INTERVAL '1 day'))::date::text         AS leave_closure_date,
       ($1::date + 1 - ($4::int * INTERVAL '1 day'))::date::text         AS generate_date,
       ($1::date + 1 - ($5::int * INTERVAL '1 day'))::date::text         AS edit_close_date,
@@ -66,6 +67,8 @@ async function getNextPeriodDates({ simulateToday } = {}) {
   const row = rows[0];
   return {
     nextPeriodStart: row.next_period_start,
+    // Calendar month (or the rest of the month after the last 28-day period).
+    nextPeriodEnd: row.next_period_end,
     leaveClosureDate: row.leave_closure_date,
     generateDate: row.generate_date,
     editCloseDate: row.edit_close_date,
@@ -128,6 +131,12 @@ async function getWindowForPeriod(periodStart, { simulateToday } = {}) {
   };
 }
 
+// Last day of the rota period starting on periodStart (see migration 053).
+async function periodEndFor(periodStart) {
+  const { rows } = await pool.query("SELECT rota_period_end($1::date)::text AS end", [periodStart]);
+  return rows[0]?.end ?? addDays(periodStart, 27);
+}
+
 function addDays(dateStr, n) {
   const d = new Date(dateStr + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + n);
@@ -170,7 +179,11 @@ async function getUnitPeriod(nurseIds, ward) {
   );
   const activeStart = activeRows[0]?.start;
   if (activeStart) {
-    return { periodStart: activeStart, periodEnd: addDays(activeStart, 27), hasActive: true };
+    return {
+      periodStart: activeStart,
+      periodEnd: await periodEndFor(activeStart),
+      hasActive: true,
+    };
   }
 
   const { rows: pubRows } = await pool.query(
@@ -194,7 +207,7 @@ async function getUnitPeriod(nurseIds, ward) {
   if (!lastPublished) return null; // nothing published anywhere yet — no reference point at all
 
   const periodStart = addDays(lastPublished, 1);
-  return { periodStart, periodEnd: addDays(periodStart, 27), hasActive: false };
+  return { periodStart, periodEnd: await periodEndFor(periodStart), hasActive: false };
 }
 
 // For one nurse + a requested leave date range: if their ward/unit currently

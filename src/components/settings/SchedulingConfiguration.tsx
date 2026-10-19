@@ -1,10 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Trash2, ArrowUp, ArrowDown, Save, CheckCircle2, Loader2, Copy } from "lucide-react";
+import { Plus, Trash2, ArrowUp, ArrowDown, Save, CheckCircle2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { SchedulingRotaPreview } from "./SchedulingRotaPreview";
+import { SchedulingActivationTab } from "./SchedulingActivationTab";
+import { PatternMonthCalendar } from "./PatternMonthCalendar";
 import { SchedulingCoverageRules } from "./SchedulingCoverageRules";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
@@ -12,7 +13,6 @@ import {
   renameShift,
   shiftIsUsed,
   patternIsUsed,
-  patternPreview,
   setRequirement,
   configurationErrorLabel,
   type SchedulingConfiguration as Configuration,
@@ -106,6 +106,17 @@ export function SchedulingConfigurationEditor({
     queryFn: () => api.get<{ versions: VersionSummary[] }>(`${base}/versions`),
     retry: false,
   });
+  // Each facility keeps one current configuration: open the saved one, or the
+  // hospital's existing rules if nothing has been saved yet.
+  const current = versions.data?.versions[0] ?? null;
+  const [opened, setOpened] = useState(false);
+  useEffect(() => {
+    if (opened || !versions.data || !defaults.data) return;
+    setOpened(true);
+    if (current) void openVersion(current.id);
+    else load(null, defaults.data.configuration);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [opened, versions.data, defaults.data]);
   useEffect(() => {
     onDirtyChange(dirty);
   }, [dirty, onDirtyChange]);
@@ -119,7 +130,7 @@ export function SchedulingConfigurationEditor({
     },
     [onDirtyChange, onBusyChange],
   );
-  const editable = canManage && version?.status !== "archived" && !busy;
+  const editable = canManage && !busy;
   const wards = defaults.data?.wards ?? [];
   const selectedWard = wardId || wards[0]?.id || "";
   const confirmDiscard = () =>
@@ -151,7 +162,6 @@ export function SchedulingConfigurationEditor({
     }
   }
   async function openVersion(id: string) {
-    if (!confirmDiscard()) return;
     setBusy(true);
     setProblem("");
     try {
@@ -163,21 +173,21 @@ export function SchedulingConfigurationEditor({
       setBusy(false);
     }
   }
-  async function save(asNew = false) {
+  // Saving updates the current configuration in place (the first save creates it).
+  async function save() {
     if (!config) return;
     setBusy(true);
     setProblem("");
     try {
-      const row =
-        version && !asNew
-          ? await api.put<ConfigurationVersion>(`${base}/versions/${version.id}`, {
-              revision: version.revision,
-              configuration: config,
-            })
-          : await api.post<ConfigurationVersion>(`${base}/versions`, { configuration: config });
+      const row = version
+        ? await api.put<ConfigurationVersion>(`${base}/versions/${version.id}`, {
+            revision: version.revision,
+            configuration: config,
+          })
+        : await api.post<ConfigurationVersion>(`${base}/versions`, { configuration: config });
       load(row, row.configuration);
       await qc.invalidateQueries({ queryKey: ["scheduling-versions", facility.id] });
-      toast.success(`Draft version ${row.version} saved`);
+      toast.success("Scheduling configuration saved");
     } catch (error) {
       showError(error);
     } finally {
@@ -236,58 +246,19 @@ export function SchedulingConfigurationEditor({
   return (
     <div className="space-y-5">
       <div className="rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm text-amber-950">
-        <strong>Draft configuration</strong>
+        <strong>Scheduling configuration</strong>
         <p className="mt-1">
-          Prepare your hospital’s scheduling rules here. Saved drafts do not change current or
-          published rotas. Administrators can activate a reviewed run from the Rota preview tab.
+          This facility has one scheduling configuration. Saving updates it; current and published
+          rotas only change once an administrator puts the rules into use from the Activation tab.
         </p>
-      </div>
-      <div className={cardClass}>
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="min-w-52 flex-1">
-            <Field label="Saved version">
-              <select
-                className={inputClass}
-                disabled={busy}
-                value={version?.id ?? ""}
-                onChange={(e) => {
-                  if (e.target.value) void openVersion(e.target.value);
-                }}
-              >
-                <option value="" disabled>
-                  Select a version
-                </option>
-                {versions.data?.versions.map((v) => (
-                  <option key={v.id} value={v.id}>
-                    Version {v.version} · revision {v.revision} · {v.status}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          <Button
-            variant="outline"
-            disabled={busy || !defaults.data}
-            onClick={() => {
-              if (defaults.data && confirmDiscard()) load(null, defaults.data.configuration);
-            }}
-          >
-            {canManage ? "Start from current rules" : "View current rules"}
-          </Button>
-        </div>
-        {!versions.data?.versions.length && (
-          <p className="text-sm text-muted-foreground">
-            No saved drafts yet. Start from current rules to review the existing setup.
-          </p>
-        )}
       </div>
       {problem && (
         <Problem>
           <p>{problem}</p>
           {conflict && (
             <p className="mt-2">
-              Your edits are still here. Reload the saved version to discard them, or save them as a
-              new draft.
+              Someone else saved this configuration after you opened it. Your edits are still here;
+              reload the saved configuration to see their changes.
             </p>
           )}
         </Problem>
@@ -297,15 +268,20 @@ export function SchedulingConfigurationEditor({
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-card p-4">
             <div>
               <h2 className="font-semibold">
-                {version ? `Version ${version.version}` : "New draft"}
+                Current configuration
                 {dirty && <span className="ml-2 text-xs text-amber-700">Unsaved changes</span>}
               </h2>
               <p className="text-sm text-muted-foreground">
-                {version?.status === "archived"
-                  ? "Archived · create a copy to edit"
-                  : !canManage
-                    ? "Read-only access"
-                    : "Changes are saved only when you choose Save draft."}
+                {version
+                  ? `Last updated ${new Date(version.updated_at).toLocaleString("en-GB", {
+                      day: "numeric",
+                      month: "short",
+                      year: "numeric",
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}`
+                  : "Not saved yet · showing this facility's existing rules"}
+                {!canManage && " · read-only access"}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -324,20 +300,12 @@ export function SchedulingConfigurationEditor({
                     <CheckCircle2 />
                     Validate
                   </Button>
-                  {version && (
-                    <Button variant="outline" disabled={busy} onClick={() => void save(true)}>
-                      <Copy />
-                      Save as new draft
-                    </Button>
-                  )}
-                  {version?.status !== "archived" && (
-                    <Button
-                      disabled={busy || conflict || (!!version && !dirty)}
-                      onClick={() => void save()}
-                    >
-                      {busy ? <Loader2 className="animate-spin" /> : <Save />}Save draft
-                    </Button>
-                  )}
+                  <Button
+                    disabled={busy || conflict || (!!version && !dirty)}
+                    onClick={() => void save()}
+                  >
+                    {busy ? <Loader2 className="animate-spin" /> : <Save />}Save
+                  </Button>
                 </>
               )}
             </div>
@@ -346,8 +314,8 @@ export function SchedulingConfigurationEditor({
             {validation &&
               (validation.valid ? (
                 <div className="rounded-lg border border-green-300 bg-green-50 p-4 text-sm text-green-950">
-                  Configuration checks passed. This checks settings and references; staffing
-                  feasibility will be checked when rota preview is available.
+                  Configuration checks passed. This checks settings and references; staffing is
+                  checked when you check a period in the Activation tab.
                 </div>
               ) : (
                 <Problem>
@@ -370,7 +338,7 @@ export function SchedulingConfigurationEditor({
               <TabsTrigger value="wards">Ward requirements</TabsTrigger>
               <TabsTrigger value="coverage">Coverage rules</TabsTrigger>
               <TabsTrigger value="review">Review</TabsTrigger>
-              <TabsTrigger value="preview">Rota preview</TabsTrigger>
+              <TabsTrigger value="activation">Activation</TabsTrigger>
             </TabsList>
             {tab === "wards" && wards.length > 0 && (
               <div className={`${cardClass} mt-4 grid gap-4 sm:grid-cols-2`}>
@@ -416,7 +384,7 @@ export function SchedulingConfigurationEditor({
                     />
                   </Field>
                   <p className="text-sm text-muted-foreground">
-                    Shift times use this timezone. Each rota period remains 28 days.
+                    Shift times use this timezone. Rota periods are calendar months.
                   </p>
                 </div>
                 {config.shifts.map((s, i) => (
@@ -743,23 +711,7 @@ export function SchedulingConfigurationEditor({
                         Add step
                       </Button>
                     )}
-                    <div>
-                      <p className="mb-2 text-xs font-medium text-muted-foreground">
-                        28-day pattern illustration
-                        {p.kind === "weekly" ? " · starts Monday" : " · starts at step 1"} · not a
-                        generated rota
-                      </p>
-                      <div className="grid grid-cols-7 gap-1 sm:grid-cols-14">
-                        {patternPreview(p).map((shift, day) => (
-                          <div key={day} className="rounded border p-1 text-center text-xs">
-                            <span className="block text-[10px] text-muted-foreground">
-                              {day + 1}
-                            </span>
-                            <strong>{shift}</strong>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
+                    <PatternMonthCalendar pattern={p} />
                   </div>
                 ))}
                 <Button
@@ -1234,12 +1186,11 @@ export function SchedulingConfigurationEditor({
                 )}
               </TabsContent>
             </fieldset>
-            <TabsContent value="preview">
-              <SchedulingRotaPreview
-                key={`${version?.id ?? "new"}-${version?.revision ?? 0}-${dirty}`}
+            <TabsContent value="activation">
+              <SchedulingActivationTab
+                key={`${version?.id ?? "new"}-${version?.revision ?? 0}`}
                 base={base}
                 version={version}
-                config={config}
                 dirty={dirty}
                 busy={busy}
                 canManage={canManage}
@@ -1263,15 +1214,15 @@ export function SchedulingConfigurationEditor({
                     </div>
                   ))}
                 </div>
-                <p className="text-sm">{config.timezone} · 28-day rota periods</p>
+                <p className="text-sm">{config.timezone} · monthly rota periods</p>
               </div>
               <div className={cardClass}>
                 <h3 className="font-semibold">Before activation</h3>
                 <p className="text-sm text-muted-foreground">
-                  Saving a draft does not assign roles to staff or update the current ward settings.
-                  Use Rota preview to check a saved version against current staff and approved
-                  leave. Activate a reviewed run for a clean future period to use its rules for
-                  recurring draft generation, including its custom shifts and role groups.
+                  Saving does not assign roles to staff or update the current ward settings. In the
+                  Activation tab, check a future period against current staff and approved leave,
+                  then activate it to use these rules (including custom shifts and role groups) for
+                  rota generation from that period.
                 </p>
                 {config.roles.some((r) => r.requiresReview) && (
                   <p className="text-sm text-amber-800">

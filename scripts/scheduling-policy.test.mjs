@@ -26,10 +26,17 @@ function policyFixture(policy) {
   const queries = [];
   let generated = 0;
   const db = {
-    query: async (sql) => {
+    query: async (sql, params = []) => {
       queries.push(sql);
       if (sql.includes("scheduling_facilities")) return { rows: [facility] };
       if (sql.includes("scheduling_policy_events")) return { rows: policy ? [policy] : [] };
+      // Calendar-month rota periods (migration 053).
+      if (sql.includes("rota_period_start")) {
+        const month = params[0].slice(0, 7);
+        const [y, m] = month.split("-").map(Number);
+        const end = new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+        return { rows: [{ start: `${month}-01`, end }] };
+      }
       throw new Error(`Unexpected query: ${sql}`);
     },
   };

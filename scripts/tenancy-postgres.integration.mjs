@@ -226,13 +226,13 @@ test("hospital row-level security isolates tenant data", async (t) => {
         const s = server.listen(0, "127.0.0.1", () => resolve(s));
       });
       const base = `http://127.0.0.1:${listener.address().port}/api/hospitals`;
-      const token = (userId) =>
-        jwt.sign({ userId, full_name: "Tester", roles: ["admin"] }, process.env.JWT_SECRET);
-      const call = (userId, path, { method = "GET", hospital, body } = {}) =>
+      const token = (userId, roles = ["admin"]) =>
+        jwt.sign({ userId, full_name: "Tester", roles }, process.env.JWT_SECRET);
+      const call = (userId, path, { method = "GET", hospital, body, roles } = {}) =>
         fetch(base + path, {
           method,
           headers: {
-            authorization: `Bearer ${token(userId)}`,
+            authorization: `Bearer ${token(userId, roles)}`,
             "content-type": "application/json",
             ...(hospital ? { "x-hospital-id": hospital } : {}),
           },
@@ -424,6 +424,46 @@ test("hospital row-level security isolates tenant data", async (t) => {
           users.users.some((u) => u.full_name === "Other admin"),
           "Platform user list",
         );
+
+        // Hospital logos: platform admins set any hospital's; a hospital's own
+        // admin sets its own; others cannot; invalid files are refused.
+        const png = "data:image/png;base64,iVBORw0KGgo=";
+        const setLogo = (userId, path, logo, roles) =>
+          call(userId, path, { method: "PUT", body: { logo }, roles });
+        assert.equal((await setLogo(lagoonAdmin, `/${other}/logo`, png)).status, 200);
+        const otherMine = await (await call(lagoonAdmin, "/mine", { hospital: other })).json();
+        assert.equal(otherMine.current_logo, png, "Current hospital's logo is returned");
+        const lagoonMine = await (await call(lagoonAdmin, "/mine")).json();
+        assert.equal(lagoonMine.current_logo, null, "Hospitals without a logo get none");
+        assert.ok(
+          lagoonMine.hospitals.every((h) => !("logo" in h)),
+          "Other logos not sent",
+        );
+        assert.equal(
+          (await setLogo(lagoonAdmin, `/${other}/logo`, "data:text/html;base64,PHA+")).status,
+          400,
+          "Only images are accepted",
+        );
+        const otherAdmin = (
+          await tenant.runInPlatform(() =>
+            app.query("SELECT id FROM profiles WHERE email='admin@other.test'"),
+          )
+        ).rows[0].id;
+        assert.equal((await setLogo(otherAdmin, "/current/logo", null)).status, 200);
+        assert.equal(
+          (await setLogo(otherAdmin, `/${LAGOON}/logo`, png)).status,
+          403,
+          "Hospital admins cannot change other hospitals' logos",
+        );
+        assert.equal(
+          (await setLogo(nurseUser, "/current/logo", png, ["nurse"])).status,
+          403,
+          "Non-admins cannot change the logo",
+        );
+        const cleared = await tenant.runInPlatform(() =>
+          app.query("SELECT logo FROM hospitals WHERE id=$1", [other]),
+        );
+        assert.equal(cleared.rows[0].logo, null);
       } finally {
         await new Promise((resolve) => listener.close(resolve));
       }

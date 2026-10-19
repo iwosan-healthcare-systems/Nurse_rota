@@ -1,21 +1,28 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { currentRotaStart, rotaToday } from "@/lib/rota-window";
+import { rotaToday } from "@/lib/rota-window";
+
+export type RotaPeriod = { start: string; end: string };
+
+/** The rota period (a calendar month, or a legacy 28-day period) containing `date`. */
+export function fetchRotaPeriod(date: string): Promise<RotaPeriod> {
+  return api.get<RotaPeriod>(`/rpc/rota-period?date=${date.slice(0, 10)}`);
+}
+
+export function useRotaPeriod(date: string | null | undefined) {
+  return useQuery({
+    queryKey: ["rota-period", date?.slice(0, 10)],
+    enabled: !!date,
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => fetchRotaPeriod(date!),
+  });
+}
 
 /** Calendar boundaries shared by live shift totals and reports. */
 export function useCurrentRotaPeriod() {
   return useQuery({
     queryKey: ["current-rota-period"],
     refetchInterval: 30_000,
-    queryFn: async () => {
-      const rows = await api.get<{ shift_date: string }[]>(
-        "/shift-assignments?status=published&limit=1",
-      );
-      const today = rotaToday();
-      const start = currentRotaStart(rows[0]?.shift_date ?? today, today);
-      const end = new Date(start + "T00:00:00Z");
-      end.setUTCDate(end.getUTCDate() + 27);
-      return { start, end: end.toISOString().slice(0, 10) };
-    },
+    queryFn: () => fetchRotaPeriod(rotaToday()),
   });
 }

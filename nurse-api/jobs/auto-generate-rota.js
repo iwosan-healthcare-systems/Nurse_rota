@@ -67,7 +67,6 @@ const EMAIL_COPY = {
 // AUTO_EXPIRE_LOCUM_LOCK_KEY (729314) — see jobs/auto-end-shifts.js for why
 // the lock exists.
 const AUTO_GENERATE_LOCK_KEY = 729315;
-const DAYS = 28;
 const DRY_RUN = process.env.DRY_RUN_ROTA_JOBS === "true";
 
 function ymd(d) {
@@ -321,7 +320,8 @@ async function generateUnit({
     wards: wardsForGen,
     leave,
     startDate: new Date(genStart + "T00:00:00"),
-    days: DAYS,
+    // The whole rota period: a calendar month (or an earlier 28-day period).
+    days: daysBetween(genStart, genEnd) + 1,
     facility,
     periodOffset,
     previousAssignments,

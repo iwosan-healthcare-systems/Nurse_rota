@@ -8,26 +8,25 @@ const source = readFileSync(new URL("../src/lib/rota-window.ts", import.meta.url
 const compiled = ts.transpileModule(source, {
   compilerOptions: { module: ts.ModuleKind.ESNext },
 }).outputText;
-const { currentRotaStart, rotaToday } = await import(
-  `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`
-);
+const { addDaysYmd, rememberRotaPeriod, rotaPeriodEndFor, rotaPeriodLabel, rotaToday } =
+  await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 
-test("current period stays put on its last day and advances on the next day", () => {
-  assert.equal(currentRotaStart("2026-08-24", "2026-09-20"), "2026-08-24");
-  assert.equal(currentRotaStart("2026-08-24", "2026-09-21"), "2026-09-21");
-});
-
-test("stale archives catch up across multiple periods without shifting the cycle", () => {
-  assert.equal(currentRotaStart("2026-07-27", "2026-09-22"), "2026-09-21");
-  assert.equal(currentRotaStart("2026-09-21", "2026-10-19"), "2026-10-19");
-});
-
-test("future schedules, timestamp dates, leap days and year changes preserve boundaries", () => {
-  assert.equal(currentRotaStart("2026-10-19", "2026-09-22"), "2026-10-19");
-  assert.equal(currentRotaStart("2026-08-24T00:00:00Z", "2026-09-22"), "2026-09-21");
-  assert.equal(currentRotaStart("2024-02-05", "2024-03-04"), "2024-03-04");
-  assert.equal(currentRotaStart("2025-12-15", "2026-01-12"), "2026-01-12");
+test("calendar-month periods are labelled by month; other periods by their dates", () => {
+  assert.equal(rotaPeriodLabel("2027-01-01", "2027-01-31"), "January 2027");
+  assert.equal(rotaPeriodLabel("2028-02-01", "2028-02-29"), "February 2028");
+  assert.equal(rotaPeriodLabel("2026-10-19", "2026-10-31"), "19 Oct – 31 Oct 2026");
+  assert.equal(rotaPeriodLabel("2026-09-21", "2026-10-18"), "21 Sept – 18 Oct 2026");
   assert.match(rotaToday(), /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test("period ends: month end from the 1st, 28 days for legacy starts, server answers win", () => {
+  assert.equal(rotaPeriodEndFor("2027-02-01"), "2027-02-28");
+  assert.equal(rotaPeriodEndFor("2026-12-01T00:00:00Z"), "2026-12-31");
+  assert.equal(rotaPeriodEndFor("2026-09-21"), "2026-10-18");
+  rememberRotaPeriod("2026-10-19", "2026-10-31");
+  assert.equal(rotaPeriodEndFor("2026-10-19"), "2026-10-31");
+  assert.equal(addDaysYmd("2026-12-31", 1), "2027-01-01");
+  assert.equal(addDaysYmd("2027-03-01", -1), "2027-02-28");
 });
 
 function archiveFixture({ locked = true, period = true, failArchive = false, ready = true } = {}) {
@@ -130,8 +129,8 @@ test("archive candidates use full periods, wait for overnight shifts and catch u
   const f = archiveFixture({ period: false });
   await f.close();
   const sql = f.calls.find((c) => c.sql.includes("WITH published")).sql;
-  assert.match(sql, /period_start \+ 27 AS period_end/);
-  assert.match(sql, /period_start \+ 28/);
+  assert.match(sql, /rota_period_start\(d\) AS period_start, rota_period_end\(d\) AS period_end/);
+  assert.match(sql, /\(period_end \+ 1\)::timestamp AT TIME ZONE 'Africa\/Lagos'/);
   assert.match(sql, /sl.expected_end_at > NOW\(\)/);
   assert.match(sql, /nph.period_end = periods.period_end/);
   assert.match(sql, /ORDER BY periods.period_end ASC/);

@@ -4,6 +4,7 @@ const { requireCapability } = require("../middleware/capability");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
 const { closeCompletedPeriod } = require("../lib/auto-close-period");
 const { recordConfiguredMissedShifts } = require("../lib/configured-missed-shifts");
+const { periodFor } = require("../lib/rota-periods");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Mirrors lib/force-submit-rota.js's roleGroupOf, plus the "naday" bucket
@@ -104,13 +105,7 @@ router.post(
           THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
-        COALESCE(
-          (SELECT MIN(s2.shift_date)
-           FROM shift_assignments s2
-           WHERE s2.status = 'published'
-             AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
-          sa.shift_date
-        )                           AS period_start,
+        COALESCE(rota_period_start(sa.shift_date::date), sa.shift_date)                           AS period_start,
         0                           AS hours_logged,
         true                        AS is_missed,
         false                       AS is_leave,
@@ -158,13 +153,7 @@ router.post(
           THEN (lr.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
-        COALESCE(
-          (SELECT MIN(s2.shift_date)
-           FROM shift_assignments s2
-           WHERE s2.status = 'published'
-             AND s2.shift_date BETWEEN lr.shift_date - 27 AND lr.shift_date),
-          lr.shift_date
-        )                           AS period_start,
+        COALESCE(rota_period_start(lr.shift_date::date), lr.shift_date)                           AS period_start,
         0                           AS hours_logged,
         true                        AS is_missed,
         false                       AS is_leave,
@@ -208,6 +197,20 @@ router.post(
 //   T-14  : publish_deadline    — system auto-publishes if HR-approved
 //
 // nextRotaStage: 'none' | 'draft' | 'submitted' | 'cno_approved' | 'published'
+// The rota period (calendar month, or an earlier 28-day period) holding a date,
+// so every screen uses the same boundaries as the server (migration 053).
+router.get(
+  "/rota-period",
+  wrap(async (req, res) => {
+    const date = String(req.query.date ?? "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(date)))
+      return res.status(400).json({ error: "Use a valid date (YYYY-MM-DD)" });
+    const period = await periodFor(pool, date);
+    if (!period) return res.status(404).json({ error: "No rota period for this hospital" });
+    res.json(period);
+  }),
+);
+
 router.get(
   "/workflow-status",
   wrap(async (req, res) => {
@@ -222,6 +225,7 @@ router.get(
     }
     const {
       nextPeriodStart,
+      nextPeriodEnd,
       leaveClosureDate,
       generateDate,
       editCloseDate,
@@ -274,6 +278,7 @@ router.get(
     res.json({
       firstRotaPublished: true,
       nextPeriodStart,
+      nextPeriodEnd,
       leaveClosureDate,
       generateDate,
       editCloseDate,

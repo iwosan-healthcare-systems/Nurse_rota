@@ -25,6 +25,8 @@ import {
   BarChart3,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
+import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
+import { rotaPeriodLabel } from "@/lib/rota-window";
 import { type ComponentType, type ReactNode, useMemo, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Progress } from "@/components/ui/progress";
@@ -68,6 +70,11 @@ function ymd(d: Date) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+function monthEnd(dateStr: string) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10);
+}
+
 function addDaysToYmd(dateStr: string, n: number) {
   const d = new Date(dateStr.slice(0, 10) + "T00:00:00");
   d.setDate(d.getDate() + n);
@@ -99,13 +106,6 @@ type NurseRecord = {
   facility: string | null;
   hours_this_month: number;
   target_hours: number;
-};
-
-type PeriodHours = {
-  period_start: string;
-  period_end: string;
-  total_hours: number;
-  total_shifts: number;
 };
 
 // Roles that are facility-wide: no ward is managed on the Staff page for them.
@@ -270,63 +270,35 @@ function NurseDashboard() {
     refetchInterval: 60000,
   });
 
-  const { data: latestArchivedPeriod } = useQuery<PeriodHours | null>({
-    queryKey: ["dashboard-latest-archived-period"],
-    enabled: !!nurseId,
-    refetchInterval: 60000,
-    queryFn: async () => {
-      const rows = await api.get<PeriodHours[]>("/nurse-period-hours?limit=1").catch(() => []);
-      return rows[0] ?? null;
-    },
-  });
+  const { data: livePeriod } = useCurrentRotaPeriod();
 
   const { data: periodLogs = [] } = useQuery<ShiftLog[]>({
-    queryKey: ["my-period-logs-dash", nurseId, latestArchivedPeriod?.period_end],
-    enabled: !!nurseId,
-    queryFn: () => {
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = ymd(lookback);
-      const periodStart = latestArchivedPeriod
-        ? addDaysToYmd(latestArchivedPeriod.period_end, 1)
-        : lb;
-      const periodEnd = addDaysToYmd(periodStart, 27);
-      return api.get<ShiftLog[]>(
-        `/shift-logs?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&hours_not_null=true`,
-      );
-    },
+    queryKey: ["my-period-logs-dash", nurseId, livePeriod?.start],
+    enabled: !!nurseId && !!livePeriod,
+    refetchInterval: 60000,
+    queryFn: () =>
+      api.get<ShiftLog[]>(
+        `/shift-logs?nurse_id=${nurseId}&from=${livePeriod!.start}&to=${livePeriod!.end}&hours_not_null=true`,
+      ),
   });
 
-  // Total hours this nurse is actually rostered for in the current period, computed
-  // from her own published shift_assignments — not the manually-set target_hours
-  // field. Same period-boundary approach as shift.tsx: the earliest published
-  // assignment within the trailing 27-day window marks the period start, then the
-  // full 28-day block is fetched from there.
+  // Total hours this nurse is actually rostered for in the current rota period,
+  // computed from her own published shift_assignments — not the manually-set
+  // target_hours field.
   const { data: periodData } = useQuery<{
     periodEnd: string;
     rows: AssignmentDefinition[];
   }>({
-    queryKey: ["my-period-assignments-dash", nurseId, latestArchivedPeriod?.period_end],
-    enabled: !!nurseId,
+    queryKey: ["my-period-assignments-dash", nurseId, livePeriod?.start],
+    enabled: !!nurseId && !!livePeriod,
     queryFn: async () => {
-      const lookback = new Date();
-      lookback.setDate(lookback.getDate() - 27);
-      const lb = ymd(lookback);
-      const winRow = await api
-        .get<
-          { shift_date: string }[]
-        >(`/shift-assignments?nurse_id=${nurseId}&from=${lb}&status=published&limit=1`)
-        .catch(() => []);
-      const periodStart = latestArchivedPeriod
-        ? addDaysToYmd(latestArchivedPeriod.period_end, 1)
-        : (winRow[0]?.shift_date ?? lb);
-      const periodEnd = addDaysToYmd(periodStart, 27);
+      const { start, end } = livePeriod!;
       const rows = await api
         .get<
           AssignmentDefinition[]
-        >(`/shift-assignments?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&status=published&include_shift_definition=true`)
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${start}&to=${end}&status=published&include_shift_definition=true`)
         .catch(() => []);
-      return { periodEnd, rows };
+      return { periodEnd: end, rows };
     },
   });
   const periodAssignments = periodData?.rows ?? [];
@@ -512,7 +484,7 @@ function NurseDashboard() {
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">
           <p className="text-xs uppercase tracking-wide text-muted-foreground font-medium">
-            28-day hours
+            Rota period hours
           </p>
           <p className="mt-2 text-lg font-semibold">{fmtHours(periodHours)}</p>
           <p className="text-xs text-muted-foreground mt-1">{totalMinutes}m total</p>
@@ -538,13 +510,13 @@ function NurseDashboard() {
           icon={TrendingUp}
           label="Shifts completed"
           value={completedShiftCount}
-          hint="This 28-day cycle"
+          hint="This rota period"
         />
         <Stat
           icon={AlertTriangle}
           label="Missed shifts"
           value={missedShiftCount}
-          hint="This 28-day cycle"
+          hint="This rota period"
           tone={missedShiftCount > 0 ? "danger" : "default"}
         />
         <Stat
@@ -564,7 +536,7 @@ function NurseDashboard() {
 
       <div className="bg-card border rounded-xl p-5 shadow-soft">
         <div className="flex items-center justify-between mb-2">
-          <p className="text-sm font-semibold">Hours progress — current 28-day period</p>
+          <p className="text-sm font-semibold">Hours progress — current rota period</p>
           <span className="text-xs text-muted-foreground tabular-nums">
             {fmtHours(periodHours)} /{" "}
             {scheduledUnavailable ? "Scheduled hours unavailable" : fmtHours(targetHours)}
@@ -828,11 +800,10 @@ function parseRegenKey(key: string) {
   const wardDisplay = wSlug
     ? (FW_GROUP_LABELS[wSlug] ?? wSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()))
     : null;
-  const pStart = new Date(periodStart + "T00:00:00");
-  const pEnd = new Date(pStart);
-  pEnd.setDate(pEnd.getDate() + 27);
-  const fmtOpts: Intl.DateTimeFormatOptions = { day: "numeric", month: "short" };
-  const periodDisplay = `${pStart.toLocaleDateString("en-GB", fmtOpts)} – ${pEnd.toLocaleDateString("en-GB", { ...fmtOpts, year: "numeric" })}`;
+  // Periods are calendar months; an older key may start a legacy 28-day period.
+  const periodDisplay = periodStart.endsWith("-01")
+    ? rotaPeriodLabel(periodStart, monthEnd(periodStart))
+    : `from ${new Date(periodStart + "T00:00:00").toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
   return { facilityDisplay, wardDisplay, periodDisplay };
 }
 

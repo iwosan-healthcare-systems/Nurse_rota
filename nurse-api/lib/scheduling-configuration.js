@@ -84,7 +84,8 @@ function validateConfiguration(config, wards = []) {
       add("timezone", "Invalid IANA timezone");
     }
   }
-  // Period lifecycle still assumes 28 days. Do not expose a misleading setting yet.
+  // Legacy field kept for stored configurations. Rota periods are calendar
+  // months (rota_period_start/rota_period_end), not this setting.
   if (config.periodDays !== 28)
     add("periodDays", "Only 28-day periods are supported in this release");
   const shifts = array(config.shifts, "shifts", 32, 1);

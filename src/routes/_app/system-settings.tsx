@@ -23,6 +23,9 @@ import { LeaveCapsSettings } from "@/components/settings/LeaveCapsSettings";
 import { PermissionsSettings } from "@/components/settings/PermissionsSettings";
 import { MenuAccessSettings } from "@/components/settings/MenuAccessSettings";
 import { SystemRolesSettings } from "@/components/settings/SystemRolesSettings";
+import { HospitalLogoField } from "@/components/hospitals/HospitalLogoField";
+import { useMyHospitals } from "@/lib/hospital-branding";
+import { useQueryClient } from "@tanstack/react-query";
 
 type RotaJobsPaused = {
   auto_generate: boolean;
@@ -124,6 +127,7 @@ const ROTA_DEADLINE_FIELDS: {
 ];
 
 const SYSTEM_SETTINGS_TABS = [
+  "branding",
   "gps",
   "password",
   "leave-caps",
@@ -669,6 +673,7 @@ function SystemSettingsPage() {
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as SystemSettingsTab)}>
         <TabsList className="flex-wrap h-auto">
+          <TabsTrigger value="branding">Hospital Logo</TabsTrigger>
           <TabsTrigger value="gps">GPS Fence</TabsTrigger>
           <TabsTrigger value="password">Password Security</TabsTrigger>
           <TabsTrigger value="leave-caps">Leave Entitlement Caps</TabsTrigger>
@@ -971,6 +976,10 @@ function SystemSettingsPage() {
 
         <TabsContent value="menu-access">
           <MenuAccessSettings />
+        </TabsContent>
+
+        <TabsContent value="branding">
+          <HospitalBrandingSettings />
         </TabsContent>
 
         <TabsContent value="roles">
@@ -1589,6 +1598,37 @@ function SystemSettingsPage() {
           </section>
         </TabsContent>
       </Tabs>
+    </div>
+  );
+}
+
+// The current hospital's logo, shown to its staff after sign-in. Without one the
+// application's general logo is used.
+function HospitalBrandingSettings() {
+  const qc = useQueryClient();
+  const { data, isPending } = useMyHospitals();
+  const [saving, setSaving] = useState(false);
+  const name = data?.hospitals.find((h) => h.id === data.current_hospital_id)?.name;
+  async function save(logo: string | null) {
+    setSaving(true);
+    try {
+      await api.put("/hospitals/current/logo", { logo });
+      await qc.invalidateQueries({ queryKey: ["my-hospitals"] });
+      toast.success(logo ? "Hospital logo updated" : "Hospital logo removed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save the logo");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return (
+    <div className="mt-4 max-w-xl space-y-3 rounded-xl border bg-card p-5 shadow-soft">
+      <h2 className="text-sm font-semibold">{name ? `${name} logo` : "Hospital logo"}</h2>
+      {isPending ? (
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : (
+        <HospitalLogoField value={data?.current_logo ?? null} disabled={saving} onChange={save} />
+      )}
     </div>
   );
 }

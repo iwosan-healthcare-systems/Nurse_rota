@@ -23,6 +23,7 @@ import { assessScheduleStaffing, type StaffingAssignment } from "@/lib/schedule-
 import { scheduleExportDefinitions } from "@/lib/schedule-export";
 import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
 import { useAuth } from "@/lib/auth-context";
+import { rememberRotaPeriod, rotaPeriodEndFor } from "@/lib/rota-window";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -52,6 +53,8 @@ type PendingRow = Omit<StaffingAssignment, "shift"> & {
   nurse_id: string;
   ward: string | null;
   shift: string | null;
+  period_start?: string | null;
+  period_end?: string | null;
 };
 
 type WindowStatus = "draft" | "submitted" | "cno_approved" | "published";
@@ -141,13 +144,18 @@ function groupIntoWindows(
       const diff = Math.round(
         (new Date(sorted[i].shift_date).getTime() - new Date(prev.shift_date).getTime()) / 86400000,
       );
-      // Split at an actual data gap OR when the span from the cluster's first date
-      // hits 28 days — consecutive periods share no date gap so diff alone won't split them.
+      // Consecutive periods share no date gap, so diff alone won't split them.
       const spanDays = Math.round(
         (new Date(sorted[i].shift_date).getTime() - new Date(cluster[0].shift_date).getTime()) /
           86400000,
       );
-      if (diff > 14 || spanDays >= 28) {
+      // Rows carry their rota period when the hospital is known; otherwise split
+      // at a data gap or a full legacy 28-day span.
+      const newPeriod =
+        sorted[i].period_start && cluster[0].period_start
+          ? sorted[i].period_start !== cluster[0].period_start
+          : spanDays >= 28;
+      if (diff > 14 || newPeriod) {
         windows.push(makeWindow(cluster, ward, facility, roleGroup));
         cluster = [];
       }
@@ -171,8 +179,10 @@ function makeWindow(
   roleGroup: FacilityWideGroup | null,
 ): RotaWindow {
   const dates = rows.map((r) => r.shift_date).sort();
+  const period = rows.find((r) => r.period_start);
+  rememberRotaPeriod(period?.period_start, period?.period_end);
   return {
-    startDate: dates[0],
+    startDate: period?.period_start ?? dates[0],
     endDate: dates[dates.length - 1],
     status: dominantStatus(rows.map((r) => r.status)),
     assignmentCount: rows.length,
@@ -196,11 +206,7 @@ function fmtDate(d: string) {
 }
 
 function scheduleEndDate(startDate: string): string {
-  const d = new Date(startDate.slice(0, 10) + "T00:00:00");
-  d.setDate(d.getDate() + 27);
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${m}-${day}`;
+  return rotaPeriodEndFor(startDate);
 }
 
 function dateRange(start: string, end: string): string[] {
@@ -303,7 +309,7 @@ function ApprovalsPage() {
         return `${d.getFullYear()}-${m}-${day}`;
       };
       return api.get<PendingRow[]>(
-        `/shift-assignments?from=${ymd(sixAgo)}&to=${ymd(threeAhead)}&limit=50000&include_shift_definition=true&include_staffing_definition=true`,
+        `/shift-assignments?from=${ymd(sixAgo)}&to=${ymd(threeAhead)}&limit=50000&include_shift_definition=true&include_staffing_definition=true&include_period=true`,
       );
     },
   });
@@ -702,8 +708,7 @@ function ApprovalsPage() {
   }
 
   async function fetchWindowData(win: RotaWindow) {
-    // Use the actual last date in the window cluster, not a fixed startDate+27
-    // calculation — newly-added staff may have assignments that start after the
+    // Use the actual last date in the window cluster, not just the period end — newly-added staff may have assignments that start after the
     // period begin, and we must not cut them off.
     const endDate =
       win.endDate > scheduleEndDate(win.startDate) ? win.endDate : scheduleEndDate(win.startDate);

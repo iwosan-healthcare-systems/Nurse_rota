@@ -351,7 +351,7 @@ router.post(
     if (!EXEMPT_LEAVE_TYPES.includes(type)) {
       const periodDates = await getNextPeriodDates();
       if (periodDates?.leaveIsClosed) {
-        const periodEnd = addDaysYmd(periodDates.nextPeriodStart, 27);
+        const periodEnd = periodDates.nextPeriodEnd ?? addDaysYmd(periodDates.nextPeriodStart, 27);
         if (from_date <= periodEnd) {
           return res.status(422).json({
             error: `Leave requests are closed until the next schedule begins (${periodDates.nextPeriodStart}). Only Sick and Emergency Leave can be submitted now.`,

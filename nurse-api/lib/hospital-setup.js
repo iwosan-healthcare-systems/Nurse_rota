@@ -22,6 +22,7 @@ const DEADLINE_KEYS = [
 const ROTA_JOBS = ["auto_generate", "auto_submit", "auto_publish"];
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY = /^[a-z][a-z0-9_]{1,49}$/;
+const LOGO = /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
 
 function validateHospitalSetup(body, { roleKeys }) {
   const errors = [];
@@ -70,6 +71,10 @@ function validateHospitalSetup(body, { roleKeys }) {
   };
 
   const name = text(body.name, "name", 160);
+  // Optional: without a logo the hospital uses the application's logo.
+  const logo = body.logo ?? null;
+  if (logo !== null && (typeof logo !== "string" || logo.length > 550000 || !LOGO.test(logo)))
+    add("logo", "Upload a PNG, JPEG, WebP or SVG image of about 400 KB or less");
 
   const gps = obj(body.gps) ? body.gps : {};
   int(gps.radius_m, "gps.radius_m", 50, 10000);
@@ -166,6 +171,7 @@ function validateHospitalSetup(body, { roleKeys }) {
   return {
     errors,
     name,
+    logo,
     admin: { full_name: adminName, email: adminEmail },
     roles: { keys: hospitalRoles, custom: customRoles },
     settings: [

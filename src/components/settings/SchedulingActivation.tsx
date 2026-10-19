@@ -4,6 +4,15 @@ import { api } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import type { RotaPreview } from "@/lib/scheduling-configuration";
 
+const fmtDay = (d?: string | null) =>
+  d
+    ? new Date(d.slice(0, 10) + "T00:00:00").toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+      })
+    : "";
+
 export function SchedulingActivation({
   base,
   startDate,
@@ -52,7 +61,7 @@ export function SchedulingActivation({
     const name = candidates.data?.staff.find((n) => n.id === joiner)?.name ?? "this staff member";
     if (
       !window.confirm(
-        `Schedule ${name} from ${fromDate} to the end of this period using the active rules? Draft cells are created for review; other staff are unchanged.`,
+        `Schedule ${name} from ${fmtDay(fromDate)} to the end of this period using the active rules? Draft cells are created for review; other staff are unchanged.`,
       )
     )
       return;
@@ -81,7 +90,7 @@ export function SchedulingActivation({
   async function act(action: "activate" | "pause" | "generate-active") {
     const confirmation =
       action === "activate"
-        ? `Activate the reviewed rules from ${result?.startDate}? Recurring generation will use this frozen configuration for future drafts. Existing schedules are not replaced.`
+        ? `Activate the reviewed rules from ${fmtDay(result?.startDate)}? Recurring generation will use this frozen configuration for future drafts. Existing schedules are not replaced.`
         : action === "pause"
           ? "Pause configured generation for this facility? Existing schedules will remain. Legacy generation will not take over."
           : "Generate this unit using the active configuration? Its existing draft cells will be replaced; submitted, approved and published shifts are protected.";
@@ -96,7 +105,7 @@ export function SchedulingActivation({
       );
       setMessage(
         action === "activate"
-          ? `Rules activated from ${result?.startDate}. Later draft edits require a new activation.`
+          ? `Rules activated from ${fmtDay(result?.startDate)}. Later draft edits require a new activation.`
           : action === "pause"
             ? "Configured generation paused. Existing schedules are unchanged."
             : `${response.written} draft cells created using the active rules. Review and submit them in Rota.`,
@@ -115,13 +124,13 @@ export function SchedulingActivation({
     <section className="space-y-3 rounded-xl border bg-card p-4">
       <h3 className="font-semibold">Active scheduling rules</h3>
       <p className="text-sm text-muted-foreground">
-        Administrator access is required. Activate a fresh, reviewed run for a clean future 28-day
-        period. Activated shift definitions and role groups drive attendance, hours, leave credits
-        and approval grouping for that period onward.
+        Administrator access is required. Activate a fresh, reviewed run for a clean future monthly
+        rota period. Activated shift definitions and role groups drive attendance, hours, leave
+        credits and approval grouping for that period onward.
       </p>
       <p className="text-sm">
         {!startDate
-          ? "Choose a period start to check its rules."
+          ? "Choose a rota month to check its rules."
           : policy.isPending
             ? "Checking scheduling policy…"
             : policy.isError
@@ -129,7 +138,7 @@ export function SchedulingActivation({
               : policy.data?.policy
                 ? policy.data.policy.state === "paused"
                   ? "Configured generation is paused for this period."
-                  : `Active for this period, effective from ${policy.data.policy.effective_from}.`
+                  : `Active for this period, effective from ${fmtDay(policy.data.policy.effective_from)}.`
                 : "No configuration is activated for this period."}
       </p>
       <div className="flex flex-wrap gap-3">

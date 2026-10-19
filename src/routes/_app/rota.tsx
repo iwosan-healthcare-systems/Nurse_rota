@@ -10,7 +10,8 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { currentRotaStart, rotaToday } from "@/lib/rota-window";
+import { addDaysYmd, rotaPeriodLabel, rotaToday } from "@/lib/rota-window";
+import { useRotaPeriod } from "@/lib/use-current-rota-period";
 import { logAudit } from "@/lib/audit";
 import { NURSE_TIER_ROLES } from "@/lib/auth-context";
 import {
@@ -64,14 +65,12 @@ export const Route = createFileRoute("/_app/rota")({
       { title: "Rota — Nurses Rota" },
       {
         name: "description",
-        content: "28-day staff rota with auto-scheduling and drag-and-drop manual edits.",
+        content: "Monthly staff rota with auto-scheduling and drag-and-drop manual edits.",
       },
     ],
   }),
   component: RotaPage,
 });
-
-const DAYS = 28;
 
 const shiftStyles: Record<ShiftCode, string> = {
   M: "bg-amber-100 text-amber-900 border-amber-200",
@@ -157,9 +156,31 @@ function RotaPage() {
   } = useAuth();
   const { myOnly } = Route.useSearch();
   const isNurseTier = activeRole !== null && NURSE_TIER_ROLES.some((r) => r === activeRole);
-  const canEdit = canEditRota;
-  const canGenerate = canAutoGenerate;
-  const canSubmit = canSubmitApproval;
+  // Rota periods are calendar months (a hospital moving off 28-day periods has
+  // one short transition period). Past periods are read-only.
+  const [periodDate, setPeriodDate] = useState<string | null>(null);
+  const [calendarDay, setCalendarDay] = useState(rotaToday);
+  useEffect(() => {
+    const refreshDay = () => setCalendarDay(rotaToday());
+    const timer = window.setInterval(refreshDay, 30_000);
+    window.addEventListener("focus", refreshDay);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshDay);
+    };
+  }, []);
+  const { data: currentPeriod, isLoading: currentPeriodLoading } = useRotaPeriod(calendarDay);
+  const { data: viewedPeriod, isLoading: viewedPeriodLoading } = useRotaPeriod(
+    periodDate ?? calendarDay,
+  );
+  const period = viewedPeriod ?? currentPeriod;
+  // -1 past, 0 current, 1 future (navigation stops at the next period).
+  const startOffset =
+    !period || !currentPeriod ? 0 : Math.sign(period.start.localeCompare(currentPeriod.start));
+  const pastPeriod = startOffset < 0;
+  const canEdit = canEditRota && !pastPeriod;
+  const canGenerate = canAutoGenerate && !pastPeriod;
+  const canSubmit = canSubmitApproval && !pastPeriod;
   // Full rota generation is admin-only, but adding a newly-created/reactivated
   // staff member to an existing rota is a narrower Head Nurse/Admin action.
   const canScheduleNewStaff = canGenerate || (canEdit && canSubmit);
@@ -174,17 +195,6 @@ function RotaPage() {
     queryKey: ["workflow-status"],
     staleTime: 5 * 60 * 1000,
     queryFn: () => api.get("/rpc/workflow-status"),
-  });
-
-  const { data: latestArchivedPeriod } = useQuery<{ period_end: string } | null>({
-    queryKey: ["rota-latest-archived-period"],
-    staleTime: 5 * 60 * 1000,
-    queryFn: async () => {
-      const rows = await api
-        .get<{ period_end: string }[]>("/nurse-period-hours?limit=1")
-        .catch(() => []);
-      return rows[0] ?? null;
-    },
   });
 
   const fmtWD = (d?: string) =>
@@ -203,17 +213,6 @@ function RotaPage() {
 
   // View state
   const [busy, setBusy] = useState(false);
-  const [startOffset, setStartOffset] = useState(0);
-  const [calendarDay, setCalendarDay] = useState(rotaToday);
-  useEffect(() => {
-    const refreshDay = () => setCalendarDay(rotaToday());
-    const timer = window.setInterval(refreshDay, 30_000);
-    window.addEventListener("focus", refreshDay);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refreshDay);
-    };
-  }, []);
   const [selectedFacility, setSelectedFacility] = useState(lockedFacility ?? "");
   const [selectedWard, setSelectedWard] = useState("");
   const [selectedFacilityWide, setSelectedFacilityWide] = useState("");
@@ -367,79 +366,27 @@ function RotaPage() {
   };
   const [shiftPicker, setShiftPicker] = useState<ShiftPicker | null>(null);
 
-  // ── Auto-detect the active schedule window start ──────────────────────────
-  // Find a stable cycle boundary; the calendar advances it below even if
-  // period-hours archiving is delayed. A trailing lookback is not a boundary.
-  // Scoped to the effective facility (via nurse IDs) so admin users switching between
-  // facilities with different schedule start dates see the correct period anchor.
-  const { data: scheduleWindowStart, isLoading: windowLoading } = useQuery({
-    queryKey: [
-      "schedule-window-start",
-      activeRole,
-      effectiveFacility,
-      latestArchivedPeriod?.period_end,
-    ],
-    queryFn: async () => {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const todayStr = ymd(today);
-
-      // An archive provides a known boundary. The calendar advances this
-      // anchor below if later periods have ended without being archived.
-      if (latestArchivedPeriod?.period_end) {
-        const nextStart = new Date(latestArchivedPeriod.period_end.slice(0, 10) + "T00:00:00");
-        nextStart.setDate(nextStart.getDate() + 1);
-        return ymd(nextStart);
-      }
-
-      // When a specific facility is selected, scope the anchor to that facility's
-      // nurses only — prevents Ikeja's schedule start from bleeding into Ligali's view.
-      const cachedNurses = qc.getQueryData<NurseInput[]>(["nurses"]) ?? [];
-      const facilityIds = effectiveFacility
-        ? cachedNurses.filter((n) => n.facility === effectiveFacility).map((n) => n.id)
-        : [];
-      const nurseFilter = facilityIds.length > 0 ? `&nurse_ids=${facilityIds.join(",")}` : "";
-
-      // Without an archive, the first assignment anchors the 28-day cycle.
-      // Looking back 27 days can select a date in the middle of an old rota.
-      const statusParam = isNurseTier ? "&status=published" : "";
-      const first = await api.get<{ shift_date: string }[]>(
-        `/shift-assignments?limit=1${statusParam}${nurseFilter}`,
-      );
-      return (first[0]?.shift_date ?? todayStr).slice(0, 10);
-    },
-    enabled: latestArchivedPeriod !== undefined,
-  });
-
   // ── Computed dates ────────────────────────────────────────────────────────
-  // Anchor to the detected schedule window; fall back to tomorrow.
-  // Navigation moves in full 28-day blocks.
-  const anchor = useMemo(() => {
-    if (scheduleWindowStart) {
-      // Slice to 10 chars ("YYYY-MM-DD") before parsing — the DB can return a full
-      // ISO timestamp (e.g. "2024-01-15T00:00:00+00:00") and appending "T00:00:00"
-      // to that produces an unparseable string → Invalid Date → NaN-NaN-NaN.
-      const d = new Date(currentRotaStart(scheduleWindowStart, calendarDay) + "T00:00:00");
-      d.setHours(0, 0, 0, 0);
-      if (!isNaN(d.getTime())) return d;
-    }
-    const t = new Date();
-    t.setHours(0, 0, 0, 0);
-    t.setDate(t.getDate() + 1);
-    return t;
-  }, [scheduleWindowStart, calendarDay]);
-
+  // The viewed rota period from the server; until it loads, the calendar month.
+  const windowLoading = currentPeriodLoading || viewedPeriodLoading;
   const startDate = useMemo(() => {
-    const d = new Date(anchor);
-    d.setDate(d.getDate() + startOffset * DAYS);
-    return d;
-  }, [anchor, startOffset]);
+    if (period) return new Date(period.start + "T00:00:00");
+    const today = new Date(calendarDay + "T00:00:00");
+    return new Date(today.getFullYear(), today.getMonth(), 1);
+  }, [period, calendarDay]);
 
   const endDate = useMemo(() => {
-    const e = new Date(startDate);
-    e.setDate(e.getDate() + DAYS - 1);
-    return e;
-  }, [startDate]);
+    if (period) return new Date(period.end + "T00:00:00");
+    return new Date(startDate.getFullYear(), startDate.getMonth() + 1, 0);
+  }, [period, startDate]);
+  const periodDays = Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1;
+  const periodLabel = rotaPeriodLabel(ymd(startDate), ymd(endDate));
+  // Month periods also show their dates; other periods' labels already do.
+  const periodSummary = `${
+    periodLabel.includes("–")
+      ? periodLabel
+      : `${periodLabel} · ${startDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} – ${endDate.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`
+  } · ${periodDays} days`;
 
   // ── Head-nurse edit-access request (draft editing is now request-gated) ───
   const editUnit = selectedWard || (selectedFacilityWide as string) || null;
@@ -488,12 +435,14 @@ function RotaPage() {
 
   const days = useMemo(
     () =>
-      Array.from({ length: DAYS }).map((_, d) => {
+      Array.from({
+        length: Math.round((endDate.getTime() - startDate.getTime()) / 86_400_000) + 1,
+      }).map((_, d) => {
         const dt = new Date(startDate);
         dt.setDate(dt.getDate() + d);
         return dt;
       }),
-    [startDate],
+    [startDate, endDate],
   );
 
   // ── Data queries ─────────────────────────────────────────────────────────
@@ -771,14 +720,14 @@ function RotaPage() {
       "gen-scheduled-wards",
       genForm.facility,
       genForm.startDate,
+      ymd(endDate),
       facilityNurseIds,
       facilityWardNames,
     ],
     queryFn: async () => {
       if (facilityNurseIds.length === 0 || facilityWardNames.length === 0)
         return { fullyLocked: [], hasDraft: [] };
-      const genEndDate = new Date(genForm.startDate + "T00:00:00");
-      genEndDate.setDate(genEndDate.getDate() + 27);
+      const genEndDate = new Date(endDate);
       const nurseIdsParam = facilityNurseIds.join(",");
       const wardNamesParam = encodeURIComponent(facilityWardNames.join(","));
       const from = genForm.startDate;
@@ -1081,8 +1030,8 @@ function RotaPage() {
     }
 
     const genStart = new Date(genForm.startDate + "T00:00:00");
-    const genEnd = new Date(genStart);
-    genEnd.setDate(genEnd.getDate() + DAYS - 1);
+    const genEnd = new Date(endDate);
+    const genDays = Math.round((genEnd.getTime() - genStart.getTime()) / 86_400_000) + 1;
 
     // Force-refresh nurse, ward, and leave data before building any scheduling inputs.
     // The nurses query caches for 10 minutes and leave caches for 5 minutes, so without
@@ -1202,7 +1151,7 @@ function RotaPage() {
         wards: facilityWards,
         leave: freshLeave,
         startDate: genStart,
-        days: DAYS,
+        days: genDays,
         facility: genForm.facility,
         periodOffset,
         previousAssignments,
@@ -1250,38 +1199,16 @@ function RotaPage() {
       }
 
       await logAudit(
-        "Generated 28-day rota draft",
+        "Generated rota draft",
         `${genForm.facility} / ${genForm.ward} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       );
 
       setExtraShifts(genExtra);
-      toast.success(`28-day draft generated for ${genForm.facility} / ${genForm.ward}`);
+      toast.success(`${periodLabel} draft generated for ${genForm.facility} / ${genForm.ward}`);
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
     } finally {
-      // 1. Only snap the anchor when generating the CURRENT period (startOffset=0).
-      //    Generating a future period (startOffset=1) must not shift the anchor forward —
-      //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
-      if (startOffset === 0) {
-        qc.setQueryData(
-          ["schedule-window-start", activeRole, genForm.facility, latestArchivedPeriod?.period_end],
-          genForm.startDate,
-        );
-        // Also update the display's anchor key — it's keyed by effectiveFacility (the toolbar
-        // filter), which can differ from genForm.facility when the admin has no facility selected.
-        // Without this the anchor stays stale and the prefetched data lands in the wrong cache key.
-        qc.setQueryData(
-          [
-            "schedule-window-start",
-            activeRole,
-            effectiveFacility,
-            latestArchivedPeriod?.period_end,
-          ],
-          genForm.startDate,
-        );
-      }
-
-      // 2. Force-refresh assignments and wait for the data to land before lifting
+      // Force-refresh assignments and wait for the data to land before lifting
       //    the busy overlay.  Three reasons this is the right tool:
       //    • prefetchQuery skips the fetch when data is already in cache (even
       //      stale data from a pre-generation empty fetch within the staleTime window)
@@ -1293,7 +1220,7 @@ function RotaPage() {
       //    per-row DB upserts mean simultaneous writes to different wards never conflict.
       await qc.refetchQueries({ queryKey: ["assignments"] });
 
-      // 3. Refresh nurse list (intern ward reassignments).
+      // Refresh nurse list (intern ward reassignments).
       qc.invalidateQueries({ queryKey: ["nurses"] });
       setBusy(false);
     }
@@ -1303,7 +1230,7 @@ function RotaPage() {
     if (!selectedWard || isNaN(startDate.getTime())) return;
     if (
       !confirm(
-        `Clear draft shifts for ${selectedWard} in this 28-day window?\n\nShifts already submitted for approval, approved, or published will NOT be affected.`,
+        `Clear draft shifts for ${selectedWard} in ${periodLabel}?\n\nShifts already submitted for approval, approved, or published will NOT be affected.`,
       )
     )
       return;
@@ -1335,7 +1262,6 @@ function RotaPage() {
         `${selectedWard} · ${ymd(startDate)} → ${ymd(endDate)}`,
       );
       qc.invalidateQueries({ queryKey: ["assignments"] });
-      qc.invalidateQueries({ queryKey: ["schedule-window-start"] });
       window.location.reload();
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to clear draft");
@@ -1450,7 +1376,7 @@ function RotaPage() {
         wards: wardDef,
         leave,
         startDate,
-        days: DAYS,
+        days: periodDays,
         facility: effectiveFacility,
         periodOffset,
         previousAssignments,
@@ -1547,9 +1473,9 @@ function RotaPage() {
       const today = todayYmd();
       const periodEnd = ymd(endDate);
       // Use the period's startDate (outer scope) — NOT today — so generateSchedule
-      // produces exactly DAYS assignments starting at the period boundary. We then
-      // filter down to >= today for the target nurses. Using today here would shift
-      // the 28-day window forward and produce one extra day beyond periodEnd.
+      // produces exactly one period of assignments starting at the period boundary.
+      // We then filter down to >= today for the target nurses. Using today here
+      // would shift the window forward past periodEnd.
 
       const fac = nurses.filter((n) => n.facility === effectiveFacility);
       const getGroup = (k: FacilityWideGroup) => {
@@ -1596,7 +1522,7 @@ function RotaPage() {
         wards: facilityFilteredWards.filter((w) => !w.facility || w.facility === effectiveFacility),
         leave,
         startDate, // period start (outer scope), not today
-        days: DAYS,
+        days: periodDays,
         facility: effectiveFacility,
         periodOffset,
         previousAssignments,
@@ -1678,8 +1604,8 @@ function RotaPage() {
     if (!fwRoleGroup || !effectiveFacility) return;
 
     const genStart = new Date(fwStartDate + "T00:00:00");
-    const genEnd = new Date(genStart);
-    genEnd.setDate(genEnd.getDate() + DAYS - 1);
+    const genEnd = new Date(endDate);
+    const genDays = Math.round((genEnd.getTime() - genStart.getTime()) / 86_400_000) + 1;
 
     await Promise.all([
       qc.refetchQueries({ queryKey: ["nurses"] }),
@@ -1778,7 +1704,8 @@ function RotaPage() {
       const wardNames = freshWards.map((w) => w.name);
       if (wardNames.length > 0) {
         const sorted = [...targetNurses].sort((a, b) => a.name.localeCompare(b.name));
-        const periodNumber = Math.round(periodOffset / DAYS);
+        // Rota periods are calendar months, so count elapsed periods in months.
+        const periodNumber = Math.round(periodOffset / (365.25 / 12));
         const nextBase = periodNumber % wardNames.length;
         targetNurses = sorted.map((n, idx) => ({
           ...n,
@@ -1807,7 +1734,7 @@ function RotaPage() {
         wards: freshWards.filter((w) => !w.facility || w.facility === effectiveFacility),
         leave: freshLeavefw,
         startDate: genStart,
-        days: DAYS,
+        days: genDays,
         facility: effectiveFacility,
         periodOffset,
         previousAssignments,
@@ -1862,7 +1789,7 @@ function RotaPage() {
         "Generated facility-wide rota draft",
         `${labels[fwRoleGroup]} · ${effectiveFacility} · ${ymd(genStart)} → ${ymd(genEnd)}`,
       );
-      toast.success(`28-day draft generated for ${labels[fwRoleGroup]}`);
+      toast.success(`${periodLabel} draft generated for ${labels[fwRoleGroup]}`);
       if (fwRoleGroup === "intern") qc.invalidateQueries({ queryKey: ["nurses"] });
     } catch (e: unknown) {
       toast.error(e instanceof Error ? e.message : "Failed to generate");
@@ -1881,7 +1808,7 @@ function RotaPage() {
     };
     if (
       !confirm(
-        `Clear draft ${labels[key]} shifts for this 28-day window?\nShifts already submitted or approved will NOT be affected.`,
+        `Clear draft ${labels[key]} shifts for ${periodLabel}?\nShifts already submitted or approved will NOT be affected.`,
       )
     )
       return;
@@ -2117,8 +2044,10 @@ function RotaPage() {
           isLoading
             ? "Loading schedule…"
             : hasSchedule
-              ? `28-day view · ${days[0].toLocaleDateString()} → ${days[DAYS - 1].toLocaleDateString()}`
-              : "Generate a schedule to view the rota"
+              ? `${periodSummary}${pastPeriod ? " (read-only)" : ""}`
+              : pastPeriod
+                ? `${periodSummary} · no schedule`
+                : `${periodSummary} · generate a schedule to view the rota`
         }
       />
 
@@ -2162,6 +2091,7 @@ function RotaPage() {
           never invites a request that would just get rejected. */}
       {activeRole === "head_nurse" &&
         canRequestRotaEditAccess &&
+        !pastPeriod &&
         editUnit &&
         (windowLockStatus === "draft" || unitHasNewStaffDraft) && (
           <div
@@ -2255,32 +2185,40 @@ function RotaPage() {
 
       {/* Toolbar row 1 */}
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        {/* Period nav — shown once the window is determined, even on empty next period */}
-        {!windowLoading && (
-          <div className="inline-flex rounded-md border bg-card">
-            <button
-              type="button"
-              onClick={() => setStartOffset(0)}
-              disabled={startOffset === 0}
-              className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Current period"
-            >
-              <ChevronLeft className="h-4 w-4" />
-            </button>
-            <span className="px-3 text-xs font-medium flex items-center select-none">
-              {startOffset === 0 ? "Current" : "Next"}
-            </span>
-            <button
-              type="button"
-              onClick={() => setStartOffset(1)}
-              disabled={startOffset === 1}
-              className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
-              title="Next period"
-            >
-              <ChevronRight className="h-4 w-4" />
-            </button>
-          </div>
-        )}
+        {/* Rota period (month) navigation — past periods are read-only; the
+            next period is the furthest ahead a rota can be prepared. */}
+        <div className="inline-flex rounded-md border bg-card">
+          <button
+            type="button"
+            onClick={() => period && setPeriodDate(addDaysYmd(period.start, -1))}
+            disabled={!period}
+            className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Previous month"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setPeriodDate(null)}
+            disabled={startOffset === 0}
+            className="px-3 text-xs font-medium flex items-center select-none min-w-32 justify-center disabled:cursor-default"
+            title={startOffset === 0 ? "Current rota period" : "Back to the current rota period"}
+          >
+            {windowLoading ? "…" : periodLabel}
+            {startOffset === 0 && !windowLoading && (
+              <span className="ml-1.5 text-muted-foreground font-normal">· Current</span>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => period && setPeriodDate(addDaysYmd(period.end, 1))}
+            disabled={!period || startOffset > 0}
+            className="h-9 w-9 grid place-items-center hover:bg-muted disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Next month"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
 
         {/* Facility and ward filters moved to card strips below the toolbar */}
 
@@ -3209,6 +3147,8 @@ function RotaPage() {
                   {windowLockStatus === "submitted" &&
                     "Submitted for approval — use Approvals to return to draft if edits are needed"}
                 </span>
+              ) : pastPeriod ? (
+                "Past rota period · read only."
               ) : (
                 "Click a cell to cycle shifts · Drag a shift onto another nurse's same-day cell to swap."
               )}
@@ -3268,7 +3208,7 @@ function RotaPage() {
       >
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Generate 28-day schedule</DialogTitle>
+            <DialogTitle>Generate {periodLabel} schedule</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
@@ -3280,18 +3220,19 @@ function RotaPage() {
               <span>{genForm.ward}</span>
             </div>
 
-            {/* Start date */}
             <div>
-              <label className="block text-sm font-medium mb-1.5">Start date</label>
-              <input
-                type="date"
-                title="Schedule start date"
-                value={genForm.startDate}
-                onChange={(e) => setGenForm((f) => ({ ...f, startDate: e.target.value }))}
-                className="w-full h-9 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
-              />
+              <p className="block text-sm font-medium mb-1.5">Rota period</p>
+              <p className="h-9 px-3 flex items-center rounded-md border bg-muted/40 text-sm">
+                {periodLabel}
+              </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Schedule runs {DAYS} days from this date.
+                {startDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} –{" "}
+                {endDate.toLocaleDateString("en-GB", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}{" "}
+                · {periodDays} days. Use the month navigation to choose another period.
               </p>
             </div>
           </div>
@@ -3422,16 +3363,18 @@ function RotaPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium mb-1.5">Start date</label>
-              <input
-                type="date"
-                title="Schedule start date"
-                value={fwStartDate}
-                onChange={(e) => setFwStartDate(e.target.value)}
-                className="w-full h-9 px-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-ring"
-              />
+              <p className="block text-sm font-medium mb-1.5">Rota period</p>
+              <p className="h-9 px-3 flex items-center rounded-md border bg-muted/40 text-sm">
+                {periodLabel}
+              </p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Schedule runs {DAYS} days from this date.
+                {startDate.toLocaleDateString("en-GB", { day: "numeric", month: "short" })} –{" "}
+                {endDate.toLocaleDateString("en-GB", {
+                  day: "numeric",
+                  month: "short",
+                  year: "numeric",
+                })}{" "}
+                · {periodDays} days. Use the month navigation to choose another period.
               </p>
             </div>
 
@@ -3454,7 +3397,7 @@ function RotaPage() {
                   <span className="block text-xs text-muted-foreground mt-0.5">
                     {internsAreScheduled
                       ? "Intern schedule is already in the approval pipeline — rotation applies on the next period."
-                      : "Automatically move each intern to their next assigned ward for this 28-day cycle."}
+                      : "Automatically move each intern to their next assigned ward for this rota period."}
                   </span>
                 </span>
               </label>

@@ -2,7 +2,7 @@
 // Source: src/lib/auto-schedule.ts — regenerate with `npm run build:auto-schedule`.
 
 "use strict";
-// Auto-scheduling engine for the 28-day rota.
+// Auto-scheduling engine for the rota period (a calendar month).
 //
 // Universal 16-day cycle for ALL roles (strict, no override): 4M → 4OFF → 4N → 4OFF
 //   Offsets are snapped to 4-day block boundaries so every nurse always starts
@@ -1248,7 +1248,7 @@ function scheduleCoverageNurses(group, days, startDate, leave, out, periodOffset
     }
 }
 /**
- * Generate a 28-day draft schedule and return both the assignments and any
+ * Generate a rota-period draft schedule and return both the assignments and any
  * safety-rule violations that could not be resolved given the available staff.
  */
 function generateSchedule(opts) {

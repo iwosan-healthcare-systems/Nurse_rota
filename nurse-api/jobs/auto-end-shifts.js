@@ -156,13 +156,7 @@ async function runAutoEndOverdueShifts() {
           THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
-        COALESCE(
-          (SELECT MIN(s2.shift_date)
-           FROM shift_assignments s2
-           WHERE s2.status = 'published'
-             AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
-          sa.shift_date
-        )                           AS period_start,
+        COALESCE(rota_period_start(sa.shift_date::date), sa.shift_date)                           AS period_start,
         0                           AS hours_logged,
         true                        AS is_missed,
         false                       AS is_leave,
@@ -226,13 +220,7 @@ async function runAutoEndOverdueShifts() {
           THEN (lr.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END AS ended_at,
-        COALESCE(
-          (SELECT MIN(s2.shift_date)
-           FROM shift_assignments s2
-           WHERE s2.status = 'published'
-             AND s2.shift_date BETWEEN lr.shift_date - 27 AND lr.shift_date),
-          lr.shift_date
-        )                           AS period_start,
+        COALESCE(rota_period_start(lr.shift_date::date), lr.shift_date)                           AS period_start,
         0                           AS hours_logged,
         true                        AS is_missed,
         false                       AS is_leave,
@@ -303,13 +291,7 @@ async function runAutoEndOverdueShifts() {
           THEN (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
         END,
-        COALESCE(
-          (SELECT MIN(s2.shift_date)
-           FROM shift_assignments s2
-           WHERE s2.status = 'published'
-             AND s2.shift_date BETWEEN sa.shift_date - 27 AND sa.shift_date),
-          sa.shift_date
-        ),
+        COALESCE(rota_period_start(sa.shift_date::date), sa.shift_date),
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 15 ELSE 9 END,
         true,
         false,

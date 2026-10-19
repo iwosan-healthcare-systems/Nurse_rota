@@ -28,6 +28,8 @@ app.use(
 );
 app.use(compression()); // gzip JSON responses — no-op cost, real win on slower connections
 app.use("/api/scheduling", express.json({ limit: "1mb" }));
+// Hospital setup and logo uploads carry an inline image (up to ~550 KB).
+app.use("/api/hospitals", express.json({ limit: "1mb" }));
 app.use(express.json({ limit: "100kb" }));
 
 // Rate-limit login to 10 attempts per 15 minutes per IP.

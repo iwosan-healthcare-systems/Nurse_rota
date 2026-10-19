@@ -2,13 +2,13 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { currentRotaStart, rotaToday } from "@/lib/rota-window";
+import { rotaToday } from "@/lib/rota-window";
 import {
   assignmentScheduledHours,
   assignmentTimeLabel,
   type AssignmentDefinition,
 } from "@/lib/assignment-shift-definition";
-import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
+import { fetchRotaPeriod, useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -426,13 +426,9 @@ function ShiftPage() {
       officialStart.setTime(Date.parse(savedCell.scheduled_shift.startsAt));
 
     void (async () => {
-      const winRows = await api
-        .get<{ shift_date: string }[]>(`/shift-assignments?status=published&limit=1`)
-        .catch(() => []);
-      const periodStart = currentRotaStart(
-        winRows[0]?.shift_date ?? assignmentDate,
-        assignmentDate,
-      );
+      const periodStart = await fetchRotaPeriod(assignmentDate)
+        .then((p) => p.start)
+        .catch(() => assignmentDate);
       await api
         .post("/shift-logs", {
           nurse_id: nurseId,
@@ -525,13 +521,7 @@ function ShiftPage() {
       pendingGeoRef.current = null;
 
       // Find the period start
-      const winRows = await api.get<{ shift_date: string }[]>(
-        `/shift-assignments?status=published&limit=1`,
-      );
-      const periodStart = currentRotaStart(
-        winRows[0]?.shift_date ?? assignment.shift_date,
-        assignment.shift_date,
-      );
+      const periodStart = (await fetchRotaPeriod(assignment.shift_date)).start;
 
       const recordedLate = (lateMins ?? 0) > 0;
 
@@ -1259,9 +1249,7 @@ function AllNursesShiftView() {
     enabled: !!livePeriod,
     queryFn: async () => {
       const periodStart = livePeriod!.start;
-      const periodEndDate = new Date(periodStart.slice(0, 10) + "T00:00:00");
-      periodEndDate.setDate(periodEndDate.getDate() + 27);
-      const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, "0")}-${String(periodEndDate.getDate()).padStart(2, "0")}`;
+      const periodEnd = livePeriod!.end;
       return api
         .get<
           (AssignmentDefinition & { nurse_id: string })[]
@@ -1353,7 +1341,7 @@ function AllNursesShiftView() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="Shift Hours" subtitle="All staff · current 28-day period" />
+      <PageHeader title="Shift Hours" subtitle="All staff · current rota period" />
 
       {/* Summary stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -1370,7 +1358,7 @@ function AllNursesShiftView() {
             <p className="text-xs uppercase tracking-wide font-medium">Hours logged</p>
           </div>
           <p className="text-3xl font-bold">{fmtHours(totalHours)}</p>
-          <p className="text-xs text-muted-foreground mt-1">this 28-day period</p>
+          <p className="text-xs text-muted-foreground mt-1">this rota period</p>
         </div>
         <div className="bg-card border rounded-xl p-5 shadow-soft">
           <div className="flex items-center gap-2 mb-1 text-muted-foreground">

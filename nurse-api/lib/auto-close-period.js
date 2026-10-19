@@ -16,17 +16,16 @@ async function closeCompletedPeriod() {
     }
     const { rows: periodRows } = await client.query(`
       WITH published AS (
-        SELECT shift_date::date AS d
+        SELECT DISTINCT shift_date::date AS d
         FROM shift_assignments WHERE status = 'published'
-      ), anchored AS (
-        SELECT d, MIN(d) OVER () AS anchor FROM published
-      ), bucketed AS (
-        SELECT d, anchor + ((d - anchor) / 28) * 28 AS period_start
-        FROM anchored
+      ), bounds AS (
+        -- Calendar months (after any earlier 28-day periods); see migration 053.
+        SELECT DISTINCT rota_period_start(d) AS period_start, rota_period_end(d) AS period_end
+        FROM published
       ), periods AS (
-        SELECT period_start, period_start + 27 AS period_end,
-          (period_start + 28)::timestamp AT TIME ZONE 'Africa/Lagos' AS close_at
-        FROM bucketed GROUP BY period_start
+        SELECT period_start, period_end,
+          (period_end + 1)::timestamp AT TIME ZONE 'Africa/Lagos' AS close_at
+        FROM bounds WHERE period_start IS NOT NULL
       )
       SELECT periods.period_start::text, periods.period_end::text, NOW() AS evaluated_at
       FROM periods
