@@ -1,4 +1,5 @@
 /* eslint-disable prettier/prettier */
+import { useConfiguredRoleGroups } from "@/lib/role-groups";
 import { Link, Outlet, useRouterState, useNavigate, redirect } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -31,6 +32,7 @@ import {
   CalendarX,
   ArrowRightLeft,
   Settings,
+  Hospital,
 } from "lucide-react";
 import logo from "@/assets/logo.jpeg";
 import { cn } from "@/lib/utils";
@@ -61,6 +63,12 @@ const nav = [
   { to: "/shift", label: "Shift", icon: Timer, roles: ALL },
   { to: "/staff", label: "Staff", icon: Users, roles: MANAGERS },
   { to: "/wards", label: "Wards", icon: Building2, roles: MANAGERS },
+  {
+    to: "/scheduling",
+    label: "Scheduling",
+    icon: Settings,
+    roles: ["admin", "cno", "chief_matron"] as AppRole[],
+  },
   { to: "/leave", label: "Leave & Requests", icon: PlaneTakeoff, roles: ALL },
   { to: "/leave-entitlements", label: "Leave Entitlements", icon: ClipboardCheck, roles: ALL },
   { to: "/approvals", label: "Approvals", icon: FileCheck2, roles: APPROVERS },
@@ -82,7 +90,57 @@ const nav = [
     icon: Settings,
     roles: ["admin"] as AppRole[],
   },
+  // Platform administrators only (filtered below): create hospitals and grant access.
+  { to: "/hospitals", label: "Hospitals", icon: Hospital, roles: ["admin"] as AppRole[] },
 ] as const;
+
+// Current hospital, with a switcher when the user can work in more than one.
+function HospitalSwitcher({
+  enabled,
+  hospitalId,
+  onSwitch,
+}: {
+  enabled: boolean;
+  hospitalId: string | null;
+  onSwitch: (id: string) => void;
+}) {
+  const { data } = useQuery({
+    queryKey: ["my-hospitals"],
+    enabled,
+    staleTime: 5 * 60 * 1000,
+    queryFn: () => api.get<{ hospitals: { id: string; name: string }[] }>("/hospitals/mine"),
+  });
+  const hospitals = data?.hospitals ?? [];
+  const current = hospitals.find((h) => h.id === hospitalId);
+  if (!current) return null;
+  if (hospitals.length < 2)
+    return (
+      <span className="hidden sm:inline max-w-48 truncate text-xs text-muted-foreground">
+        {current.name}
+      </span>
+    );
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+      <Hospital className="h-4 w-4 shrink-0" aria-hidden />
+      <span className="sr-only">Hospital</span>
+      <select
+        aria-label="Switch hospital"
+        className="h-9 max-w-36 sm:max-w-56 truncate rounded-md border bg-background px-2 text-sm text-foreground"
+        value={current.id}
+        onChange={(e) => {
+          const next = hospitals.find((h) => h.id === e.target.value);
+          if (next && window.confirm(`Switch to ${next.name}?`)) onSwitch(next.id);
+        }}
+      >
+        {hospitals.map((h) => (
+          <option key={h.id} value={h.id}>
+            {h.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 // Is `path` the nav item at `to`, or a sub-route of it? A plain
 // path.startsWith(to) false-matches sibling routes that share a prefix —
@@ -118,11 +176,17 @@ export function AppShell() {
     selectRole,
     signOut,
     loading,
+    isSuperAdmin,
+    hospitalId,
+    switchHospital,
+    canManageRotaPeriods,
   } = useAuth();
   const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [showExpiryModal, setShowExpiryModal] = useState(false);
   const [menuPermissions, setMenuPermissions] = useState<Record<string, AppRole[]>>({});
+  // Rota/Approvals grouping reads configured role groups synchronously; load them first.
+  const roleGroups = useConfiguredRoleGroups(!!user);
 
   // Auto sign-out when an active session reaches password expiry.
   // The login route already blocks expired passwords, but this handles the edge
@@ -136,7 +200,9 @@ export function AppShell() {
     }
   }, [passwordExpiresInDays, signOut]);
 
+  // Only roles allowed to close periods ask the API to (others would get a 403).
   useEffect(() => {
+    if (!canManageRotaPeriods) return;
     api
       .post<{ closed: boolean; period_start?: string; period_end?: string }>(
         "/rpc/auto-close-period",
@@ -161,7 +227,7 @@ export function AppShell() {
       .catch(() => {
         /* non-critical */
       });
-  }, []);
+  }, [canManageRotaPeriods]);
 
   // Load menu permissions from DB on mount, and re-fetch whenever an admin saves changes.
   useEffect(() => {
@@ -214,6 +280,7 @@ export function AppShell() {
   }
 
   const visibleNav = nav.filter((n) => {
+    if (n.to === "/hospitals") return isSuperAdmin;
     if (activeRole === "admin") return true;
     const effectiveRoles = getEffectiveRoles(n.to, menuPermissions);
     return activeRole ? effectiveRoles.includes(activeRole) : roles.length === 0;
@@ -267,6 +334,7 @@ export function AppShell() {
           <div className="flex-1 min-w-0">
             <p className="text-sm font-semibold truncate">{currentTitle(path)}</p>
           </div>
+          <HospitalSwitcher enabled={!!user} hospitalId={hospitalId} onSwitch={switchHospital} />
           <RotaReminderBell
             activeRole={activeRole}
             nurseId={nurseId}
@@ -308,7 +376,9 @@ export function AppShell() {
               clearPasswordExpiry();
             }}
           />
-          {isPathPermitted ? (
+          {user && roleGroups.isPending ? (
+            <div className="py-24 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : isPathPermitted ? (
             <Outlet />
           ) : (
             <div className="flex flex-col items-center justify-center h-full py-24 gap-5 text-center">
@@ -333,7 +403,8 @@ export function AppShell() {
           )}
         </main>
         <footer className="border-t px-4 sm:px-6 py-4 text-center text-xs text-muted-foreground">
-          Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights reserved.
+          Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights
+          reserved.
         </footer>
       </div>
     </div>
@@ -417,9 +488,11 @@ function parseUnitPeriodKey(key: string, prefix: string) {
   if (!key.startsWith(prefix)) return null;
   const [facilitySlug, unitSlug, periodStart] = key.slice(prefix.length).split("|");
   if (!facilitySlug || !unitSlug || !periodStart) return null;
-  const facilityDisplay = facilitySlug.charAt(0).toUpperCase() + facilitySlug.slice(1).replace(/_/g, " ");
+  const facilityDisplay =
+    facilitySlug.charAt(0).toUpperCase() + facilitySlug.slice(1).replace(/_/g, " ");
   const unitDisplay =
-    FW_UNIT_LABELS[unitSlug] ?? unitSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    FW_UNIT_LABELS[unitSlug] ??
+    unitSlug.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
   return { facilityDisplay, unitDisplay, periodStart };
 }
 
@@ -587,9 +660,7 @@ function RotaReminderBell({
   //   admin      → most urgent pending action across all roles, plus the
   //                generate-override reminder (generation is otherwise automatic)
   const canSeeWorkflow =
-    activeRole === "admin" ||
-    activeRole === "cno" ||
-    activeRole === "head_nurse";
+    activeRole === "admin" || activeRole === "cno" || activeRole === "head_nurse";
 
   const { data: workflowStatus } = useQuery<{
     firstRotaPublished: boolean;
@@ -629,10 +700,18 @@ function RotaReminderBell({
       };
     }
     if (isCnoOrAdmin && nextRotaStage === "submitted") {
-      return { kind: "approve" as const, key: `workflow_approve_${nextPeriodStart}`, nextPeriodStart };
+      return {
+        kind: "approve" as const,
+        key: `workflow_approve_${nextPeriodStart}`,
+        nextPeriodStart,
+      };
     }
     if (isHeadOrAdmin && leaveIsClosed && nextRotaStage === "draft") {
-      return { kind: "submit" as const, key: `workflow_submit_${nextPeriodStart}`, nextPeriodStart };
+      return {
+        kind: "submit" as const,
+        key: `workflow_submit_${nextPeriodStart}`,
+        nextPeriodStart,
+      };
     }
     // Generation is automatic (T-19) — this is only an admin override reminder.
     if (activeRole === "admin" && leaveIsClosed && nextRotaStage === "none") {
@@ -707,17 +786,25 @@ function RotaReminderBell({
   // filled by someone else, or (most important) a nurse accepted an invite
   // but the automatic rota flip failed and needs manual reconciliation.
   const locumReviewKeys =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_review_")).map((r) => r.notif_key) ?? [];
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_review_"))
+      .map((r) => r.notif_key) ?? [];
   const locumApprovedKeys =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_approved_")).map((r) => r.notif_key) ?? [];
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_approved_"))
+      .map((r) => r.notif_key) ?? [];
   const locumInviteKeys =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_invite_")).map((r) => r.notif_key) ?? [];
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_invite_"))
+      .map((r) => r.notif_key) ?? [];
   const locumFlipFailedKeys =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_flip_failed_")).map((r) => r.notif_key) ??
-    [];
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_flip_failed_"))
+      .map((r) => r.notif_key) ?? [];
   const locumFilledNurseKeys =
-    allNotifs?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_filled_nurse_")).map((r) => r.notif_key) ??
-    [];
+    allNotifs
+      ?.filter((r) => !r.is_read && r.notif_key.startsWith("locum_filled_nurse_"))
+      .map((r) => r.notif_key) ?? [];
   const locumUpdatesKeys = [
     ...locumReviewKeys,
     ...locumApprovedKeys,
@@ -808,7 +895,9 @@ function RotaReminderBell({
   });
 
   const leaveDetailIds = [
-    ...new Set([...leaveUpdateKeys, ...coverNeededKeys].map(extractUuid).filter((id): id is string => !!id)),
+    ...new Set(
+      [...leaveUpdateKeys, ...coverNeededKeys].map(extractUuid).filter((id): id is string => !!id),
+    ),
   ];
   const { data: leaveDetails = [] } = useQuery({
     queryKey: ["notif-leave-details", leaveDetailIds.join(",")],
@@ -835,7 +924,13 @@ function RotaReminderBell({
   // locum_filled_nurse_.
   const locumRequestIds = [
     ...new Set(
-      [...locumFilledKeys, ...locumReviewKeys, ...locumApprovedKeys, ...locumInviteKeys, ...locumFilledNurseKeys]
+      [
+        ...locumFilledKeys,
+        ...locumReviewKeys,
+        ...locumApprovedKeys,
+        ...locumInviteKeys,
+        ...locumFilledNurseKeys,
+      ]
         .map(extractUuid)
         .filter((id): id is string => !!id),
     ),
@@ -1013,8 +1108,9 @@ function RotaReminderBell({
                               {detail ? (
                                 <>
                                   <span className="font-medium">{detail.nurse_name}</span>'s{" "}
-                                  {detail.type.toLowerCase()} leave approved ({fmtDate(detail.from_date)}{" "}
-                                  – {fmtDate(detail.to_date)}) — arrange cover.
+                                  {detail.type.toLowerCase()} leave approved (
+                                  {fmtDate(detail.from_date)} – {fmtDate(detail.to_date)}) — arrange
+                                  cover.
                                 </>
                               ) : (
                                 "A sick/emergency leave was approved — consider arranging shift cover."
@@ -1108,10 +1204,15 @@ function RotaReminderBell({
                           if (key.startsWith("rota_edit_pending_")) {
                             const d = editAccessDetails.find((r) => r.id === extractUuid(key));
                             const unit =
-                              d?.ward ?? (d?.role_group ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group) : "a unit");
+                              d?.ward ??
+                              (d?.role_group
+                                ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group)
+                                : "a unit");
                             return (
                               <p key={key}>
-                                <span className="font-medium">{d?.requested_by_name ?? "A head nurse"}</span>{" "}
+                                <span className="font-medium">
+                                  {d?.requested_by_name ?? "A head nurse"}
+                                </span>{" "}
                                 requested edit access for {unit}
                                 {d?.facility ? ` · ${d.facility}` : ""}
                                 {d?.reason ? ` — "${d.reason}"` : ""}
@@ -1122,10 +1223,13 @@ function RotaReminderBell({
                             const d = editAccessDetails.find((r) => r.id === extractUuid(key));
                             const unit =
                               d?.ward ??
-                              (d?.role_group ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group) : "your draft");
+                              (d?.role_group
+                                ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group)
+                                : "your draft");
                             return (
                               <p key={key}>
-                                Your edit-access request for <span className="font-medium">{unit}</span>
+                                Your edit-access request for{" "}
+                                <span className="font-medium">{unit}</span>
                                 {d?.facility ? ` · ${d.facility}` : ""} was approved.
                               </p>
                             );
@@ -1134,17 +1238,24 @@ function RotaReminderBell({
                             const d = editAccessDetails.find((r) => r.id === extractUuid(key));
                             const unit =
                               d?.ward ??
-                              (d?.role_group ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group) : "your draft");
+                              (d?.role_group
+                                ? (FW_UNIT_LABELS[d.role_group] ?? d.role_group)
+                                : "your draft");
                             return (
                               <p key={key}>
-                                Your edit-access request for <span className="font-medium">{unit}</span>
+                                Your edit-access request for{" "}
+                                <span className="font-medium">{unit}</span>
                                 {d?.facility ? ` · ${d.facility}` : ""} was declined
                                 {d?.review_note ? ` — "${d.review_note}"` : ""}. The draft was
                                 auto-submitted as-is.
                               </p>
                             );
                           }
-                          return <p key={key}>{unitPeriodMessage(key) ?? "A rota lifecycle event occurred."}</p>;
+                          return (
+                            <p key={key}>
+                              {unitPeriodMessage(key) ?? "A rota lifecycle event occurred."}
+                            </p>
+                          );
                         })}
                       </div>
                       <p className="text-xs text-muted-foreground">
@@ -1181,8 +1292,11 @@ function RotaReminderBell({
                             <p key={key}>
                               {d ? (
                                 <>
-                                  <span className="font-medium">{d.accepted_by_nurse_name ?? "A nurse"}</span>{" "}
-                                  accepted the {d.shift} shift for {d.ward} on {fmtDate(d.shift_date)}.
+                                  <span className="font-medium">
+                                    {d.accepted_by_nurse_name ?? "A nurse"}
+                                  </span>{" "}
+                                  accepted the {d.shift} shift for {d.ward} on{" "}
+                                  {fmtDate(d.shift_date)}.
                                 </>
                               ) : (
                                 "A nurse has accepted a locum shift invite."
@@ -1223,9 +1337,11 @@ function RotaReminderBell({
                             <p key={key}>
                               {d ? (
                                 <>
-                                  <span className="font-medium">{d.requested_by_name ?? "A matron"}</span>{" "}
-                                  requested a {d.shift} shift for {d.ward} on {fmtDate(d.shift_date)} —
-                                  needs your review.
+                                  <span className="font-medium">
+                                    {d.requested_by_name ?? "A matron"}
+                                  </span>{" "}
+                                  requested a {d.shift} shift for {d.ward} on{" "}
+                                  {fmtDate(d.shift_date)} — needs your review.
                                 </>
                               ) : (
                                 "A new locum request needs your review."
@@ -1239,9 +1355,10 @@ function RotaReminderBell({
                             <p key={key}>
                               {d ? (
                                 <>
-                                  Your locum request for <span className="font-medium">{d.ward}</span> ·{" "}
-                                  {d.shift} on {fmtDate(d.shift_date)} was approved — send invites to
-                                  off-duty nurses.
+                                  Your locum request for{" "}
+                                  <span className="font-medium">{d.ward}</span> · {d.shift} on{" "}
+                                  {fmtDate(d.shift_date)} was approved — send invites to off-duty
+                                  nurses.
                                 </>
                               ) : (
                                 "Your locum request was approved — send invites to off-duty nurses."
@@ -1271,10 +1388,11 @@ function RotaReminderBell({
                             <p key={key} className="text-red-700 dark:text-red-400">
                               {d?.locum_request ? (
                                 <>
-                                  <span className="font-medium">{d.nurse_name ?? "A nurse"}</span> accepted
-                                  the {d.locum_request.shift} shift for {d.locum_request.ward} on{" "}
-                                  {fmtDate(d.locum_request.shift_date)}, but the rota didn't update
-                                  automatically — check and fix it manually.
+                                  <span className="font-medium">{d.nurse_name ?? "A nurse"}</span>{" "}
+                                  accepted the {d.locum_request.shift} shift for{" "}
+                                  {d.locum_request.ward} on {fmtDate(d.locum_request.shift_date)},
+                                  but the rota didn't update automatically — check and fix it
+                                  manually.
                                 </>
                               ) : (
                                 "A locum acceptance didn't update the rota automatically — check and fix it manually."
@@ -1288,9 +1406,10 @@ function RotaReminderBell({
                             <p key={key}>
                               {d ? (
                                 <>
-                                  The {d.shift} shift for <span className="font-medium">{d.ward}</span> on{" "}
-                                  {fmtDate(d.shift_date)} you were invited to has been filled by someone
-                                  else.
+                                  The {d.shift} shift for{" "}
+                                  <span className="font-medium">{d.ward}</span> on{" "}
+                                  {fmtDate(d.shift_date)} you were invited to has been filled by
+                                  someone else.
                                 </>
                               ) : (
                                 "A locum shift you were invited to has been filled by someone else."
@@ -1299,7 +1418,9 @@ function RotaReminderBell({
                           );
                         })}
                       </div>
-                      <p className="text-xs text-muted-foreground">Open Bank Shift (Locum) for details.</p>
+                      <p className="text-xs text-muted-foreground">
+                        Open Bank Shift (Locum) for details.
+                      </p>
                     </div>
                   ) : kind === "locum" ? (
                     <div

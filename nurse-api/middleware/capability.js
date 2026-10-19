@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { currentContext } = require("../lib/tenant-context");
 
 // The API runs as multiple PM2 cluster workers with no shared cache, so a
 // pure in-memory per-process TTL is the pragmatic no-new-infra choice: an
@@ -6,20 +7,22 @@ const pool = require("../db");
 // that handled the save (see invalidateCapabilityCache, called from
 // routes/portal-settings.js), and on every other worker within this TTL.
 const CACHE_TTL_MS = 30_000;
-let cache = { data: null, loadedAt: 0 };
+// Each hospital has its own permissions matrix, so cache per hospital.
+const cache = new Map();
 
 async function loadCapabilities() {
   const now = Date.now();
-  if (cache.data && now - cache.loadedAt < CACHE_TTL_MS) return cache.data;
-  const { rows } = await pool.query(
-    "SELECT value FROM portal_settings WHERE key = 'capabilities'",
-  );
-  cache = { data: Array.isArray(rows[0]?.value) ? rows[0].value : [], loadedAt: now };
-  return cache.data;
+  const { hospitalId } = currentContext();
+  const cached = cache.get(hospitalId);
+  if (cached && now - cached.loadedAt < CACHE_TTL_MS) return cached.data;
+  const { rows } = await pool.query("SELECT value FROM portal_settings WHERE key = 'capabilities'");
+  const data = Array.isArray(rows[0]?.value) ? rows[0].value : [];
+  cache.set(hospitalId, { data, loadedAt: now });
+  return data;
 }
 
 function invalidateCapabilityCache() {
-  cache = { data: null, loadedAt: 0 };
+  cache.delete(currentContext().hospitalId);
 }
 
 // Same admin-bypass semantics as requireRole (middleware/auth.js): a caller

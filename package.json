@@ -4,6 +4,10 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
+    "test": "node --test scripts/*.test.mjs",
+    "test:scheduler": "node --test scripts/auto-schedule.test.mjs",
+    "test:scheduling-config": "node --test scripts/scheduling-configuration.test.mjs",
+    "test:scheduling-db": "node scripts/test-scheduling-postgres.mjs",
     "postinstall": "node scripts/postinstall.js",
     "dev": "vite dev",
     "build": "vite build",

@@ -6,7 +6,7 @@ import { type RoleDef } from "@/lib/auth-context";
 import { Modal } from "@/routes/_app/staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import { Plus, Pencil, Trash2, Shield, Lock } from "lucide-react";
+import { Plus, Pencil, Trash2, Shield, Lock, MinusCircle } from "lucide-react";
 
 const KEY_RE = /^[a-z][a-z0-9_]{1,49}$/;
 
@@ -22,6 +22,43 @@ export function SystemRolesSettings() {
     queryKey: ["roles-admin"],
     queryFn: () => api.get<RoleDef[]>("/roles"),
   });
+
+  // Built-in roles this hospital has not enabled yet.
+  const { data: available = [] } = useQuery<{ key: string; label: string; description: string }[]>({
+    queryKey: ["roles-available"],
+    queryFn: () => api.get("/roles/available"),
+  });
+
+  async function addBuiltIn(key: string) {
+    const role = available.find((r) => r.key === key);
+    try {
+      await api.put(`/roles/${key}/hospital`);
+      void logAudit("Added role to hospital", role?.label ?? key);
+      qc.invalidateQueries({ queryKey: ["roles-available"] });
+      afterMutate();
+      toast.success(`${role?.label ?? key} added to this hospital`);
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to add role");
+    }
+  }
+
+  async function removeFromHospital(role: RoleDef) {
+    if (
+      !confirm(
+        `Remove "${role.label}" from this hospital? It can be added back later; other hospitals are not affected.`,
+      )
+    )
+      return;
+    try {
+      await api.del(`/roles/${role.key}/hospital`);
+      void logAudit("Removed role from hospital", role.label);
+      qc.invalidateQueries({ queryKey: ["roles-available"] });
+      afterMutate();
+      toast.success("Role removed from this hospital");
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to remove role");
+    }
+  }
 
   function afterMutate() {
     qc.invalidateQueries({ queryKey: ["roles-admin"] });
@@ -43,9 +80,27 @@ export function SystemRolesSettings() {
   return (
     <div className="space-y-4 mt-4">
       <div className="flex items-start justify-between gap-4">
-        <p className="text-xs text-muted-foreground">
-          Create custom roles, then assign their permissions and menu access in the tabs above.
-        </p>
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            These are the roles this hospital uses. Add a built-in role or create a custom one, then
+            assign its permissions and menu access in the tabs above.
+          </p>
+          {available.length > 0 && (
+            <select
+              aria-label="Add a built-in role"
+              className="h-9 rounded-md border bg-background px-2 text-sm"
+              value=""
+              onChange={(e) => e.target.value && void addBuiltIn(e.target.value)}
+            >
+              <option value="">Add a built-in role…</option>
+              {available.map((r) => (
+                <option key={r.key} value={r.key}>
+                  {r.label}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => setShowCreate(true)}
@@ -103,21 +158,45 @@ export function SystemRolesSettings() {
                         <button
                           type="button"
                           onClick={() => setEditTarget(role)}
-                          title="Edit label / description"
-                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted text-muted-foreground"
+                          disabled={role.is_system || !role.owned}
+                          title={
+                            role.is_system
+                              ? "System roles are shared by every hospital"
+                              : !role.owned
+                                ? "Created by another hospital; only it can edit this role"
+                                : "Edit label / description"
+                          }
+                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted text-muted-foreground disabled:opacity-40 disabled:cursor-not-allowed"
                         >
                           <Pencil className="h-3.5 w-3.5" />
                         </button>
                         <button
                           type="button"
+                          onClick={() => removeFromHospital(role)}
+                          disabled={role.key === "admin" || (role.usage_count ?? 0) > 0}
+                          title={
+                            role.key === "admin"
+                              ? "Every hospital keeps the Administrator role"
+                              : (role.usage_count ?? 0) > 0
+                                ? `Assigned to ${role.usage_count} user(s) in this hospital — remove it from them first`
+                                : "Remove from this hospital"
+                          }
+                          className="h-8 w-8 grid place-items-center rounded-md hover:bg-muted text-muted-foreground disabled:opacity-30 disabled:hover:bg-transparent"
+                        >
+                          <MinusCircle className="h-3.5 w-3.5" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => deleteRole(role)}
-                          disabled={role.is_system || (role.usage_count ?? 0) > 0}
+                          disabled={role.is_system || !role.owned || (role.usage_count ?? 0) > 0}
                           title={
                             role.is_system
                               ? "System roles cannot be deleted"
-                              : (role.usage_count ?? 0) > 0
-                                ? `Assigned to ${role.usage_count} user(s) — remove it from those users first`
-                                : "Delete role"
+                              : !role.owned
+                                ? "Created by another hospital; only it can delete this role"
+                                : (role.usage_count ?? 0) > 0
+                                  ? `Assigned to ${role.usage_count} user(s) — remove it from those users first`
+                                  : "Delete role everywhere"
                           }
                           className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
                         >

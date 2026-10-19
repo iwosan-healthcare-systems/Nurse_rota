@@ -1,4 +1,6 @@
 const cron = require("node-cron");
+const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { closeCompletedPeriod } = require("../lib/auto-close-period");
 
 async function autoClosePeriod() {
@@ -17,8 +19,13 @@ async function autoClosePeriod() {
 }
 
 function startAutoClosePeriodJob() {
-  autoClosePeriod();
-  cron.schedule("*/5 * * * *", autoClosePeriod);
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoClosePeriod()).catch((err) =>
+      console.error("[auto-close-period] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-close] Period auto-close job started (runs every 5 minutes)");
 }
 

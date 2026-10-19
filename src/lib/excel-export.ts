@@ -1,7 +1,9 @@
 import * as ExcelJS from "exceljs";
 
 function triggerDownload(buf: ArrayBuffer | Uint8Array, filename: string) {
-  const blob = new Blob([buf], {
+  // Copy typed-array views into an owned ArrayBuffer accepted by browser Blob.
+  const bytes = buf instanceof Uint8Array ? new Uint8Array(buf) : buf;
+  const blob = new Blob([bytes], {
     type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
   });
   const url = URL.createObjectURL(blob);

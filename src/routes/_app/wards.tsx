@@ -9,7 +9,6 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
-import { FACILITY_LOCATIONS } from "@/lib/geo-fence";
 
 export const Route = createFileRoute("/_app/wards")({
   head: () => ({
@@ -73,18 +72,17 @@ function WardsPage() {
     queryFn: () => api.get<StaffFacilityRow[]>("/nurses"),
   });
 
-  const { data: settingsFacilities = Object.keys(FACILITY_LOCATIONS) } = useQuery({
+  const { data: settingsFacilities = [] } = useQuery({
     queryKey: ["ward-facility-settings"],
+    // This hospital's own sites; there is no built-in list to fall back to.
     queryFn: async () => {
-      const fallback = Object.keys(FACILITY_LOCATIONS);
       try {
         const { value } = await api.get<{ value?: FacilitySettings }>(
           "/portal-settings/gps_settings",
         );
-        const names = Object.keys(value?.facilities ?? {});
-        return names.length ? names : fallback;
+        return Object.keys(value?.facilities ?? {});
       } catch {
-        return fallback;
+        return [];
       }
     },
     refetchOnMount: "always",

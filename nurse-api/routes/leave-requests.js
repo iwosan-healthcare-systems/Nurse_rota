@@ -1,17 +1,33 @@
+const { validateSwitchNotice } = require("../lib/switch-notice-start");
+const { validDate } = require("../lib/configured-scheduler");
 const router = require("express").Router();
+const {
+  guardLegacySwitchApproval,
+  guardConfiguredSwitchRequest,
+} = require("../lib/configured-switch-guard");
+const { assessConfiguredLeaveStaffing } = require("../lib/configured-leave-staffing");
+const { validateConfiguredLeaveRestoration } = require("../lib/configured-leave-restoration");
+const { reverseLeaveCredits } = require("../lib/reverse-leave-credits");
+const { closeConfiguredAttendanceForLeave } = require("../lib/configured-leave-attendance");
 const pool = require("../db");
 const { requireRole } = require("../middleware/auth");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const {
   wouldExceedEntitlement,
   countChargeableLeaveDays,
-  isAnnualBlockedByMaternity,
-  leaveYearForDate,
+  annualMaternityConflict,
 } = require("../lib/leave-entitlements");
 const { getNextPeriodDates, checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
 const { periodStartForShiftDate } = require("../lib/period-start");
 const { getSickEmergencyMaxDays, getShiftSwitchMinNoticeHours } = require("../lib/leave-settings");
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+const wrap = (fn) => (req, res, next) =>
+  fn(req, res, next).catch((error) => {
+    if (error.code === "SWITCH_MIN_NOTICE_NOT_MET")
+      return res.status(422).json({ error: error.message, code: error.code });
+    if (error.code === "CONFIGURED_EDIT_INVALID")
+      return res.status(409).json({ error: error.message });
+    next(error);
+  });
 
 function fmtDateRange(from, to) {
   const fmt = (d) =>
@@ -193,6 +209,8 @@ router.post(
       req.body;
     if (!nurse_name || !type || !from_date || !to_date)
       return res.status(400).json({ error: "Missing required fields" });
+    if (!validDate(from_date) || !validDate(to_date))
+      return res.status(400).json({ error: "Use valid calendar dates in YYYY-MM-DD format" });
 
     const today = new Date().toISOString().slice(0, 10);
     if (from_date < today) {
@@ -215,52 +233,10 @@ router.post(
       }
     }
 
-    // Shift switches need at least this many hours' notice before the actual
-    // shift start (admin-configurable, default 24) — this is the backend
-    // enforcement of the same rule leave.tsx's submit() already checks
-    // client-side, closing the gap that it was only ever enforced in the
-    // browser. Waived unconditionally when covering an approved Sick/
-    // Emergency leave — a nurse can fall sick (or have an emergency) mid-
-    // shift with zero notice, and the whole point of allowing the switch
-    // request right after that leave is approved is to let someone else
-    // cover it, so the notice rule can't be the thing standing in the way.
+    // Create and edit share saved-start notice validation and Sick/Emergency waivers.
     if (type === "Swap" && nurse_id) {
-      const minNoticeHours = await getShiftSwitchMinNoticeHours();
-      if (minNoticeHours > 0) {
-        const { rows: coveredLeaveRows } = await pool.query(
-          `SELECT type FROM leave_requests
-            WHERE nurse_id = $1 AND status = 'Approved'
-              AND from_date <= $2 AND to_date >= $2
-            LIMIT 1`,
-          [nurse_id, from_date],
-        );
-        const covered = coveredLeaveRows[0];
-        const waived = !!covered && ["Sick", "Emergency"].includes(covered.type);
-
-        if (!waived) {
-          // Use the nurse's actual scheduled shift where one's on file
-          // (Morning = 08:00, Night = 17:00, Africa/Lagos) — falls back to
-          // midnight (the stricter option) otherwise. This is the backstop
-          // for anyone bypassing the frontend's own precise version of this
-          // check, not the primary UX gate, so erring stricter here is the
-          // safe direction.
-          const { rows: shiftRows } = await pool.query(
-            "SELECT shift FROM shift_assignments WHERE nurse_id = $1 AND shift_date = $2 LIMIT 1",
-            [nurse_id, from_date],
-          );
-          const shiftHour = shiftRows[0]?.shift === "N" ? 17 : shiftRows[0]?.shift === "M" ? 8 : 0;
-          const shiftStart = new Date(
-            `${from_date}T${String(shiftHour).padStart(2, "0")}:00:00+01:00`,
-          );
-          const hoursUntilShift = (shiftStart.getTime() - Date.now()) / 3600000;
-          if (hoursUntilShift < minNoticeHours) {
-            return res.status(422).json({
-              error: `Shift switch requests need at least ${minNoticeHours} hour(s) notice before the shift (${Math.max(0, Math.floor(hoursUntilShift))}h remaining).`,
-              code: "SWITCH_MIN_NOTICE_NOT_MET",
-            });
-          }
-        }
-      }
+      await guardConfiguredSwitchRequest(pool, { nurse_id, reason, from_date, to_date });
+      await validateSwitchNotice(pool, nurse_id, from_date, await getShiftSwitchMinNoticeHours());
     }
 
     // Entitlement cap (Annual 15/yr, Study/Compassionate 5/yr, Maternity 84/yr
@@ -276,7 +252,7 @@ router.post(
       if (overage) {
         const dayUnit = type === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
         return res.status(422).json({
-          error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} ${dayUnit} allowed ${overage.period === "month" ? "this month" : "this year"} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
+          error: `${nurse_name} has already used ${overage.used} of ${overage.cap} ${type} ${dayUnit} allowed for ${overage.windowStart} to ${overage.windowEnd} — this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
           code: "LEAVE_ENTITLEMENT_EXCEEDED",
         });
       }
@@ -284,10 +260,10 @@ router.post(
       // A nurse with a Pending/Approved Maternity leave request in this leave
       // year can't also take Annual leave for the rest of that leave year.
       if (type === "Annual") {
-        const blocked = await isAnnualBlockedByMaternity(nurse_id, leaveYearForDate(from_date));
+        const blocked = await annualMaternityConflict(nurse_id, from_date, to_date);
         if (blocked) {
           return res.status(422).json({
-            error: `${nurse_name} has a pending or approved Maternity leave request in this leave year - Annual leave can't be requested until next leave year.`,
+            error: `${nurse_name} has a pending or approved Maternity leave request for the leave year ${blocked.start} to ${blocked.end} - Annual leave cannot overlap that leave year.`,
             code: "ANNUAL_BLOCKED_BY_MATERNITY",
           });
         }
@@ -563,7 +539,7 @@ router.patch(
       await client.query("BEGIN");
 
       const { rows: currentRows } = await client.query(
-        "SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE",
+        "SELECT *,from_date::text,to_date::text FROM leave_requests WHERE id = $1 FOR UPDATE",
         [req.params.id],
       );
       const current = currentRows[0];
@@ -576,6 +552,22 @@ router.patch(
       const nextStatus = updates.status ?? current.status;
       const nextFromDate = updates.from_date ?? current.from_date;
       const nextToDate = updates.to_date ?? current.to_date;
+      if (
+        !validDate(nextFromDate) ||
+        !validDate(nextToDate) ||
+        (fields.includes("from_date") && !validDate(updates.from_date)) ||
+        (fields.includes("to_date") && !validDate(updates.to_date))
+      ) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "Use valid calendar dates in YYYY-MM-DD format" });
+      }
+      if (nextType === "Swap" && nextStatus === "Approved")
+        await guardLegacySwitchApproval(
+          client,
+          { ...current, ...updates },
+          nextFromDate,
+          nextToDate,
+        );
       const nextFromYmd = String(nextFromDate).slice(0, 10);
       const nextToYmd = String(nextToDate).slice(0, 10);
       const dateOrTypeChanged = ["from_date", "to_date", "type"].some((field) =>
@@ -585,6 +577,26 @@ router.patch(
       if (dateOrTypeChanged && nextToYmd < nextFromYmd) {
         await client.query("ROLLBACK");
         return res.status(400).json({ error: "End date cannot be before the start date" });
+      }
+
+      if (
+        nextType === "Swap" &&
+        nextStatus === "Pending" &&
+        fields.some((field) => ["from_date", "to_date", "type", "reason", "status"].includes(field))
+      ) {
+        await guardConfiguredSwitchRequest(client, {
+          ...current,
+          ...updates,
+          from_date: nextFromYmd,
+          to_date: nextToYmd,
+        });
+
+        await validateSwitchNotice(
+          client,
+          current.nurse_id,
+          nextFromYmd,
+          await getShiftSwitchMinNoticeHours(),
+        );
       }
 
       if (dateOrTypeChanged && (nextType === "Sick" || nextType === "Emergency")) {
@@ -615,7 +627,7 @@ router.patch(
           const dayUnit = nextType === "Sick" ? "calendar day(s)" : "working/rostered day(s)";
           await client.query("ROLLBACK");
           return res.status(422).json({
-            error: `${current.nurse_name} has already used ${overage.used} of ${overage.cap} ${nextType} ${dayUnit} allowed ${overage.period === "month" ? "this month" : "this year"} - this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
+            error: `${current.nurse_name} has already used ${overage.used} of ${overage.cap} ${nextType} ${dayUnit} allowed for ${overage.windowStart} to ${overage.windowEnd} - this request needs ${overage.requestedDaysInWindow} more, which exceeds the entitlement.`,
             code: "LEAVE_ENTITLEMENT_EXCEEDED",
           });
         }
@@ -627,15 +639,14 @@ router.patch(
         current.nurse_id &&
         !userRoles.includes("admin")
       ) {
-        const blocked = await isAnnualBlockedByMaternity(
-          current.nurse_id,
-          leaveYearForDate(nextFromYmd),
-          { queryable: client, excludeRequestId: current.id },
-        );
+        const blocked = await annualMaternityConflict(current.nurse_id, nextFromYmd, nextToYmd, {
+          queryable: client,
+          excludeRequestId: current.id,
+        });
         if (blocked) {
           await client.query("ROLLBACK");
           return res.status(422).json({
-            error: `${current.nurse_name} has a pending or approved Maternity leave request in this leave year - Annual leave can't be requested until next leave year.`,
+            error: `${current.nurse_name} has a pending or approved Maternity leave request for the leave year ${blocked.start} to ${blocked.end} - Annual leave cannot overlap that leave year.`,
             code: "ANNUAL_BLOCKED_BY_MATERNITY",
           });
         }
@@ -663,6 +674,7 @@ router.patch(
       // still draft or already published — never mid-review.
       const leave = rows[0];
       let creditsToApply = [];
+      let staffingWarnings = [];
       if (
         leave.status === "Approved" &&
         leave.nurse_id &&
@@ -688,9 +700,9 @@ router.patch(
                 AND shift != 'LEAVE'
                 AND (
                   EXTRACT(ISODOW FROM shift_date)::int BETWEEN 1 AND 5
-                  OR shift IN ('M','MWC','N','NC')
+                  OR shift <> 'OFF'
                 )
-              RETURNING shift_date, pre_leave_shift`
+              RETURNING *,shift_date::text`
             : `UPDATE shift_assignments
                 SET pre_leave_shift = shift,
                     shift = 'LEAVE'
@@ -699,13 +711,14 @@ router.patch(
                 AND shift != 'LEAVE'
                 AND (
                   EXTRACT(ISODOW FROM shift_date)::int BETWEEN 1 AND 5
-                  OR shift IN ('M','MWC','N','NC')
+                  OR shift <> 'OFF'
                 )
-              RETURNING shift_date, pre_leave_shift`,
+              RETURNING *,shift_date::text`,
           hasLeaveTypeColumn
             ? [leave.nurse_id, leave.from_date, leave.to_date, leave.type]
             : [leave.nurse_id, leave.from_date, leave.to_date],
         );
+        staffingWarnings = await assessConfiguredLeaveStaffing(client, flippedRows);
         const preShiftByDate = new Map(
           flippedRows.map((r) => [r.shift_date.toString().slice(0, 10), r.pre_leave_shift]),
         );
@@ -714,6 +727,7 @@ router.patch(
         // they fell sick and Sick Leave was approved right away) — auto-end any
         // active, un-ended shift_logs row in the leave window instead of leaving
         // it open for an admin to close manually.
+        await closeConfiguredAttendanceForLeave(client, leave, periodStartForShiftDate);
         const { rows: endedRows } = await client.query(
           `UPDATE shift_logs
               SET ended_at = NOW(),
@@ -721,6 +735,7 @@ router.patch(
             WHERE nurse_id = $1
               AND shift_date BETWEEN $2 AND $3
               AND ended_at IS NULL
+              AND scheduling_definition IS NULL
             RETURNING id, shift_date, hours_logged, is_locum, is_swap`,
           [leave.nurse_id, leave.from_date, leave.to_date],
         );
@@ -750,7 +765,7 @@ router.patch(
                 period_start, hours_logged, is_leave, is_missed, is_locum, is_swap, leave_request_id)
              VALUES (
                $1, $2::date,
-               (CASE WHEN $3 THEN 'N' ELSE 'M' END)::shift_code,
+               (CASE WHEN $3 THEN 'N' ELSE 'M' END)::text,
                CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
                     ELSE ($2::date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos' END,
                CASE WHEN $3 THEN ($2::date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -948,7 +963,7 @@ router.patch(
         })().catch(() => {});
       }
 
-      res.json(leave);
+      res.json({ ...leave, staffing_warnings: staffingWarnings });
     } catch (err) {
       await client.query("ROLLBACK");
       console.error("[leave-approval] transaction failed:", {
@@ -1055,19 +1070,13 @@ router.post(
             AND shift_date BETWEEN $2 AND $3
             AND shift = 'LEAVE'
             AND pre_leave_shift IS NOT NULL
-          RETURNING shift_date`,
+          RETURNING *,shift_date::text`,
         [leave.nurse_id, revertFrom, revertTo],
       );
       restoredCount = restoredRows.length;
+      await validateConfiguredLeaveRestoration(client, restoredRows);
 
-      const { rows: removedLogs } = await client.query(
-        `DELETE FROM shift_logs
-          WHERE leave_request_id = $1 AND is_leave = true
-            AND shift_date BETWEEN $2 AND $3
-          RETURNING hours_logged`,
-        [leave.id, revertFrom, revertTo],
-      );
-      hoursToReverse = removedLogs.reduce((s, r) => s + Number(r.hours_logged || 0), 0);
+      hoursToReverse = await reverseLeaveCredits(client, leave, revertFrom, revertTo);
 
       // Full revert: close the request out as 'Reverted', dates untouched (they
       // already describe exactly what was reverted). Partial revert: stays
@@ -1101,17 +1110,6 @@ router.post(
       throw err;
     } finally {
       client.release();
-    }
-
-    // Claw back any credited hours — outside the transaction, same pattern as
-    // the approval-time top-up above (increment_nurse_hours is its own atomic
-    // statement, not part of the leave/shift_assignments transaction).
-    if (hoursToReverse > 0) {
-      await pool
-        .query("SELECT increment_nurse_hours($1, $2)", [leave.nurse_id, -hoursToReverse])
-        .catch((err) =>
-          console.error(`[leave-revert] hours reversal failed for ${leave.nurse_id}:`, err.message),
-        );
     }
 
     await pool

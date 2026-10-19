@@ -1,3 +1,5 @@
+const { claimLocum } = require("../lib/claim-locum");
+const { locumShiftOptions } = require("../lib/locum-shift-options");
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
@@ -98,6 +100,22 @@ router.get(
   }),
 );
 
+// Shift choices for a new request: the activated configuration's definitions,
+// or the legacy Morning/Night pair when the facility has none for that date.
+router.get(
+  "/shift-options",
+  wrap(async (req, res) => {
+    if (!req.query.facility || !req.query.date)
+      return res.status(400).json({ error: "facility and date required" });
+    try {
+      res.json(await locumShiftOptions(pool, req.query.facility, req.query.date));
+    } catch (error) {
+      if (error.status !== 400) throw error;
+      res.status(400).json({ error: error.message });
+    }
+  }),
+);
+
 router.post(
   "/requests",
   requireCapability("request_locum", ["admin", "chief_matron"]),
@@ -117,11 +135,18 @@ router.post(
     if (!shift_date || !shift || !facility || !ward || !requested_by || !requested_by_name)
       return res.status(400).json({ error: "Missing required fields" });
 
+    const options = await locumShiftOptions(pool, facility, String(shift_date).slice(0, 10));
+    const option = options.shifts.find((s) => s.code === shift);
+    if (!option)
+      return res
+        .status(422)
+        .json({ error: `Shift ${shift} is not available for ${facility} on this date` });
+
     const nursesNeeded = parseInt(req.body.nurses_needed, 10) || 1;
     const { rows } = await pool.query(
       `INSERT INTO locum_requests
-     (shift_date, shift, facility, ward, nurses_in_ward, ventilated_patients, hdu_nurses, requested_by, requested_by_name, nurses_needed, role_needed)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+     (shift_date, shift, facility, ward, nurses_in_ward, ventilated_patients, hdu_nurses, requested_by, requested_by_name, nurses_needed, role_needed, shift_name, shift_starts_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
       [
         shift_date,
         shift,
@@ -134,6 +159,8 @@ router.post(
         requested_by_name,
         nursesNeeded,
         role_needed || null,
+        option.name,
+        option.startsAt,
       ],
     );
     const created = rows[0];
@@ -146,7 +173,7 @@ router.post(
           to: email,
           subject: `New locum shift request — ${created.ward}`,
           title: "New locum shift request",
-          bodyHtml: `<p><strong>${created.requested_by_name}</strong> requested a ${created.shift} locum shift for <strong>${created.ward}</strong> · ${created.facility} on ${fmtShiftDate(created.shift_date)}.</p>`,
+          bodyHtml: `<p><strong>${created.requested_by_name}</strong> requested a ${created.shift_name ?? created.shift} locum shift for <strong>${created.ward}</strong> · ${created.facility} on ${fmtShiftDate(created.shift_date)}.</p>`,
           ctaText: "Review Request",
           ctaUrl: portalUrl("/locum"),
         }).catch(() => {});
@@ -159,36 +186,67 @@ router.patch(
   "/requests/:id",
   requireCapability("review_locum_request", ["admin", "cno", "chief_matron"]),
   wrap(async (req, res) => {
+    // Claimant fields are written only by the claim endpoint, together with the
+    // claimant's rota cell; review edits must not rewrite them.
     const allowed = [
       "status",
       "reviewed_by",
       "reviewed_by_name",
       "reviewed_at",
       "decline_reason",
-      "accepted_by_nurse_id",
-      "accepted_by_nurse_name",
-      "accepted_at",
       "nurses_needed",
       "role_needed",
-      "updated_at",
     ];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
+    if (fields.includes("status") && !["approved", "declined", "pending"].includes(req.body.status))
+      return res.status(409).json({
+        error: "Invites, claims and expiry set this status; it cannot be changed directly",
+      });
 
-    const sets = fields.map((f, i) => `${f} = $${i + 1}`);
-    sets.push("updated_at = NOW()");
-    const values = fields.map((f) => req.body[f]);
-    values.push(req.params.id);
-
-    const { rows } = await pool.query(
-      `UPDATE locum_requests SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
-      values,
-    );
-    if (!rows[0]) return res.status(404).json({ error: "Locum request not found" });
-    const updated = rows[0];
+    const client = await pool.connect();
+    let updated;
+    try {
+      await client.query("BEGIN");
+      const {
+        rows: [current],
+      } = await client.query("SELECT status FROM locum_requests WHERE id=$1 FOR UPDATE", [
+        req.params.id,
+      ]);
+      if (!current) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "Locum request not found" });
+      }
+      // Once invites go out, accepted nurses' rota cells already depend on this
+      // request, so only pending/approved requests remain editable here.
+      if (!["pending", "approved"].includes(current.status)) {
+        await client.query("ROLLBACK");
+        return res
+          .status(409)
+          .json({ error: `A ${current.status.replace("_", " ")} locum request cannot be edited` });
+      }
+      const sets = fields.map((f, i) => `${f} = $${i + 1}`);
+      sets.push("updated_at = NOW()");
+      const values = fields.map((f) => req.body[f]);
+      values.push(req.params.id);
+      const { rows } = await client.query(
+        `UPDATE locum_requests SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
+        values,
+      );
+      await client.query("COMMIT");
+      updated = rows[0];
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
     res.json(updated);
 
-    if (fields.includes("status") && (updated.status === "approved" || updated.status === "declined")) {
+    if (
+      fields.includes("status") &&
+      (updated.status === "approved" || updated.status === "declined")
+    ) {
       (async () => {
         const email = await profileEmail(updated.requested_by);
         if (!email) return;
@@ -198,8 +256,8 @@ router.patch(
           subject: `Locum request ${approved ? "approved" : "declined"} — ${updated.ward}`,
           title: `Locum request ${approved ? "approved" : "declined"}`,
           bodyHtml: approved
-            ? `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift} on ${fmtShiftDate(updated.shift_date)} was approved. Send invites to off-duty nurses to fill it.</p>`
-            : `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift} on ${fmtShiftDate(updated.shift_date)} was declined${updated.decline_reason ? ` — "${updated.decline_reason}"` : ""}.</p>`,
+            ? `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift_name ?? updated.shift} on ${fmtShiftDate(updated.shift_date)} was approved. Send invites to off-duty nurses to fill it.</p>`
+            : `<p>Your locum request for <strong>${updated.ward}</strong> · ${updated.shift_name ?? updated.shift} on ${fmtShiftDate(updated.shift_date)} was declined${updated.decline_reason ? ` — "${updated.decline_reason}"` : ""}.</p>`,
           ctaText: "Open Bank Shift (Locum)",
           ctaUrl: portalUrl("/locum"),
         }).catch(() => {});
@@ -227,7 +285,9 @@ router.post(
       );
       if (byName[0]) {
         nurseRows = byName;
-        pool.query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id]).catch(() => {});
+        pool
+          .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [req.user.userId, byName[0].id])
+          .catch(() => {});
       }
     }
     if (!nurseRows[0])
@@ -235,47 +295,34 @@ router.post(
 
     const { id: nurseId, name: nurseName } = nurseRows[0];
 
-    // Single UPDATE that:
-    //  1. Guards: request must still be open AND accepted count < nurses_needed
-    //  2. Sets status to 'filled' only when this acceptance reaches nurses_needed
-    //  3. Records the first acceptee (COALESCE preserves existing value for subsequent accepts)
-    const { rows } = await pool.query(
-      `UPDATE locum_requests
-       SET status = CASE
-             WHEN (SELECT COUNT(*) FROM locum_invites
-                   WHERE locum_request_id = $3 AND status = 'accepted') + 1 >= nurses_needed
-             THEN 'filled'
-             ELSE 'invites_sent'
-           END,
-           accepted_by_nurse_id   = COALESCE(accepted_by_nurse_id, $1),
-           accepted_by_nurse_name = COALESCE(accepted_by_nurse_name, $2),
-           accepted_at            = COALESCE(accepted_at, NOW()),
-           updated_at             = NOW()
-       WHERE id = $3
-         AND status = 'invites_sent'
-         AND (SELECT COUNT(*) FROM locum_invites
-              WHERE locum_request_id = $3 AND status = 'accepted') < nurses_needed
-       RETURNING *`,
-      [nurseId, nurseName, req.params.id],
-    );
-    const updated = rows[0] ?? null;
+    let updated;
+    try {
+      updated = await claimLocum(pool, req.params.id, nurseId, nurseName, {
+        userId: req.user.userId,
+        name: req.user.full_name ?? nurseName,
+      });
+    } catch (error) {
+      if (error.code !== "LOCUM_ROTA_CONFLICT") throw error;
+      return res.status(409).json({ error: error.message, code: error.code });
+    }
     res.json(updated);
 
-    if (updated?.status === "filled") {
+    if (updated?.status === "filled" && !updated.already_claimed) {
       (async () => {
         const recipientIds = new Set();
         if (updated.requested_by) recipientIds.add(updated.requested_by);
         if (updated.reviewed_by) recipientIds.add(updated.reviewed_by);
         if (recipientIds.size) {
-          const { rows: recipients } = await pool.query("SELECT email FROM profiles WHERE id = ANY($1)", [
-            [...recipientIds],
-          ]);
+          const { rows: recipients } = await pool.query(
+            "SELECT email FROM profiles WHERE id = ANY($1)",
+            [[...recipientIds]],
+          );
           for (const { email } of recipients) {
             sendMail({
               to: email,
               subject: `Locum shift filled — ${updated.ward}`,
               title: "Locum shift filled",
-              bodyHtml: `<p><strong>${nurseName}</strong> accepted the ${updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)}.</p>`,
+              bodyHtml: `<p><strong>${nurseName}</strong> accepted the ${updated.shift_name ?? updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)}.</p>`,
               ctaText: "Open Bank Shift (Locum)",
               ctaUrl: portalUrl("/locum"),
             }).catch(() => {});
@@ -295,7 +342,7 @@ router.post(
             to: email,
             subject: `Locum shift filled — ${updated.ward}`,
             title: "Locum shift already filled",
-            bodyHtml: `<p>The ${updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)} you were invited to has been filled by someone else.</p>`,
+            bodyHtml: `<p>The ${updated.shift_name ?? updated.shift} locum shift for <strong>${updated.ward}</strong> on ${fmtShiftDate(updated.shift_date)} you were invited to has been filled by someone else.</p>`,
             ctaUrl: portalUrl("/locum"),
           }).catch(() => {});
         }
@@ -363,7 +410,7 @@ router.post(
       seen.add(key);
       deduped.push({
         ...invite,
-        status: invite.status || "pending",
+        status: "pending",
       });
     }
 
@@ -420,7 +467,7 @@ router.post(
             to: email,
             subject: `Locum shift invite — ${lr.ward}`,
             title: "You've been invited to a locum shift",
-            bodyHtml: `<p>You've been invited to cover a ${lr.shift} locum shift for <strong>${lr.ward}</strong> · ${lr.facility} on ${fmtShiftDate(lr.shift_date)}.</p>`,
+            bodyHtml: `<p>You've been invited to cover a ${lr.shift_name ?? lr.shift} locum shift for <strong>${lr.ward}</strong> · ${lr.facility} on ${fmtShiftDate(lr.shift_date)}.</p>`,
             ctaText: "Respond to Invite",
             ctaUrl: portalUrl("/locum"),
           }).catch(() => {});
@@ -442,6 +489,8 @@ router.post(
 router.patch(
   "/invites",
   wrap(async (req, res) => {
+    if (req.body.status === "accepted")
+      return res.status(409).json({ error: "Accept invites through the claim endpoint" });
     if (!req.query.locum_request_id)
       return res.status(400).json({ error: "locum_request_id required" });
 
@@ -486,7 +535,7 @@ router.patch(
     const setValues = fields.map((f) => req.body[f]);
 
     await pool.query(
-      `UPDATE locum_invites SET ${sets.join(", ")} WHERE ${conditions.join(" AND ")}`,
+      `UPDATE locum_invites SET ${sets.join(", ")} WHERE ${conditions.join(" AND ")} ${fields.includes("status") ? "AND status <> 'accepted'" : ""}`,
       [...params, ...setValues],
     );
     res.json({ success: true });
@@ -532,10 +581,13 @@ router.patch(
     values.push(req.params.id);
 
     const { rows } = await pool.query(
-      `UPDATE locum_invites SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
+      `UPDATE locum_invites SET ${sets.join(", ")} WHERE id = $${values.length} ${req.body.status === "accepted" ? "AND status='accepted'" : fields.includes("status") ? "AND status <> 'accepted'" : ""} RETURNING *`,
       values,
     );
-    if (!rows[0]) return res.status(404).json({ error: "Invite not found" });
+    if (!rows[0])
+      return res
+        .status(fields.includes("status") ? 409 : 404)
+        .json({ error: "Invite unavailable or claim state changed. Reload before updating." });
     res.json(rows[0]);
   }),
 );

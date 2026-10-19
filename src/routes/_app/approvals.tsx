@@ -19,19 +19,17 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { assessScheduleStaffing, type StaffingAssignment } from "@/lib/schedule-staffing";
+import { scheduleExportDefinitions } from "@/lib/schedule-export";
+import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
-import {
-  isGlobalHead,
-  isInternType,
-  isMatron,
-  isPorterType,
-  isNADayType,
-} from "@/lib/auto-schedule";
+import { isNADayType } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType, isMatron, isPorterType } from "@/lib/role-groups";
 import { FacilityChips } from "@/components/FacilityChips";
-import { xlsWorkbook, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
+import { xlsWorkbook, xlsAddAoaSheet, xlsAddJsonSheet, xlsDownload } from "@/lib/excel-export";
 import { Pagination, usePagination } from "@/components/Pagination";
 
 export const Route = createFileRoute("/_app/approvals")({
@@ -47,7 +45,7 @@ export const Route = createFileRoute("/_app/approvals")({
   component: ApprovalsPage,
 });
 
-type PendingRow = {
+type PendingRow = Omit<StaffingAssignment, "shift"> & {
   id: string;
   shift_date: string;
   status: string;
@@ -86,11 +84,11 @@ function dominantStatus(statuses: string[]): WindowStatus {
   return "draft";
 }
 
-function roleGroupOf(role: string): FacilityWideGroup | null {
-  if (isMatron(role)) return "matron";
-  if (isGlobalHead(role)) return "head";
-  if (isPorterType(role)) return "porter";
-  if (isInternType(role)) return "intern";
+function roleGroupOf(role: string, facility?: string | null): FacilityWideGroup | null {
+  if (isMatron(role, facility)) return "matron";
+  if (isGlobalHead(role, facility)) return "head";
+  if (isPorterType(role, facility)) return "porter";
+  if (isInternType(role, facility)) return "intern";
   if (isNADayType(role)) return "naday";
   return null;
 }
@@ -121,7 +119,7 @@ function groupIntoWindows(
     } else {
       ward = null;
       const role = nurseToRole.get(row.nurse_id) ?? "";
-      roleGroup = roleGroupOf(role);
+      roleGroup = roleGroupOf(role, fac);
       key = `${fac ?? "__NONE__"}|fw|${roleGroup ?? "other"}`;
     }
 
@@ -241,11 +239,6 @@ const STATUS_COLORS: Record<WindowStatus, string> = {
   published: "bg-emerald-100 text-emerald-800 border-emerald-200",
 };
 
-function parseWards(ward: string | null): string[] {
-  if (!ward) return [];
-  return ward.split("|").filter(Boolean);
-}
-
 function ApprovalsPage() {
   const {
     user,
@@ -284,8 +277,7 @@ function ApprovalsPage() {
       : "";
 
   // Admin and CNO see all facilities; other roles are locked to their own.
-  const lockedFacility =
-    isAdmin || activeRole === "cno" ? null : (nurseFacility ?? null);
+  const lockedFacility = isAdmin || activeRole === "cno" ? null : (nurseFacility ?? null);
   const [selectedFacility, setSelectedFacility] = useState<string>(lockedFacility ?? "");
 
   const canPublish = canPublishRota;
@@ -311,7 +303,7 @@ function ApprovalsPage() {
         return `${d.getFullYear()}-${m}-${day}`;
       };
       return api.get<PendingRow[]>(
-        `/shift-assignments?from=${ymd(sixAgo)}&to=${ymd(threeAhead)}&limit=50000`,
+        `/shift-assignments?from=${ymd(sixAgo)}&to=${ymd(threeAhead)}&limit=50000&include_shift_definition=true&include_staffing_definition=true`,
       );
     },
   });
@@ -361,7 +353,8 @@ function ApprovalsPage() {
   const [editReqPeriodFilter, setEditReqPeriodFilter] = useState("");
 
   const editReqPeriods = useMemo(
-    () => [...new Set(allEditRequests.map((r) => r.period_start))].sort((a, b) => b.localeCompare(a)),
+    () =>
+      [...new Set(allEditRequests.map((r) => r.period_start))].sort((a, b) => b.localeCompare(a)),
     [allEditRequests],
   );
 
@@ -414,7 +407,8 @@ function ApprovalsPage() {
     Approved:
       "bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/30 dark:text-emerald-400",
     Declined: "bg-red-50 text-red-700 border-red-200 dark:bg-red-950/30 dark:text-red-400",
-    Expired: "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-400",
+    Expired:
+      "bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800/40 dark:text-slate-400",
   };
 
   const windows = useMemo(
@@ -429,7 +423,9 @@ function ApprovalsPage() {
         // For facility-wide cards, scope to only the nurses in that role group.
         let facilityNurses = allNurses.filter((n) => n.facility === win.facility);
         if (win.ward === null && win.roleGroup) {
-          facilityNurses = facilityNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
+          facilityNurses = facilityNurses.filter(
+            (n) => roleGroupOf(n.role, win.facility) === win.roleGroup,
+          );
         }
         const facilityIdSet = new Set(facilityNurses.map((n) => n.id));
         const winRows = rows.filter(
@@ -444,7 +440,7 @@ function ApprovalsPage() {
 
         const winShiftCounts = new Map<string, number>();
         for (const r of winRows) {
-          if (r.shift === "M" || r.shift === "N")
+          if (r.shift && r.shift !== "OFF" && r.shift !== "LEAVE")
             winShiftCounts.set(r.nurse_id, (winShiftCounts.get(r.nurse_id) ?? 0) + 1);
         }
         const byRole = new Map<string, string[]>();
@@ -466,7 +462,13 @@ function ApprovalsPage() {
           }
         }
 
-        return [winKey(win), { extraStaff }] as const;
+        const staffing = win.ward
+          ? assessScheduleStaffing(
+              winRows.map((row) => ({ ...row, shift: row.shift ?? "OFF" })),
+              dateRange(win.startDate, scheduleEndDate(win.startDate)),
+            )
+          : null;
+        return [winKey(win), { extraStaff, staffing }] as const;
       }),
     );
   }, [windows, rows, allNurses]);
@@ -545,7 +547,7 @@ function ApprovalsPage() {
     let candidates = allNurses.filter((n) => n.facility === win.facility);
     // For facility-wide role group cards, narrow to just that group's nurses.
     if (win.ward === null && win.roleGroup) {
-      candidates = candidates.filter((n) => roleGroupOf(n.role) === win.roleGroup);
+      candidates = candidates.filter((n) => roleGroupOf(n.role, win.facility) === win.roleGroup);
     }
     const facilityIds = candidates.map((n) => n.id);
     if (!facilityIds.length) return null;
@@ -716,55 +718,41 @@ function ApprovalsPage() {
       facility: string | null;
     };
     const freshNurses = await api.get<NurseRow[]>("/nurses");
-    let scopedNurses = freshNurses.filter((n) => n.facility === win.facility);
-    if (win.ward !== null) {
-      // Mirror the wardNurses filter in rota.tsx: exclude all facility-level roles
-      // (matron, coverage/head, intern, porter, NA-day) even if their nurse profile
-      // happens to list this ward — their assignments are stored with ward = null
-      // and belong in the coverage card, not the ward card.
-      scopedNurses = scopedNurses.filter(
-        (n) =>
-          !isGlobalHead(n.role) &&
-          !isMatron(n.role) &&
-          !isInternType(n.role) &&
-          !isPorterType(n.role) &&
-          !isNADayType(n.role) &&
-          parseWards(n.ward).includes(win.ward!),
-      );
-    } else if (win.roleGroup) {
-      // Facility-wide role group card: show only nurses in that specific group.
-      scopedNurses = scopedNurses.filter((n) => roleGroupOf(n.role) === win.roleGroup);
-    } else {
-      // Fallback: all facility-wide roles (shouldn't occur with current grouping).
-      scopedNurses = scopedNurses.filter(
-        (n) =>
-          isGlobalHead(n.role) ||
-          isInternType(n.role) ||
-          isMatron(n.role) ||
-          isPorterType(n.role) ||
-          isNADayType(n.role),
-      );
-    }
+    // Scope by the assignment's saved ward/role so profile changes do not hide cells.
+    const scopedNurses = freshNurses.filter((n) => n.facility === win.facility);
+    const nurseRoles = new Map(scopedNurses.map((n) => [n.id, n.role]));
     const nurseIds = scopedNurses.map((n) => n.id);
-    const allAssignments = nurseIds.length
-      ? await api.get<{ nurse_id: string; shift_date: string; shift: string }[]>(
-          `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${win.startDate}&to=${endDate}&status=published`,
+    const fetchedAssignments = nurseIds.length
+      ? await api.get<
+          (AssignmentDefinition & StaffingAssignment & { nurse_role?: string | null })[]
+        >(
+          `/shift-assignments?nurse_ids=${nurseIds.join(",")}&from=${win.startDate}&to=${endDate}&status=published&include_shift_definition=true&include_staffing_definition=true${win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true"}`,
         )
       : [];
-    const assignMap = new Map<string, string>();
-    allAssignments.forEach((a) =>
-      assignMap.set(`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift),
-    );
+    const allAssignments =
+      win.ward === null && win.roleGroup
+        ? fetchedAssignments.filter(
+            (a) =>
+              roleGroupOf(a.nurse_role ?? nurseRoles.get(a.nurse_id) ?? "", win.facility) ===
+              win.roleGroup,
+          )
+        : fetchedAssignments;
+    const definitions = scheduleExportDefinitions(allAssignments);
+    const assignMap = definitions.cells;
+    const staffing =
+      win.ward !== null
+        ? assessScheduleStaffing(allAssignments, dateRange(win.startDate, endDate))
+        : null;
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
-    return { activeNurses, assignMap };
+    return { activeNurses, assignMap, definitions, staffing };
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
     setDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win);
+      const { activeNurses, assignMap, definitions, staffing } = await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
@@ -793,8 +781,12 @@ function ApprovalsPage() {
         22,
         18,
         14,
-        ...dates.map(() => 5),
+        ...dates.map(() => 9),
       ]);
+      xlsAddJsonSheet(wb, definitions.rows, "Shift Definitions", [14, 30, 10, 20, 24, 16, 16]);
+      if (staffing) {
+        xlsAddJsonSheet(wb, staffing.rows, "Staffing Assessment", [16, 14, 18, 12, 12, 12, 70]);
+      }
       const facilitySlug = win.facility
         ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}`
         : "";
@@ -823,15 +815,9 @@ function ApprovalsPage() {
     const key = winKey(win);
     setDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap } = await fetchWindowData(win);
+      const { activeNurses, assignMap, definitions, staffing } = await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
-      const shiftBg: Record<string, string> = {
-        M: "#fef3c7",
-        N: "#e0e7ff",
-        OFF: "#f3f4f6",
-        LEAVE: "#fee2e2",
-      };
       const dateHeaders = dates
         .map((d) => {
           const dt = new Date(d + "T00:00:00");
@@ -843,7 +829,7 @@ function ApprovalsPage() {
           const cells = dates
             .map((d) => {
               const s = assignMap.get(`${n.id}|${d}`) ?? "";
-              return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
+              return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
             })
             .join("");
           return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
@@ -878,12 +864,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
 <tbody>${bodyRows}</tbody>
 </table>
-<div class="legend">
-<span><span class="lb" style="background:#fef3c7"></span>M Morning</span>
-<span><span class="lb" style="background:#e0e7ff"></span>N Night</span>
-<span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
-<span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
-</div>
+${definitions.html}
+${staffing?.html ?? ""}
 <script>window.onload=()=>{window.print()}</script>
 </body></html>`;
       const pw = window.open("", "_blank");
@@ -974,6 +956,20 @@ td.sm{text-align:left;color:#444;min-width:55px}
         </div>
 
         {/* Step tracker */}
+        {meta?.staffing && (
+          <details className="px-4 py-3 border-b text-xs">
+            <summary className="cursor-pointer font-medium">Saved staffing assessment</summary>
+            <div className="mt-2 max-h-64 overflow-auto">
+              {meta.staffing.rows.map((row, index) => (
+                <p key={index} className="py-1 border-b">
+                  {Object.entries(row)
+                    .map(([label, value]) => `${label}: ${value}`)
+                    .join(" · ")}
+                </p>
+              ))}
+            </div>
+          </details>
+        )}
         <div className="px-4 py-3 overflow-x-auto">
           <ol className="flex items-center gap-0 w-max">
             {STEPS.map((step, idx) => {
@@ -1103,7 +1099,10 @@ td.sm{text-align:left;color:#444;min-width:55px}
 
   return (
     <div className="space-y-5">
-      <PageHeader title="Approval Workflow" subtitle="Draft → Submitted → CNO Approved → Published" />
+      <PageHeader
+        title="Approval Workflow"
+        subtitle="Draft → Submitted → CNO Approved → Published"
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-muted/50 rounded-lg p-1 w-fit flex-wrap">
@@ -1128,111 +1127,113 @@ td.sm{text-align:left;color:#444;min-width:55px}
 
       {tab === "rota" && (
         <>
-      {/* Workflow stage banners */}
-      {workflowStatus?.firstRotaPublished && (
-        <div className="space-y-2">
-          {/* HR action needed */}
-          {(canApproveRota || isAdmin) && workflowStatus.nextRotaStage === "submitted" && (
-            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-              <Clock className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Draft rota awaiting CNO approval</p>
-                <p className="mt-0.5 opacity-80">
-                  The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has been
-                  submitted. Review and approve it below.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* Publish reminder */}
-          {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "cno_approved" && (
-            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Rota approved — ready to publish</p>
-                <p className="mt-0.5 opacity-80">
-                  CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish it
-                  so nurses can view their schedule (or it auto-publishes at the T-14 deadline).
-                </p>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {isLoading ? (
-        <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
-      ) : windows.length === 0 ? (
-        <EmptyState
-          icon={<FileCheck2 className="h-6 w-6" />}
-          title="No rotas found"
-          description="Generate a rota from the Rota page — it will appear here once created."
-        />
-      ) : (
-        <>
-          {/* Facility chip strip */}
-          <FacilityChips
-            value={effectiveFacility}
-            onChange={setSelectedFacility}
-            locked={!!lockedFacility}
-            showAll={false}
-          />
-
-          {/* Periods for the selected facility */}
-          {windowsByPeriod.length === 0 ? (
-            <p className="py-12 text-center text-sm text-muted-foreground">
-              No active schedules for {effectiveFacility}. Published rotas older than 14 days are in{" "}
-              <span className="font-medium text-foreground">Reports → Schedule Archive</span>.
-              Generate a new rota from the <span className="font-medium text-foreground">Rota</span>{" "}
-              page.
-            </p>
-          ) : (
-            <div className="space-y-8">
-              {(showAllPeriods ? windowsByPeriod : windowsByPeriod.slice(0, 1)).map(
-                ([periodStart, periodWins]) => {
-                  const periodEnd = scheduleEndDate(periodStart);
-                  const coverageWins = periodWins.filter((w) => w.ward === null);
-                  const wardWins = periodWins.filter((w) => w.ward !== null);
-                  return (
-                    <div key={periodStart}>
-                      {/* Period header */}
-                      <div className="flex items-center gap-2 mb-4">
-                        <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
-                        <h2 className="text-sm font-semibold text-foreground">
-                          {fmtDate(periodStart)} — {fmtDate(periodEnd)}
-                        </h2>
-                        <span className="text-xs text-muted-foreground">
-                          · {periodWins.length} schedule{periodWins.length !== 1 ? "s" : ""}
-                        </span>
-                        <div className="flex-1 h-px bg-border ml-1" />
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                        {[...coverageWins, ...wardWins].map((win) => renderCard(win))}
-                      </div>
-                    </div>
-                  );
-                },
+          {/* Workflow stage banners */}
+          {workflowStatus?.firstRotaPublished && (
+            <div className="space-y-2">
+              {/* HR action needed */}
+              {(canApproveRota || isAdmin) && workflowStatus.nextRotaStage === "submitted" && (
+                <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                  <Clock className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">Draft rota awaiting CNO approval</p>
+                    <p className="mt-0.5 opacity-80">
+                      The draft for the period starting {fmtWD(workflowStatus.nextPeriodStart)} has
+                      been submitted. Review and approve it below.
+                    </p>
+                  </div>
+                </div>
               )}
 
-              {windowsByPeriod.length > 1 && (
-                <div className="flex justify-center pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAllPeriods((v) => !v)}
-                    className="text-xs text-muted-foreground hover:text-foreground underline"
-                  >
-                    {showAllPeriods
-                      ? "Show fewer periods"
-                      : `Show ${windowsByPeriod.length - 1} older period${windowsByPeriod.length - 1 !== 1 ? "s" : ""}`}
-                  </button>
+              {/* Publish reminder */}
+              {(canPublishRota || isAdmin) && workflowStatus.nextRotaStage === "cno_approved" && (
+                <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:bg-amber-950/20 dark:text-amber-300 dark:border-amber-700">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <div>
+                    <p className="font-medium">Rota approved — ready to publish</p>
+                    <p className="mt-0.5 opacity-80">
+                      CNO has approved the rota for {fmtWD(workflowStatus.nextPeriodStart)}. Publish
+                      it so nurses can view their schedule (or it auto-publishes at the T-14
+                      deadline).
+                    </p>
+                  </div>
                 </div>
               )}
             </div>
           )}
-        </>
-      )}
+
+          {isLoading ? (
+            <p className="py-16 text-center text-sm text-muted-foreground">Loading…</p>
+          ) : windows.length === 0 ? (
+            <EmptyState
+              icon={<FileCheck2 className="h-6 w-6" />}
+              title="No rotas found"
+              description="Generate a rota from the Rota page — it will appear here once created."
+            />
+          ) : (
+            <>
+              {/* Facility chip strip */}
+              <FacilityChips
+                value={effectiveFacility}
+                onChange={setSelectedFacility}
+                locked={!!lockedFacility}
+                showAll={false}
+              />
+
+              {/* Periods for the selected facility */}
+              {windowsByPeriod.length === 0 ? (
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  No active schedules for {effectiveFacility}. Published rotas older than 14 days
+                  are in{" "}
+                  <span className="font-medium text-foreground">Reports → Schedule Archive</span>.
+                  Generate a new rota from the{" "}
+                  <span className="font-medium text-foreground">Rota</span> page.
+                </p>
+              ) : (
+                <div className="space-y-8">
+                  {(showAllPeriods ? windowsByPeriod : windowsByPeriod.slice(0, 1)).map(
+                    ([periodStart, periodWins]) => {
+                      const periodEnd = scheduleEndDate(periodStart);
+                      const coverageWins = periodWins.filter((w) => w.ward === null);
+                      const wardWins = periodWins.filter((w) => w.ward !== null);
+                      return (
+                        <div key={periodStart}>
+                          {/* Period header */}
+                          <div className="flex items-center gap-2 mb-4">
+                            <CalendarRange className="h-4 w-4 text-muted-foreground shrink-0" />
+                            <h2 className="text-sm font-semibold text-foreground">
+                              {fmtDate(periodStart)} — {fmtDate(periodEnd)}
+                            </h2>
+                            <span className="text-xs text-muted-foreground">
+                              · {periodWins.length} schedule{periodWins.length !== 1 ? "s" : ""}
+                            </span>
+                            <div className="flex-1 h-px bg-border ml-1" />
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                            {[...coverageWins, ...wardWins].map((win) => renderCard(win))}
+                          </div>
+                        </div>
+                      );
+                    },
+                  )}
+
+                  {windowsByPeriod.length > 1 && (
+                    <div className="flex justify-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowAllPeriods((v) => !v)}
+                        className="text-xs text-muted-foreground hover:text-foreground underline"
+                      >
+                        {showAllPeriods
+                          ? "Show fewer periods"
+                          : `Show ${windowsByPeriod.length - 1} older period${windowsByPeriod.length - 1 !== 1 ? "s" : ""}`}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
 
@@ -1309,72 +1310,72 @@ td.sm{text-align:left;color:#444;min-width:55px}
                   description="Try a different status, facility, or rota period."
                 />
               ) : (
-              <div className="divide-y">
-                {editReqPageItems.map((req) => (
-                  <div
-                    key={req.id}
-                    className="px-4 py-3 flex items-start justify-between gap-3 flex-wrap"
-                  >
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <p className="text-sm font-medium">
-                          {req.requested_by_name ?? "Head nurse"} · {req.facility} ·{" "}
-                          {req.ward ?? FW_LABELS[(req.role_group as FacilityWideGroup) ?? "head"]}
-                        </p>
-                        <span
-                          className={cn(
-                            "text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0",
-                            EDIT_REQ_STATUS_COLORS[req.status],
+                <div className="divide-y">
+                  {editReqPageItems.map((req) => (
+                    <div
+                      key={req.id}
+                      className="px-4 py-3 flex items-start justify-between gap-3 flex-wrap"
+                    >
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="text-sm font-medium">
+                            {req.requested_by_name ?? "Head nurse"} · {req.facility} ·{" "}
+                            {req.ward ?? FW_LABELS[(req.role_group as FacilityWideGroup) ?? "head"]}
+                          </p>
+                          <span
+                            className={cn(
+                              "text-[10px] font-medium px-1.5 py-0.5 rounded-full border shrink-0",
+                              EDIT_REQ_STATUS_COLORS[req.status],
+                            )}
+                          >
+                            {req.status}
+                          </span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Period {fmtDate(req.period_start)} → {fmtDate(req.period_end)} · Requested{" "}
+                          {fmtDate(req.created_at)}
+                          {req.reviewed_at && (
+                            <>
+                              {" "}
+                              · {req.status === "Expired" ? "Expired" : "Decided"}{" "}
+                              {fmtDate(req.reviewed_at)}
+                            </>
                           )}
-                        >
-                          {req.status}
-                        </span>
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Period {fmtDate(req.period_start)} → {fmtDate(req.period_end)} · Requested{" "}
-                        {fmtDate(req.created_at)}
-                        {req.reviewed_at && (
-                          <>
-                            {" "}
-                            · {req.status === "Expired" ? "Expired" : "Decided"}{" "}
-                            {fmtDate(req.reviewed_at)}
-                          </>
-                        )}
-                      </p>
-                      <p className="text-xs mt-1">{req.reason}</p>
-                      {req.review_note && (
-                        <p className="text-xs text-muted-foreground mt-1">
-                          {req.status === "Expired" ? "" : "CNO note: "}
-                          {req.review_note}
                         </p>
+                        <p className="text-xs mt-1">{req.reason}</p>
+                        {req.review_note && (
+                          <p className="text-xs text-muted-foreground mt-1">
+                            {req.status === "Expired" ? "" : "CNO note: "}
+                            {req.review_note}
+                          </p>
+                        )}
+                      </div>
+                      {req.status === "Pending" && (
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            type="button"
+                            disabled={decidingEditRequest === req.id}
+                            onClick={() => {
+                              setDeclineEditReason("");
+                              setDecliningEditReq(req);
+                            }}
+                            className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
+                          >
+                            Decline
+                          </button>
+                          <button
+                            type="button"
+                            disabled={decidingEditRequest === req.id}
+                            onClick={() => decideEditRequest(req, "Approved")}
+                            className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
+                          >
+                            Grant Access
+                          </button>
+                        </div>
                       )}
                     </div>
-                    {req.status === "Pending" && (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          disabled={decidingEditRequest === req.id}
-                          onClick={() => {
-                            setDeclineEditReason("");
-                            setDecliningEditReq(req);
-                          }}
-                          className="h-8 px-3 rounded-md border bg-card text-xs hover:bg-muted disabled:opacity-50"
-                        >
-                          Decline
-                        </button>
-                        <button
-                          type="button"
-                          disabled={decidingEditRequest === req.id}
-                          onClick={() => decideEditRequest(req, "Approved")}
-                          className="h-8 px-3 rounded-md bg-primary text-primary-foreground text-xs font-medium disabled:opacity-50"
-                        >
-                          Grant Access
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
               )}
               {filteredEditRequests.length > 0 && (
                 <Pagination
@@ -1394,10 +1395,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
         </div>
       )}
       {decliningEditReq && (
-        <Modal
-          title="Decline Edit-Access Request"
-          onClose={() => setDecliningEditReq(null)}
-        >
+        <Modal title="Decline Edit-Access Request" onClose={() => setDecliningEditReq(null)}>
           <form
             className="space-y-4"
             onSubmit={async (e) => {
@@ -1432,8 +1430,8 @@ td.sm{text-align:left;color:#444;min-width:55px}
                 className="w-full mt-1.5 px-3 py-2 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring resize-none"
               />
               <p className="text-xs text-muted-foreground mt-1">
-                The draft will be auto-submitted for review as-is once declined. This note is
-                sent to {decliningEditReq.requested_by_name ?? "the requester"} so they know why.
+                The draft will be auto-submitted for review as-is once declined. This note is sent
+                to {decliningEditReq.requested_by_name ?? "the requester"} so they know why.
               </p>
             </div>
             <div className="flex justify-end gap-2 pt-1">

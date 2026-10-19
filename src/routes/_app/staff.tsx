@@ -1,4 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useHospitalFacilities } from "@/lib/use-hospital-facilities";
+import {
+  assignmentScheduledHours,
+  type AssignmentDefinition,
+} from "@/lib/assignment-shift-definition";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -31,6 +36,7 @@ import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
 import { usePasswordMinLength } from "@/lib/use-password-min-length";
 import { SHIFT_TIMES, type ShiftCode } from "@/lib/auto-schedule";
+import { roleGroupOf } from "@/lib/role-groups";
 import * as ExcelJS from "exceljs";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
@@ -51,8 +57,6 @@ export const Route = createFileRoute("/_app/staff")({
   component: StaffPage,
 });
 
-const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
-
 const NURSE_ROLES = [
   "Nurse",
   "Surgical Nurse",
@@ -72,9 +76,8 @@ const NURSE_ROLES = [
 // lib/auto-schedule.ts exactly (only "coverage nurse - day" is a real role,
 // not "head nurse - day").
 function isNoWardRole(role: string) {
-  return /^matron$|^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$|^intern\s*nurse$|^nurse\s*intern$|^porter(\s*-\s*day)?$/i.test(
-    role,
-  );
+  // Facility-wide groups come from activated configurations, with legacy role names otherwise.
+  return roleGroupOf(role) !== null;
 }
 
 // Auto-correct role strings from Excel imports to exact system role names.
@@ -160,23 +163,15 @@ function addDaysYmd(dateStr: string, days: number) {
   return ymd(d);
 }
 
-type StaffAssignment = {
+type StaffAssignment = AssignmentDefinition & {
   nurse_id: string;
-  shift: ShiftCode;
   shift_date: string;
-  pre_leave_shift?: ShiftCode | null;
 };
 
-function assignedHoursForShift(shift: ShiftCode | null | undefined) {
-  if (shift === "M" || shift === "MWC") return SHIFT_TIMES.M.hours;
-  if (shift === "N" || shift === "NC") return SHIFT_TIMES.N.hours;
-  return 0;
-}
-
+// Saved definitions supply configured hours; unknown definitions count as zero
+// here rather than inventing legacy 9/15-hour credits.
 function assignedHoursForRotaCell(a: StaffAssignment) {
-  return a.shift === "LEAVE"
-    ? assignedHoursForShift(a.pre_leave_shift)
-    : assignedHoursForShift(a.shift);
+  return assignmentScheduledHours(a) ?? 0;
 }
 
 type Nurse = {
@@ -338,14 +333,14 @@ function StaffPage() {
 
       const [current, future] = await Promise.all([
         api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?from=${ymd(lookback)}&limit=1${nurseFilter}`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?from=${ymd(lookback)}&limit=1${nurseFilter}`)
           .catch(() => [] as { shift_date: string }[]),
         api
-          .get<{ shift_date: string }[]>(
-            `/shift-assignments?from=${ymd(tomorrow)}&limit=1${nurseFilter}`,
-          )
+          .get<
+            { shift_date: string }[]
+          >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${nurseFilter}`)
           .catch(() => [] as { shift_date: string }[]),
       ]);
       return (current[0]?.shift_date ?? future[0]?.shift_date ?? todayStr).slice(0, 10);
@@ -377,7 +372,7 @@ function StaffPage() {
           ? `&nurse_ids=${currentPeriodFacilityNurseIds.join(",")}`
           : "";
       return api.get<StaffAssignment[]>(
-        `/shift-assignments?from=${currentPeriodStart}&to=${currentPeriodEnd}${nurseFilter}`,
+        `/shift-assignments?from=${currentPeriodStart}&to=${currentPeriodEnd}${nurseFilter}&include_shift_definition=true`,
       );
     },
   });
@@ -974,6 +969,7 @@ function AddNurseModal({
   onClose: () => void;
   wards: { name: string; facility: string | null }[];
 }) {
+  const FACILITIES = useHospitalFacilities();
   const qc = useQueryClient();
   const [name, setName] = useState("");
   const [employeeId, setEmployeeId] = useState("");
@@ -1126,6 +1122,7 @@ function EditNurseModal({
   onClose: () => void;
   wards: { name: string; facility: string | null }[];
 }) {
+  const FACILITIES = useHospitalFacilities();
   const qc = useQueryClient();
   const [name, setName] = useState(nurse.name);
   const [employeeId, setEmployeeId] = useState(nurse.employee_id ?? "");
@@ -1285,6 +1282,7 @@ function UploadModal({
   wards: { name: string; facility: string | null }[];
   onClose: () => void;
 }) {
+  const FACILITIES = useHospitalFacilities();
   const qc = useQueryClient();
   const fileRef = useRef<HTMLInputElement>(null);
   const [facility, setFacility] = useState("");
@@ -1983,7 +1981,9 @@ function ResetPasswordModal({
                 <RotateCcw className="h-3.5 w-3.5" /> Generate
               </button>
             </div>
-            <p className="text-xs text-muted-foreground mt-1">Minimum {minPasswordLength} characters.</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Minimum {minPasswordLength} characters.
+            </p>
           </div>
 
           <div className="flex gap-2 pt-1">

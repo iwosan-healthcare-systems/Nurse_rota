@@ -1,6 +1,6 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { api, getToken, clearToken } from "@/lib/api";
+import { api, getToken, clearToken, setHospitalId, clearHospitalId } from "@/lib/api";
 import { toast } from "sonner";
 
 // The 10 permanent, undeletable roles seeded into the `roles` table
@@ -31,6 +31,8 @@ export type RoleDef = {
   description: string;
   is_system: boolean;
   usage_count?: number;
+  // Created by the hospital being worked in (only the owner may edit or delete it).
+  owned?: boolean;
 };
 
 export interface ApiUser {
@@ -49,6 +51,9 @@ export interface ApiUser {
   // refetch (same staleness convention already disclosed for role grants
   // in users.tsx: "Role changes take effect on next login").
   capability_overrides: string[];
+  // The hospital the API resolved for this session, and platform-admin status.
+  hospital_id?: string;
+  is_super_admin?: boolean;
 }
 
 interface AuthCtx {
@@ -83,6 +88,8 @@ interface AuthCtx {
   canDelete: boolean;
   canManageStaff: boolean;
   canManageWards: boolean;
+  canViewSchedulingConfiguration: boolean;
+  canManageSchedulingConfiguration: boolean;
   canEditRota: boolean;
   canAutoGenerate: boolean;
   canSubmitApproval: boolean;
@@ -110,6 +117,10 @@ interface AuthCtx {
   canViewLocumRequests: boolean;
   canViewReports: boolean;
   canViewAudit: boolean;
+  canManageRotaPeriods: boolean;
+  hospitalId: string | null;
+  isSuperAdmin: boolean;
+  switchHospital: (hospitalId: string) => void;
   signOut: () => void;
 }
 
@@ -227,6 +238,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast.dismiss("idle-warn");
       sessionStorage.removeItem(selectedRoleStorageKey(user!.id));
       clearToken();
+      clearHospitalId();
       setUser(null);
       setRoles([]);
       setActiveRole(null);
@@ -274,6 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [user, idleTimeoutMinutes]);
 
   function applyUser(me: ApiUser) {
+    if (me.hospital_id) setHospitalId(me.hospital_id);
     setUser(me);
     setRoles(me.roles);
     setMustChangePassword(me.must_change_password);
@@ -311,9 +324,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setPasswordExpiresInDays(null);
   }
 
+  // Reload into the chosen hospital so permissions, staff link, facilities and
+  // every cached query are fetched again for it.
+  function switchHospital(hospitalId: string) {
+    setHospitalId(hospitalId);
+    window.location.assign("/");
+  }
+
   function signOut() {
     if (user) sessionStorage.removeItem(selectedRoleStorageKey(user.id));
     clearToken();
+    clearHospitalId();
     setUser(null);
     setRoles([]);
     setActiveRole(null);
@@ -351,6 +372,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     allRoles.find((r) => r.key === key)?.description ?? ROLE_DESCRIPTIONS[key as SystemRole] ?? "";
 
   const value: AuthCtx = {
+    hospitalId: user?.hospital_id ?? null,
+    isSuperAdmin: !!user?.is_super_admin,
+    switchHospital,
     user,
     roles,
     activeRole,
@@ -375,6 +399,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     canDelete: cap("delete_staff", ["admin"]),
     canManageStaff: cap("manage_staff", ["admin", "hr_admin"]),
     canManageWards: cap("manage_wards", ["admin", "cno"]),
+    canViewSchedulingConfiguration: cap("view_scheduling_configuration", [
+      "admin",
+      "cno",
+      "chief_matron",
+    ]),
+    canManageSchedulingConfiguration: cap("manage_scheduling_configuration", ["admin", "cno"]),
+    // Mirrors the API's requireCapability("manage_rota_periods", ["admin", "cno"]).
+    canManageRotaPeriods: cap("manage_rota_periods", ["admin", "cno"]),
     canEditRota: cap("edit_rota", ["admin", "head_nurse"]),
     // Rota generation is now automatic (T-19) — a manual trigger is only ever
     // an admin emergency override, not a normal head_nurse action.

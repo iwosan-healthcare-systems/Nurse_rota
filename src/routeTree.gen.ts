@@ -19,11 +19,13 @@ import { Route as AppSystemSettingsRouteImport } from './routes/_app/system-sett
 import { Route as AppStaffRouteImport } from './routes/_app/staff'
 import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift-history'
 import { Route as AppShiftRouteImport } from './routes/_app/shift'
+import { Route as AppSchedulingRouteImport } from './routes/_app/scheduling'
 import { Route as AppRotaRouteImport } from './routes/_app/rota'
 import { Route as AppReportsRouteImport } from './routes/_app/reports'
 import { Route as AppLocumRouteImport } from './routes/_app/locum'
 import { Route as AppLeaveEntitlementsRouteImport } from './routes/_app/leave-entitlements'
 import { Route as AppLeaveRouteImport } from './routes/_app/leave'
+import { Route as AppHospitalsRouteImport } from './routes/_app/hospitals'
 import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
 
@@ -76,6 +78,11 @@ const AppShiftRoute = AppShiftRouteImport.update({
   path: '/shift',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSchedulingRoute = AppSchedulingRouteImport.update({
+  id: '/scheduling',
+  path: '/scheduling',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppRotaRoute = AppRotaRouteImport.update({
   id: '/rota',
   path: '/rota',
@@ -101,6 +108,11 @@ const AppLeaveRoute = AppLeaveRouteImport.update({
   path: '/leave',
   getParentRoute: () => AppRoute,
 } as any)
+const AppHospitalsRoute = AppHospitalsRouteImport.update({
+  id: '/hospitals',
+  path: '/hospitals',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppAuditRoute = AppAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
@@ -118,11 +130,13 @@ export interface FileRoutesByFullPath {
   '/login': typeof LoginRoute
   '/approvals': typeof AppApprovalsRoute
   '/audit': typeof AppAuditRoute
+  '/hospitals': typeof AppHospitalsRoute
   '/leave': typeof AppLeaveRoute
   '/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/locum': typeof AppLocumRoute
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
+  '/scheduling': typeof AppSchedulingRoute
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
   '/staff': typeof AppStaffRoute
@@ -135,11 +149,13 @@ export interface FileRoutesByTo {
   '/login': typeof LoginRoute
   '/approvals': typeof AppApprovalsRoute
   '/audit': typeof AppAuditRoute
+  '/hospitals': typeof AppHospitalsRoute
   '/leave': typeof AppLeaveRoute
   '/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/locum': typeof AppLocumRoute
   '/reports': typeof AppReportsRoute
   '/rota': typeof AppRotaRoute
+  '/scheduling': typeof AppSchedulingRoute
   '/shift': typeof AppShiftRoute
   '/shift-history': typeof AppShiftHistoryRoute
   '/staff': typeof AppStaffRoute
@@ -155,11 +171,13 @@ export interface FileRoutesById {
   '/login': typeof LoginRoute
   '/_app/approvals': typeof AppApprovalsRoute
   '/_app/audit': typeof AppAuditRoute
+  '/_app/hospitals': typeof AppHospitalsRoute
   '/_app/leave': typeof AppLeaveRoute
   '/_app/leave-entitlements': typeof AppLeaveEntitlementsRoute
   '/_app/locum': typeof AppLocumRoute
   '/_app/reports': typeof AppReportsRoute
   '/_app/rota': typeof AppRotaRoute
+  '/_app/scheduling': typeof AppSchedulingRoute
   '/_app/shift': typeof AppShiftRoute
   '/_app/shift-history': typeof AppShiftHistoryRoute
   '/_app/staff': typeof AppStaffRoute
@@ -176,11 +194,13 @@ export interface FileRouteTypes {
     | '/login'
     | '/approvals'
     | '/audit'
+    | '/hospitals'
     | '/leave'
     | '/leave-entitlements'
     | '/locum'
     | '/reports'
     | '/rota'
+    | '/scheduling'
     | '/shift'
     | '/shift-history'
     | '/staff'
@@ -193,11 +213,13 @@ export interface FileRouteTypes {
     | '/login'
     | '/approvals'
     | '/audit'
+    | '/hospitals'
     | '/leave'
     | '/leave-entitlements'
     | '/locum'
     | '/reports'
     | '/rota'
+    | '/scheduling'
     | '/shift'
     | '/shift-history'
     | '/staff'
@@ -212,11 +234,13 @@ export interface FileRouteTypes {
     | '/login'
     | '/_app/approvals'
     | '/_app/audit'
+    | '/_app/hospitals'
     | '/_app/leave'
     | '/_app/leave-entitlements'
     | '/_app/locum'
     | '/_app/reports'
     | '/_app/rota'
+    | '/_app/scheduling'
     | '/_app/shift'
     | '/_app/shift-history'
     | '/_app/staff'
@@ -304,6 +328,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppShiftRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/scheduling': {
+      id: '/_app/scheduling'
+      path: '/scheduling'
+      fullPath: '/scheduling'
+      preLoaderRoute: typeof AppSchedulingRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/rota': {
       id: '/_app/rota'
       path: '/rota'
@@ -339,6 +370,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppLeaveRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/hospitals': {
+      id: '/_app/hospitals'
+      path: '/hospitals'
+      fullPath: '/hospitals'
+      preLoaderRoute: typeof AppHospitalsRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/audit': {
       id: '/_app/audit'
       path: '/audit'
@@ -359,11 +397,13 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppApprovalsRoute: typeof AppApprovalsRoute
   AppAuditRoute: typeof AppAuditRoute
+  AppHospitalsRoute: typeof AppHospitalsRoute
   AppLeaveRoute: typeof AppLeaveRoute
   AppLeaveEntitlementsRoute: typeof AppLeaveEntitlementsRoute
   AppLocumRoute: typeof AppLocumRoute
   AppReportsRoute: typeof AppReportsRoute
   AppRotaRoute: typeof AppRotaRoute
+  AppSchedulingRoute: typeof AppSchedulingRoute
   AppShiftRoute: typeof AppShiftRoute
   AppShiftHistoryRoute: typeof AppShiftHistoryRoute
   AppStaffRoute: typeof AppStaffRoute
@@ -376,11 +416,13 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppApprovalsRoute: AppApprovalsRoute,
   AppAuditRoute: AppAuditRoute,
+  AppHospitalsRoute: AppHospitalsRoute,
   AppLeaveRoute: AppLeaveRoute,
   AppLeaveEntitlementsRoute: AppLeaveEntitlementsRoute,
   AppLocumRoute: AppLocumRoute,
   AppReportsRoute: AppReportsRoute,
   AppRotaRoute: AppRotaRoute,
+  AppSchedulingRoute: AppSchedulingRoute,
   AppShiftRoute: AppShiftRoute,
   AppShiftHistoryRoute: AppShiftHistoryRoute,
   AppStaffRoute: AppStaffRoute,

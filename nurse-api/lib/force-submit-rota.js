@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { applyValidatedAssignmentBatch } = require("./configured-assignment-batch");
 const { getRotaDeadlineSettings } = require("./rota-deadline-settings");
 
 // Mirrors leave-requests.js's facilityWideGroupSlug / shift-assignments.js's
@@ -64,7 +65,7 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
         AND sa.shift_date BETWEEN $2 AND $3
         AND (
           EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
-          OR sa.shift IN ('M','MWC','N','NC')
+          OR sa.shift <> 'OFF'
         )
       LIMIT 1`,
     [nurseIds, periodStart, periodEnd],
@@ -75,14 +76,27 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
   const params = ward
     ? [nurseIds, periodStart, periodEnd, ward]
     : [nurseIds, periodStart, periodEnd];
-  const { rowCount } = await pool.query(
-    `UPDATE shift_assignments sa
-        SET status = 'submitted', updated_at = NOW(), updated_by_name = 'System (auto-submitted)'
-      WHERE sa.nurse_id = ANY($1) AND sa.shift_date BETWEEN $2 AND $3
-        AND sa.status = 'draft' ${wardClause}`,
-    params,
-  );
-  return { submitted: true, count: rowCount };
+  const where = `WHERE nurse_id=ANY($1) AND shift_date BETWEEN $2 AND $3
+    AND status='draft' ${wardClause.replaceAll("sa.", "")}`;
+  try {
+    const { rowCount } = await applyValidatedAssignmentBatch(pool, {
+      where,
+      filterParams: params,
+      updateParams: params,
+      body: { status: "submitted" },
+      staffingWindow: { start: periodStart, end: periodEnd },
+      updateSql: `UPDATE shift_assignments SET status='submitted',updated_at=NOW(),updated_by_name='System (auto-submitted)' ${where}`,
+    });
+    return { submitted: true, count: rowCount };
+  } catch (error) {
+    if (error.code !== "CONFIGURED_EDIT_INVALID") throw error;
+    return {
+      submitted: false,
+      reason: "CONFIGURED_EDIT_INVALID",
+      message: error.message,
+      count: 0,
+    };
+  }
 }
 
 // Returns true when the most recent rota_transitions row for this unit+period

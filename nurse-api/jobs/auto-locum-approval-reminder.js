@@ -4,6 +4,7 @@
 // hours to catch — it still fires whenever there's enough lead time.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { sendMail, portalUrl } = require("../lib/mailer");
 
 // Distinct from every other job's lock key — see jobs/auto-end-shifts.js for why.
@@ -22,7 +23,9 @@ async function activeProfilesWithRole(role) {
 // Same cutoff hours as auto-expire-locum-requests.js: night shifts need
 // coverage arranged earlier in the day (4pm cutoff) than morning shifts (7am
 // cutoff, 1 hour before the 8am start).
-function locumDeadlineInstant(shiftDate, shift) {
+function locumDeadlineInstant(shiftDate, shift, startsAt = null) {
+  // Requests created from configured shifts store their start; cutoff is an hour before.
+  if (startsAt) return new Date(new Date(startsAt).getTime() - 3600 * 1000);
   const hours = ["N", "NC"].includes(shift) ? 16 : 7;
   const base = new Date(`${shiftDate}T00:00:00+01:00`);
   return new Date(base.getTime() + hours * 3600 * 1000);
@@ -50,14 +53,14 @@ async function sendLocumApprovalReminders() {
 async function runSendLocumApprovalReminders() {
   try {
     const { rows: pending } = await pool.query(
-      `SELECT id, shift_date, shift, facility, ward FROM locum_requests WHERE status = 'pending'`,
+      `SELECT id, shift_date, shift, shift_starts_at, facility, ward FROM locum_requests WHERE status = 'pending'`,
     );
 
     let sentCount = 0;
     if (pending.length) {
       const cnoProfiles = await activeProfilesWithRole("cno");
       for (const r of pending) {
-        const deadline = locumDeadlineInstant(r.shift_date, r.shift);
+        const deadline = locumDeadlineInstant(r.shift_date, r.shift, r.shift_starts_at);
         const msUntilDeadline = deadline.getTime() - Date.now();
         if (msUntilDeadline <= 0 || msUntilDeadline > 24 * 3600 * 1000) continue;
 
@@ -87,7 +90,9 @@ async function runSendLocumApprovalReminders() {
     }
 
     if (sentCount > 0) {
-      console.log(`[locum-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`);
+      console.log(
+        `[locum-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`,
+      );
       await pool
         .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
           "Locum approval reminders sent",
@@ -101,9 +106,16 @@ async function runSendLocumApprovalReminders() {
 }
 
 function startLocumApprovalReminderJob() {
-  sendLocumApprovalReminders();
-  cron.schedule("*/5 * * * *", sendLocumApprovalReminders);
-  console.log("[locum-approval-reminder] Locum approval reminder job started (runs every 5 minutes)");
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => sendLocumApprovalReminders()).catch((err) =>
+      console.error("[auto-locum-approval-reminder] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
+  console.log(
+    "[locum-approval-reminder] Locum approval reminder job started (runs every 5 minutes)",
+  );
 }
 
 module.exports = { startLocumApprovalReminderJob };

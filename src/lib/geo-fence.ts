@@ -5,21 +5,11 @@ export type GpsSettings = {
   facilities: Record<string, FacilityLocation[]>;
 };
 
-// Geo-fence configuration for all facility locations.
-// Each facility key matches the `facility` field stored on nurse records.
-// Ikeja has two campuses — the nearest one is used for distance checking.
-export const FACILITY_LOCATIONS: Record<string, FacilityLocation[]> = {
-  Ikeja: [
-    { lat: 6.6044, lng: 3.3458, label: "Ikeja — 91 Obafemi Awolowo Way" },
-    { lat: 6.6153343, lng: 3.3458773, label: "Ikeja — 91 Adeniyi Jones, Ogba" },
-  ],
-  Ikoyi: [{ lat: 6.4531, lng: 3.4329, label: "Ikoyi — 17B Bourdillon Road" }],
-  Ligali: [{ lat: 6.428565, lng: 3.44097, label: "Ligali — 3B Ligali Ayorinde Street" }],
-};
+// Each hospital's sites and their GPS locations come from its own gps_settings
+// (entered when the hospital is set up; keys match nurses.facility). There is
+// no built-in site list: a site without a saved location cannot be clocked into.
 
-// Nurses must be within this distance of their own facility to clock in.
-// 1000 m keeps each facility isolated — the closest pair (Ikoyi / Ligali) are ~2.9 km apart,
-// and the two Ikeja campuses are ~1.2 km apart (nearestLocation picks the closer one).
+// Default distance offered when entering a new fence radius.
 export const GEO_FENCE_RADIUS_M = 1000;
 
 function haversineMetres(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -39,7 +29,7 @@ export function nearestLocation(
   lng: number,
   facilityLocations?: Record<string, FacilityLocation[]>,
 ): { distanceM: number; label: string } | null {
-  const locs = (facilityLocations ?? FACILITY_LOCATIONS)[facility];
+  const locs = facilityLocations?.[facility];
   if (!locs?.length) return null;
   let best: { distanceM: number; label: string } | null = null;
   for (const loc of locs) {

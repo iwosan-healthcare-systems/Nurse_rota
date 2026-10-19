@@ -45,7 +45,7 @@ router.post(
         .query(
           `INSERT INTO user_capability_overrides (user_id, capability_key, created_by, created_by_name)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT (user_id, capability_key) DO NOTHING`,
+           ON CONFLICT (hospital_id, user_id, capability_key) DO NOTHING`,
           [user_id, key, req.user.userId, req.user.full_name || null],
         )
         .catch(() => {});

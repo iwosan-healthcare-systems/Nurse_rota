@@ -3,6 +3,7 @@
 // is within 24 hours.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { getWindowForPeriod } = require("../lib/rota-period-dates");
 const { sendMail, portalUrl } = require("../lib/mailer");
 
@@ -101,7 +102,9 @@ async function runSendRotaEditApprovalReminders() {
           "Rota edit-access approval reminders sent",
           `${sentCount} reminder(s)`,
         ])
-        .catch((err) => console.error("[rota-edit-approval-reminder] audit log failed:", err.message));
+        .catch((err) =>
+          console.error("[rota-edit-approval-reminder] audit log failed:", err.message),
+        );
     }
   } catch (err) {
     console.error("[rota-edit-approval-reminder] Error:", err.message);
@@ -109,8 +112,13 @@ async function runSendRotaEditApprovalReminders() {
 }
 
 function startRotaEditApprovalReminderJob() {
-  sendRotaEditApprovalReminders();
-  cron.schedule("*/5 * * * *", sendRotaEditApprovalReminders);
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => sendRotaEditApprovalReminders()).catch((err) =>
+      console.error("[auto-rota-edit-approval-reminder] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log(
     "[rota-edit-approval-reminder] Rota edit-access approval reminder job started (runs every 5 minutes)",
   );

@@ -4,6 +4,7 @@
 // notification_state exactly like every other one-shot job notification.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { sendMail, portalUrl } = require("../lib/mailer");
 
 // Distinct from every other job's lock key — see jobs/auto-end-shifts.js for why.
@@ -158,7 +159,9 @@ async function runSendLeaveApprovalReminders() {
     }
 
     if (sentCount > 0) {
-      console.log(`[leave-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`);
+      console.log(
+        `[leave-approval-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`,
+      );
       await pool
         .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
           "Leave approval reminders sent",
@@ -172,9 +175,16 @@ async function runSendLeaveApprovalReminders() {
 }
 
 function startLeaveApprovalReminderJob() {
-  sendLeaveApprovalReminders();
-  cron.schedule("*/5 * * * *", sendLeaveApprovalReminders);
-  console.log("[leave-approval-reminder] Leave approval reminder job started (runs every 5 minutes)");
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => sendLeaveApprovalReminders()).catch((err) =>
+      console.error("[auto-leave-approval-reminder] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
+  console.log(
+    "[leave-approval-reminder] Leave approval reminder job started (runs every 5 minutes)",
+  );
 }
 
 module.exports = { startLeaveApprovalReminderJob };

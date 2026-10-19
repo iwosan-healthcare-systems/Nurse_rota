@@ -1,5 +1,6 @@
 const router = require("express").Router();
 const pool = require("../db");
+const { withPeriodAssignedHours } = require("../lib/period-assigned-hours");
 const { requireCapability } = require("../middleware/capability");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
@@ -20,27 +21,8 @@ router.get(
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     let query = `
-      SELECT nph.*,
-             COALESCE(assigned.assigned_hours, 0) AS assigned_hours
+      SELECT nph.*,nph.period_start::text,nph.period_end::text
         FROM nurse_period_hours nph
-        LEFT JOIN LATERAL (
-          SELECT ROUND(
-                   SUM(
-                     CASE
-                       WHEN sa.shift = 'LEAVE' AND sa.pre_leave_shift IN ('M', 'MWC') THEN 9
-                       WHEN sa.shift = 'LEAVE' AND sa.pre_leave_shift IN ('N', 'NC') THEN 15
-                       WHEN sa.shift IN ('M', 'MWC') THEN 9
-                       WHEN sa.shift IN ('N', 'NC') THEN 15
-                       ELSE 0
-                     END
-                   )::numeric,
-                   2
-                 ) AS assigned_hours
-            FROM shift_assignments sa
-           WHERE sa.nurse_id = nph.nurse_id
-             AND sa.shift_date BETWEEN nph.period_start AND nph.period_end
-             AND sa.status = 'published'
-        ) assigned ON TRUE
       ${where}
        ORDER BY nph.period_start DESC`;
     if (req.query.limit) {
@@ -48,7 +30,7 @@ router.get(
       params.push(parseInt(req.query.limit, 10));
     }
     const { rows } = await pool.query(query, params);
-    res.json(rows);
+    res.json(await withPeriodAssignedHours(pool, rows));
   }),
 );
 

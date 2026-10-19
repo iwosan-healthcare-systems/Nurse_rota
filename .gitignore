@@ -45,3 +45,7 @@ ProductionKey.pem
 # nurse-api
 nurse-api/.env
 nurse-api/node_modules/
+
+# Local browser verification artifacts
+/output/playwright/
+/.playwright-cli/

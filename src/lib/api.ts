@@ -13,6 +13,21 @@ export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
 }
 
+// The hospital this browser is working in; the API scopes every request to it.
+const HOSPITAL_KEY = "nurse_rota_hospital";
+
+export function getHospitalId(): string | null {
+  return localStorage.getItem(HOSPITAL_KEY);
+}
+
+export function setHospitalId(id: string): void {
+  localStorage.setItem(HOSPITAL_KEY, id);
+}
+
+export function clearHospitalId(): void {
+  localStorage.removeItem(HOSPITAL_KEY);
+}
+
 export class ApiError extends Error {
   code?: string;
   data: Record<string, unknown>;
@@ -31,6 +46,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const headers: Record<string, string> = {};
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (token) headers["Authorization"] = `Bearer ${token}`;
+  const hospitalId = getHospitalId();
+  if (token && hospitalId) headers["X-Hospital-Id"] = hospitalId;
 
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -44,6 +61,11 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     const msg =
       ((payload.error as string) ?? `HTTP ${res.status}`) + (errorCode ? ` (${errorCode})` : "");
     if (res.status === 401) clearToken();
+    // Access to the selected hospital was removed: fall back to the default one.
+    if (payload.code === "HOSPITAL_ACCESS_DENIED" && hospitalId) {
+      clearHospitalId();
+      window.location.assign("/");
+    }
     throw new ApiError(msg, res.status, payload.code as string | undefined, payload);
   }
 

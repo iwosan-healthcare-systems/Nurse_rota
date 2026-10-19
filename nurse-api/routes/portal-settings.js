@@ -24,7 +24,7 @@ router.put(
 
     const { rows } = await pool.query(
       `INSERT INTO portal_settings (key, value) VALUES ($1, $2)
-     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value RETURNING *`,
+     ON CONFLICT (hospital_id, key) DO UPDATE SET value = EXCLUDED.value RETURNING *`,
       [req.params.key, JSON.stringify(value)],
     );
     if (req.params.key === "capabilities") invalidateCapabilityCache();
@@ -69,7 +69,7 @@ router.patch(
 
       await client.query(
         `INSERT INTO portal_settings (key, value) VALUES ('capabilities', $1)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+         ON CONFLICT (hospital_id, key) DO UPDATE SET value = EXCLUDED.value`,
         [JSON.stringify(next)],
       );
       await client.query("COMMIT");

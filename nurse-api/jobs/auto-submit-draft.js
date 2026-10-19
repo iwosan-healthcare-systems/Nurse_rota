@@ -4,6 +4,7 @@
 // the draft is reverted back, edit access does not return; must re-request."
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const {
   forceSubmitUnit,
@@ -240,8 +241,13 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
 }
 
 function startAutoSubmitJob() {
-  autoSubmitDraft();
-  cron.schedule("*/5 * * * *", () => autoSubmitDraft());
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoSubmitDraft()).catch((err) =>
+      console.error("[auto-submit-draft] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-submit-draft] Auto-submit draft job started (runs every 5 minutes)");
 }
 

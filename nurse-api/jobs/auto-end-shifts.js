@@ -1,6 +1,10 @@
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { recordConfiguredMissedShifts } = require("../lib/configured-missed-shifts");
+const { creditConfiguredLeave } = require("../lib/configured-leave-credit");
+const { escapeReminderHtml } = require("../lib/configured-shift-reminders");
 
 const SHIFT_TYPE_LABELS = { M: "Morning", N: "Night" };
 
@@ -36,7 +40,9 @@ async function emailMissedShiftNurses(rows, label) {
   for (const row of rows) {
     const person = byId[row.nurse_id];
     if (!person?.email) continue;
-    const shiftLabel = SHIFT_TYPE_LABELS[row.shift_type] ?? row.shift_type;
+    const shiftLabel = escapeReminderHtml(
+      row.scheduling_definition?.name ?? SHIFT_TYPE_LABELS[row.shift_type] ?? row.shift_type,
+    );
     sendMail({
       to: person.email,
       subject: `Missed shift recorded — ${fmtShiftDate(row.shift_date)}`,
@@ -54,7 +60,9 @@ async function emailMissedShiftNurses(rows, label) {
         "Missed shift emails sent",
         `${sentCount} ${label} email(s)`,
       ])
-      .catch((err) => console.error("[auto-end] missed-shift email audit log failed:", err.message));
+      .catch((err) =>
+        console.error("[auto-end] missed-shift email audit log failed:", err.message),
+      );
   }
 }
 
@@ -87,9 +95,9 @@ async function runAutoEndOverdueShifts() {
       UPDATE shift_logs
       SET
         ended_at     = expected_end_at,
-        hours_logged = ROUND(
+        hours_logged = CASE WHEN scheduling_definition IS NOT NULL THEN configured_attendance_hours(scheduling_definition,started_at,expected_end_at) ELSE ROUND(
           EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600 * 100
-        ) / 100
+        ) / 100 END
       WHERE ended_at IS NULL
         AND expected_end_at < NOW()
       RETURNING id, nurse_id, hours_logged, is_locum, is_swap
@@ -124,6 +132,10 @@ async function runAutoEndOverdueShifts() {
     // the request but never clocked in) — matched via locum_requests the same way
     // rota.tsx's locumCellSet does (status = 'filled', accepted_by_nurse_id + shift_date),
     // so it's flagged is_locum = true instead of silently looking like a regular no-show.
+    const configuredMissed = await recordConfiguredMissedShifts(pool);
+    for (const error of configuredMissed.errors)
+      console.error("[auto-end] Skipped unresolved assignment", error.assignmentId, error.error);
+    await emailMissedShiftNurses(configuredMissed.rows, "configured missed shift");
     const missed = await pool.query(`
       INSERT INTO shift_logs
         (nurse_id, shift_date, shift_type, started_at, expected_end_at, ended_at,
@@ -131,7 +143,7 @@ async function runAutoEndOverdueShifts() {
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
+        (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::text AS shift_type,
         CASE WHEN sa.shift IN ('N', 'NC')
           THEN (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -163,6 +175,7 @@ async function runAutoEndOverdueShifts() {
        AND lr.accepted_by_nurse_id = sa.nurse_id
        AND lr.shift_date = sa.shift_date
       WHERE sa.status = 'published'
+        AND COALESCE(sa.shift_definition_run_id,sa.scheduling_run_id) IS NULL
         AND (
           (sa.shift NOT IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
           OR (sa.shift IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
@@ -200,7 +213,7 @@ async function runAutoEndOverdueShifts() {
       SELECT
         lr.accepted_by_nurse_id,
         lr.shift_date,
-        (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
+        (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::text AS shift_type,
         CASE WHEN lr.shift IN ('N', 'NC')
           THEN (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (lr.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -238,6 +251,14 @@ async function runAutoEndOverdueShifts() {
           WHERE sl.nurse_id = lr.accepted_by_nurse_id
             AND sl.shift_date = lr.shift_date
         )
+        -- Configured cells carry saved timings; configured missed-shift handling
+        -- records those locum no-shows instead of these legacy 08:00/17:00 times.
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_assignments ca
+          WHERE ca.nurse_id = lr.accepted_by_nurse_id
+            AND ca.shift_date = lr.shift_date
+            AND COALESCE(ca.shift_definition_run_id, ca.scheduling_run_id) IS NOT NULL
+        )
       RETURNING nurse_id, shift_date, shift_type
     `);
     if (missedLocum.rowCount > 0) {
@@ -252,6 +273,13 @@ async function runAutoEndOverdueShifts() {
     // Credit approved leave hours for dates that have now arrived.
     // At approval time, only past/today shifts are credited immediately; future shifts
     // land here once their shift_date reaches CURRENT_DATE.
+    const configuredLeave = await creditConfiguredLeave(pool);
+    for (const error of configuredLeave.errors)
+      console.error(
+        "[auto-end] Skipped unresolved leave assignment",
+        error.assignmentId,
+        error.error,
+      );
     const leaveCredit = await pool.query(`
       INSERT INTO shift_logs
         (nurse_id, shift_date, shift_type,
@@ -262,7 +290,7 @@ async function runAutoEndOverdueShifts() {
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 'N' ELSE 'M' END::shift_code,
+        CASE WHEN sa.pre_leave_shift IN ('N', 'NC') THEN 'N' ELSE 'M' END::text,
         CASE WHEN sa.pre_leave_shift IN ('N', 'NC')
           THEN (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -295,6 +323,7 @@ async function runAutoEndOverdueShifts() {
         AND lr.status = 'Approved'
         AND lr.type != 'Swap'
       WHERE sa.shift = 'LEAVE'
+        AND COALESCE(sa.shift_definition_run_id,sa.scheduling_run_id) IS NULL
         AND sa.status = 'published'
         AND sa.shift_date <= CURRENT_DATE
         AND sa.pre_leave_shift IN ('M', 'MWC', 'N', 'NC')
@@ -331,10 +360,15 @@ async function runAutoEndOverdueShifts() {
 }
 
 function startAutoEndJob() {
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoEndOverdueShifts()).catch((err) =>
+      console.error("[auto-end-shifts] hospital loop failed:", err.message),
+    );
   // Run once immediately on startup to catch any shifts that ended while the server was down.
-  autoEndOverdueShifts();
+  tick();
   // Then run every 5 minutes via cron.
-  cron.schedule("*/5 * * * *", autoEndOverdueShifts);
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-end] Shift auto-end job started (runs every 5 minutes)");
 }
 

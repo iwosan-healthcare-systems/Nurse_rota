@@ -2,7 +2,18 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { periodStartForShiftDate } = require("../lib/period-start");
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+const {
+  AttendanceError,
+  configuredAttendanceDefinition,
+  configuredStart,
+  updateConfiguredAttendance,
+} = require("../lib/configured-attendance");
+const wrap = (fn) => (req, res, next) =>
+  fn(req, res, next).catch((error) =>
+    error instanceof AttendanceError
+      ? res.status(error.status).json({ error: error.message })
+      : next(error),
+  );
 
 // Must be before GET / to avoid conflict
 router.get(
@@ -145,6 +156,15 @@ router.post(
     if (!resolvedNurseId) return res.status(400).json({ error: "nurse_id required" });
 
     const resolvedPeriodStart = await periodStartForShiftDate(shift_date, period_start);
+    // Locum claims flip the claimant's own cell, so a configured locum duty
+    // resolves its saved timing from that cell like any other configured duty.
+    const definition =
+      !is_swap && !is_leave
+        ? await configuredAttendanceDefinition(pool, resolvedNurseId, shift_date, shift_type)
+        : null;
+    const attendance = definition
+      ? configuredStart(definition, req.body, { admin: isAdmin })
+      : null;
 
     let rows;
     try {
@@ -153,18 +173,18 @@ router.post(
        (nurse_id, shift_date, shift_type, started_at, expected_end_at, period_start,
         is_late, late_minutes, late_reason, latitude, longitude, ip_address,
         is_locum, locum_request_id, is_swap, swap_note, is_leave, leave_request_id,
-        is_missed, ended_at, hours_logged)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        is_missed, ended_at, hours_logged, scheduling_definition)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22::jsonb)
        RETURNING *`,
         [
           resolvedNurseId,
           shift_date,
           shift_type,
-          started_at,
-          expected_end_at,
+          attendance ? attendance.started_at : started_at,
+          attendance ? attendance.expected_end_at : expected_end_at,
           resolvedPeriodStart,
-          is_late || false,
-          late_minutes || null,
+          attendance ? attendance.is_late : is_late || false,
+          attendance ? attendance.late_minutes : late_minutes || null,
           late_reason || null,
           latitude || null,
           longitude || null,
@@ -176,8 +196,9 @@ router.post(
           is_leave || false,
           leave_request_id || null,
           is_missed || false,
-          ended_at ?? null,
-          hours_logged != null ? hours_logged : null,
+          attendance ? attendance.ended_at : (ended_at ?? null),
+          attendance ? attendance.hours_logged : hours_logged != null ? hours_logged : null,
+          definition ? JSON.stringify(definition) : null,
         ],
       ));
     } catch (err) {
@@ -258,6 +279,14 @@ router.patch(
     const isAdmin = userRoles.some((r) => ["admin", "cno"].includes(r));
 
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
+    const configured = await updateConfiguredAttendance(
+      pool,
+      req.params.id,
+      req.user.userId,
+      isAdmin,
+      req.body,
+    );
+    if (configured) return res.json(configured);
     const values = fields.map((f) => req.body[f]);
     values.push(req.params.id);
 

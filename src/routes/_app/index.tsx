@@ -3,6 +3,10 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import {
+  assignmentScheduledHours,
+  type AssignmentDefinition,
+} from "@/lib/assignment-shift-definition";
+import {
   Users,
   Building2,
   Clock,
@@ -70,17 +74,6 @@ function addDaysToYmd(dateStr: string, n: number) {
   return ymd(d);
 }
 
-/** Hours implied by a published shift_assignments cell (9h M/MWC, 15h N/NC, 0h OFF).
- *  A LEAVE cell is credited using pre_leave_shift — the shift it covered before being
- *  flipped to LEAVE — so approved leave still counts toward the period total. Mirrors
- *  scheduledHoursFor in shift.tsx. */
-function scheduledHoursFor(shift: string, preLeaveShift: string | null) {
-  const code = shift === "LEAVE" ? (preLeaveShift ?? "") : shift;
-  if (code === "M" || code === "MWC") return 9;
-  if (code === "N" || code === "NC") return 15;
-  return 0;
-}
-
 function fmtHours(dec: number) {
   const h = Math.floor(dec);
   const m = Math.round((dec - h) * 60);
@@ -126,7 +119,8 @@ function isFacilityWideRole(role: string | undefined) {
 }
 
 type Assignment = {
-  shift: "M" | "N" | "OFF" | "LEAVE";
+  shift: string;
+  scheduled_shift?: { name: string } | null;
   shift_date: string;
   ward: string | null;
   status: string;
@@ -232,7 +226,7 @@ function NurseDashboard() {
       api
         .get<
           Assignment[]
-        >(`/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`)
+        >(`/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1&include_shift_definition=true`)
         .then((arr) => arr[0] ?? null),
   });
 
@@ -243,7 +237,7 @@ function NurseDashboard() {
     enabled: !!nurseId,
     queryFn: () =>
       api.get<Assignment[]>(
-        `/shift-assignments?nurse_id=${nurseId}&from=${next7}&to=${end7}&status=published`,
+        `/shift-assignments?nurse_id=${nurseId}&from=${next7}&to=${end7}&status=published&include_shift_definition=true`,
       ),
   });
 
@@ -310,7 +304,7 @@ function NurseDashboard() {
   // full 28-day block is fetched from there.
   const { data: periodData } = useQuery<{
     periodEnd: string;
-    rows: { shift: string; pre_leave_shift: string | null }[];
+    rows: AssignmentDefinition[];
   }>({
     queryKey: ["my-period-assignments-dash", nurseId, latestArchivedPeriod?.period_end],
     enabled: !!nurseId,
@@ -329,8 +323,8 @@ function NurseDashboard() {
       const periodEnd = addDaysToYmd(periodStart, 27);
       const rows = await api
         .get<
-          { shift: string; pre_leave_shift: string | null }[]
-        >(`/shift-assignments?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&status=published`)
+          AssignmentDefinition[]
+        >(`/shift-assignments?nurse_id=${nurseId}&from=${periodStart}&to=${periodEnd}&status=published&include_shift_definition=true`)
         .catch(() => []);
       return { periodEnd, rows };
     },
@@ -424,12 +418,16 @@ function NurseDashboard() {
   const periodHours = regularLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const additionalHours = additionalLogs.reduce((s, l) => s + Number(l.hours_logged ?? 0), 0);
   const totalMinutes = Math.round(periodHours * 60);
-  const scheduledHours = periodAssignments.reduce(
-    (s, a) => s + scheduledHoursFor(a.shift, a.pre_leave_shift),
-    0,
-  );
-  const targetHours = scheduledHours || Number(nurseRecord?.target_hours ?? 180);
-  const pct = Math.min(Math.round((periodHours / targetHours) * 100), 100);
+  const assignedCredits = periodAssignments.map(assignmentScheduledHours);
+  const scheduledUnavailable = assignedCredits.some((hours) => hours == null);
+  const scheduledHours = assignedCredits.reduce<number>((sum, hours) => sum + (hours ?? 0), 0);
+  const targetHours = periodAssignments.length
+    ? scheduledHours
+    : Number(nurseRecord?.target_hours ?? 180);
+  const pct =
+    !scheduledUnavailable && targetHours > 0
+      ? Math.min(Math.round((periodHours / targetHours) * 100), 100)
+      : 0;
   const completedShiftKeys = new Set(
     regularLogs
       .filter((l) => l.hours_logged !== null && !l.is_missed)
@@ -529,7 +527,11 @@ function NurseDashboard() {
           icon={Timer}
           label="Hours this period"
           value={fmtHours(periodHours)}
-          hint={`Target: ${fmtHours(targetHours)}`}
+          hint={
+            scheduledUnavailable
+              ? "Scheduled hours unavailable"
+              : `Target: ${fmtHours(targetHours)}`
+          }
           tone={pct >= 100 ? "success" : "default"}
         />
         <Stat
@@ -564,16 +566,23 @@ function NurseDashboard() {
         <div className="flex items-center justify-between mb-2">
           <p className="text-sm font-semibold">Hours progress — current 28-day period</p>
           <span className="text-xs text-muted-foreground tabular-nums">
-            {fmtHours(periodHours)} / {fmtHours(targetHours)}
+            {fmtHours(periodHours)} /{" "}
+            {scheduledUnavailable ? "Scheduled hours unavailable" : fmtHours(targetHours)}
             {additionalHours > 0 && (
               <span className="ml-1.5 text-sky-600">+{fmtHours(additionalHours)} additional</span>
             )}
           </span>
         </div>
-        <div className="h-3 rounded-full bg-muted overflow-hidden">
-          <Progress value={pct} className="h-full rounded-full" />
-        </div>
-        <p className="text-xs text-muted-foreground mt-1.5">{pct}% of target hours reached</p>
+        {!scheduledUnavailable && (
+          <div className="h-3 rounded-full bg-muted overflow-hidden">
+            <Progress value={pct} className="h-full rounded-full" />
+          </div>
+        )}
+        <p className="text-xs text-muted-foreground mt-1.5">
+          {scheduledUnavailable
+            ? "Saved shift definitions need review"
+            : `${pct}% of target hours reached`}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
@@ -596,7 +605,9 @@ function NurseDashboard() {
                     shiftColor[effectiveAssignment.shift] ?? shiftColor.OFF,
                   )}
                 >
-                  {shiftLabel[effectiveAssignment.shift] ?? effectiveAssignment.shift}
+                  {effectiveAssignment.scheduled_shift?.name ??
+                    shiftLabel[effectiveAssignment.shift] ??
+                    effectiveAssignment.shift}
                 </span>
                 {locumAssignment && (
                   <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-purple-100 text-purple-700 border border-purple-200">
@@ -624,7 +635,8 @@ function NurseDashboard() {
               )}
               {!activeLog &&
                 effectiveAssignment.status === "published" &&
-                (effectiveAssignment.shift === "M" || effectiveAssignment.shift === "N") && (
+                effectiveAssignment.shift !== "OFF" &&
+                effectiveAssignment.shift !== "LEAVE" && (
                   <Link
                     to="/shift"
                     className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700"

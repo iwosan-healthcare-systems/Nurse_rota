@@ -1,13 +1,23 @@
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { getShiftReminderSettings } = require("../lib/shift-reminder-settings");
+const {
+  configuredShiftReminders,
+  escapeReminderHtml,
+} = require("../lib/configured-shift-reminders");
 
 // Arbitrary fixed key for this job's mutex — see auto-end-shifts.js for why
 // this is needed (multiple PM2 instances, same wall-clock cron tick).
 const AUTO_SHIFT_START_REMINDER_LOCK_KEY = 729318;
 
-const SHIFT_LABELS = { M: "Morning", MWC: "Morning Weekend Coverage", N: "Night", NC: "Night Coverage" };
+const SHIFT_LABELS = {
+  M: "Morning",
+  MWC: "Morning Weekend Coverage",
+  N: "Night",
+  NC: "Night Coverage",
+};
 
 // Same "shift_date + offset, cast through Africa/Lagos" pattern used by
 // auto-end-shifts.js, so this start-time math stays consistent with the
@@ -61,6 +71,7 @@ async function runSendReminderEmails() {
          (SELECT id FROM profiles WHERE LOWER(full_name) = LOWER(n.name) LIMIT 1)
        )
        WHERE sa.status = 'published'
+         AND COALESCE(sa.shift_definition_run_id,sa.scheduling_run_id) IS NULL
          AND sa.shift IN ('M', 'MWC', 'N', 'NC')
          AND (${startTimeSql("sa")}) > NOW()
          AND (${startTimeSql("sa")}) <= NOW() + ($1::numeric * INTERVAL '1 minute')
@@ -91,8 +102,19 @@ async function runSendReminderEmails() {
       [upcoming_shift_minutes],
     );
 
+    const configured = await configuredShiftReminders(
+      pool,
+      "start",
+      Number(upcoming_shift_minutes),
+    );
+    for (const error of configured.errors)
+      console.error(
+        "[shift-start-reminder] Skipped unresolved assignment",
+        error.assignmentId,
+        error.error,
+      );
     let sentCount = 0;
-    for (const row of [...regular, ...locum]) {
+    for (const row of [...regular, ...configured.rows, ...locum]) {
       if (!row.email) continue;
       const notifKey = `shift_reminder_start_${row.nurse_id}_${row.shift_date}_${row.shift}`;
       // ON CONFLICT DO NOTHING + no row returned = this reminder was already
@@ -108,12 +130,12 @@ async function runSendReminderEmails() {
         .catch(() => ({ rowCount: 0 }));
       if (rowCount === 0) continue;
 
-      const label = SHIFT_LABELS[row.shift] ?? row.shift;
+      const label = row.scheduled_shift?.name ?? SHIFT_LABELS[row.shift] ?? row.shift;
       sendMail({
         to: row.email,
         subject: `Reminder — your ${label} shift starts in ${upcoming_shift_minutes} minutes`,
         title: "Your shift starts soon",
-        bodyHtml: `<p>Hi ${row.name ?? "there"},</p><p>This is a reminder that your <strong>${label}</strong> shift${row.ward ? ` at <strong>${row.ward}</strong>` : ""} starts in about ${upcoming_shift_minutes} minutes, on ${fmtShiftDate(row.shift_date)}.</p><p>Please sign in to the portal and start your shift as soon as you arrive.</p>`,
+        bodyHtml: `<p>Hi ${escapeReminderHtml(row.name ?? "there")},</p><p>This is a reminder that your <strong>${escapeReminderHtml(label)}</strong> shift${row.ward ? ` at <strong>${escapeReminderHtml(row.ward)}</strong>` : ""} starts in about ${upcoming_shift_minutes} minutes, on ${fmtShiftDate(row.shift_date)}.</p><p>Please sign in to the portal and start your shift as soon as you arrive.</p>`,
         ctaText: "Open Shift Page",
         ctaUrl: portalUrl("/shift"),
       }).catch(() => {});
@@ -121,7 +143,9 @@ async function runSendReminderEmails() {
     }
 
     if (sentCount > 0) {
-      console.log(`[shift-start-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`);
+      console.log(
+        `[shift-start-reminder] ${new Date().toISOString()} — sent ${sentCount} reminder(s)`,
+      );
       await pool
         .query(`INSERT INTO audit_logs (actor_name, action, target) VALUES ('system', $1, $2)`, [
           "Shift start reminders sent",
@@ -135,9 +159,14 @@ async function runSendReminderEmails() {
 }
 
 function startShiftStartReminderJob() {
-  sendReminderEmails();
-  cron.schedule("*/5 * * * *", sendReminderEmails);
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => sendReminderEmails()).catch((err) =>
+      console.error("[auto-shift-start-reminder] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log("[shift-start-reminder] Shift start reminder job started (runs every 5 minutes)");
 }
 
-module.exports = { startShiftStartReminderJob };
+module.exports = { startShiftStartReminderJob, runSendReminderEmails };

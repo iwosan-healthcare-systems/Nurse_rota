@@ -1,5 +1,6 @@
 require("dotenv").config();
 const express = require("express");
+const pool = require("./db");
 const cors = require("cors");
 const compression = require("compression");
 const rateLimit = require("express-rate-limit");
@@ -14,7 +15,8 @@ app.use(
   cors({
     origin: allowedOrigin,
     methods: ["GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization"],
+    // X-Hospital-Id: the hospital the browser is working in (see lib/tenant-context.js).
+    allowedHeaders: ["Content-Type", "Authorization", "X-Hospital-Id"],
     // Cache the preflight result client-side (Chrome caps this at 2h regardless of
     // the value sent) — the frontend is on a different origin (Netlify) than the
     // API, and the Authorization header makes every GET/POST a "non-simple" CORS
@@ -25,6 +27,7 @@ app.use(
   }),
 );
 app.use(compression()); // gzip JSON responses — no-op cost, real win on slower connections
+app.use("/api/scheduling", express.json({ limit: "1mb" }));
 app.use(express.json({ limit: "100kb" }));
 
 // Rate-limit login to 10 attempts per 15 minutes per IP.
@@ -79,6 +82,8 @@ app.use(
   require("./routes/user-capability-overrides"),
 );
 app.use("/api/roles", requireAuth, require("./routes/roles"));
+app.use("/api/hospitals", requireAuth, require("./routes/hospitals"));
+app.use("/api/scheduling", requireAuth, require("./routes/scheduling-configuration"));
 app.use("/api/rota-edit-requests", requireAuth, require("./routes/rota-edit-requests"));
 app.use("/api/notifications", requireAuth, require("./routes/notifications"));
 app.use("/api/nurse-period-hours", requireAuth, require("./routes/nurse-period-hours"));
@@ -115,6 +120,18 @@ const { startRotaApprovalReminderJob } = require("./jobs/auto-rota-approval-remi
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Nurse API running on port ${PORT}`);
+
+  // Hospital separation relies on row-level security, which Postgres skips for
+  // superusers and BYPASSRLS roles. Make that misconfiguration impossible to miss.
+  pool
+    .query("SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user")
+    .then(({ rows }) => {
+      if (rows[0]?.rolsuper || rows[0]?.rolbypassrls)
+        console.error(
+          "[security] The API database user bypasses row-level security; hospital data is NOT isolated. Connect as a non-superuser role without BYPASSRLS.",
+        );
+    })
+    .catch((err) => console.error("[security] Could not verify row-level security:", err.message));
 
   // In PM2 cluster mode (production runs 4 workers), every worker process
   // would otherwise register every cron job, and node-cron fires all of them

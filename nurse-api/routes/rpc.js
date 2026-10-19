@@ -3,6 +3,7 @@ const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
 const { getNextPeriodDates } = require("../lib/rota-period-dates");
 const { closeCompletedPeriod } = require("../lib/auto-close-period");
+const { recordConfiguredMissedShifts } = require("../lib/configured-missed-shifts");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 // Mirrors lib/force-submit-rota.js's roleGroupOf, plus the "naday" bucket
@@ -61,9 +62,9 @@ router.post(
     const result = await pool.query(`
       UPDATE shift_logs
       SET ended_at     = expected_end_at,
-          hours_logged = ROUND(
+          hours_logged = CASE WHEN scheduling_definition IS NOT NULL THEN configured_attendance_hours(scheduling_definition,started_at,expected_end_at) ELSE ROUND(
             EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600 * 100
-          ) / 100
+          ) / 100 END
       WHERE ended_at IS NULL AND expected_end_at < NOW()
       RETURNING id, nurse_id, hours_logged, is_locum, is_swap
     `);
@@ -74,6 +75,13 @@ router.post(
       }
     }
 
+    const configuredMissed = await recordConfiguredMissedShifts(pool);
+    for (const error of configuredMissed.errors)
+      console.error(
+        "[auto-end-rpc] Skipped unresolved assignment",
+        error.assignmentId,
+        error.error,
+      );
     // Record missed shifts: published assignments in the past with no shift log at all.
     // Idempotent — the NOT EXISTS guard skips already-recorded rows.
     await pool.query(`
@@ -83,7 +91,7 @@ router.post(
       SELECT
         sa.nurse_id,
         sa.shift_date,
-        (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
+        (CASE WHEN sa.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::text AS shift_type,
         CASE WHEN sa.shift IN ('N', 'NC')
           THEN (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (sa.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -115,6 +123,7 @@ router.post(
        AND lr.accepted_by_nurse_id = sa.nurse_id
        AND lr.shift_date = sa.shift_date
       WHERE sa.status = 'published'
+        AND COALESCE(sa.shift_definition_run_id,sa.scheduling_run_id) IS NULL
         AND (
           (sa.shift NOT IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
           OR (sa.shift IN ('N', 'NC') AND (sa.shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos' < NOW())
@@ -136,7 +145,7 @@ router.post(
       SELECT
         lr.accepted_by_nurse_id,
         lr.shift_date,
-        (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::shift_code AS shift_type,
+        (CASE WHEN lr.shift IN ('N', 'NC') THEN 'N' ELSE 'M' END)::text AS shift_type,
         CASE WHEN lr.shift IN ('N', 'NC')
           THEN (lr.shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
           ELSE (lr.shift_date::timestamp + INTERVAL '8 hours') AT TIME ZONE 'Africa/Lagos'
@@ -173,6 +182,14 @@ router.post(
           SELECT 1 FROM shift_logs sl
           WHERE sl.nurse_id = lr.accepted_by_nurse_id
             AND sl.shift_date = lr.shift_date
+        )
+        -- Configured cells carry saved timings; configured missed-shift handling
+        -- records those locum no-shows instead of these legacy 08:00/17:00 times.
+        AND NOT EXISTS (
+          SELECT 1 FROM shift_assignments ca
+          WHERE ca.nurse_id = lr.accepted_by_nurse_id
+            AND ca.shift_date = lr.shift_date
+            AND COALESCE(ca.shift_definition_run_id, ca.scheduling_run_id) IS NOT NULL
         )
     `);
 

@@ -39,10 +39,29 @@ export const Route = createFileRoute("/_app/locum")({
 type LocumStatus = "pending" | "approved" | "declined" | "invites_sent" | "filled" | "expired";
 type InviteStatus = "pending" | "accepted" | "declined" | "unavailable";
 
+type LocumShiftOption = { code: string; name: string; startsAt: string };
+
+// Requests created after shift definitions became configurable carry their own
+// name; older requests are always legacy Morning/Night.
+function locumShiftLabel(req?: { shift: string; shift_name?: string | null } | null) {
+  if (!req) return "—";
+  return (
+    req.shift_name ??
+    ({ M: "Morning", N: "Night" } as Record<string, string>)[req.shift] ??
+    req.shift
+  );
+}
+
+function fmtTime(iso: string) {
+  return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
+}
+
 type LocumRequest = {
   id: string;
   shift_date: string;
-  shift: "M" | "N";
+  shift: string;
+  shift_name?: string | null;
+  shift_starts_at?: string | null;
   facility: string;
   ward: string;
   nurses_in_ward: number;
@@ -167,7 +186,9 @@ function LocumPage() {
   // CNO (and admin, since admin is in approve_locum defaults) see all facilities.
   // Chief Matron / Head Nurse are scoped to their own facility.
   const canFilterLocumFacility = isCNO;
-  const lockedLocumFacility: string | null = canFilterLocumFacility ? null : (nurseFacility ?? null);
+  const lockedLocumFacility: string | null = canFilterLocumFacility
+    ? null
+    : (nurseFacility ?? null);
   const [selectedLocumFacility, setSelectedLocumFacility] = useState("");
   const locumFacility: string | null = lockedLocumFacility ?? (selectedLocumFacility || null);
   const isNurse = activeRole !== null && NURSE_TIER_ROLES.some((r) => r === activeRole);
@@ -280,7 +301,7 @@ function LocumPage() {
 
   async function handleCreate(form: {
     shift_date: string;
-    shift: "M" | "N";
+    shift: string;
     facility: string;
     ward: string;
     nurses_in_ward: number;
@@ -312,7 +333,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum shift requested",
-      `${form.ward} · ${form.shift === "M" ? "Morning" : "Night"} · ${fmtDate(form.shift_date)}`,
+      `${form.ward} · ${locumShiftLabel(form)} · ${fmtDate(form.shift_date)}`,
     );
     toast.success("Locum request submitted to CNO for review.");
     qc.invalidateQueries({ queryKey: ["locum-my"] });
@@ -339,7 +360,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum request approved",
-      `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)}`,
+      `${req.ward} · ${locumShiftLabel(req)} · ${fmtDate(req.shift_date)}`,
     );
     toast.success("Request approved. The matron can now send invites.");
     qc.invalidateQueries({ queryKey: ["locum-pending"] });
@@ -368,7 +389,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum request declined",
-      `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)}`,
+      `${req.ward} · ${locumShiftLabel(req)} · ${fmtDate(req.shift_date)}`,
     );
     toast.success("Request declined. The matron has been notified.");
     qc.invalidateQueries({ queryKey: ["locum-pending"] });
@@ -415,7 +436,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum invites sent",
-      `${req.ward} · ${req.shift === "M" ? "Morning" : "Night"} · ${fmtDate(req.shift_date)} · ${uniqueNurses.length} nurse${uniqueNurses.length !== 1 ? "s" : ""}`,
+      `${req.ward} · ${locumShiftLabel(req)} · ${fmtDate(req.shift_date)} · ${uniqueNurses.length} nurse${uniqueNurses.length !== 1 ? "s" : ""}`,
     );
     toast.success(
       `Locum invites sent to ${uniqueNurses.length} nurse${uniqueNurses.length !== 1 ? "s" : ""}.`,
@@ -428,11 +449,20 @@ function LocumPage() {
   }
 
   async function handleAcceptInvite(invite: LocumInvite) {
-    // Atomic: only claim if the request is still open (status=invites_sent)
-    const claimed = await api.post<LocumRequest | null>(
-      `/locum/requests/${invite.locum_request_id}/claim`,
-      { accepted_by_nurse_id: nurseId, accepted_by_nurse_name: fullName ?? "Nurse" },
-    );
+    // Atomic: the server claims the slot and updates this nurse's OFF rota cell together,
+    // rejecting the claim (409) when the rota no longer permits the duty.
+    let claimed: (LocumRequest & { rota_updated?: boolean }) | null;
+    try {
+      claimed = await api.post<(LocumRequest & { rota_updated?: boolean }) | null>(
+        `/locum/requests/${invite.locum_request_id}/claim`,
+        { accepted_by_nurse_id: nurseId, accepted_by_nurse_name: fullName ?? "Nurse" },
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not accept this locum shift.");
+      setRespondInvite(null);
+      setRespondAction(null);
+      return;
+    }
 
     if (!claimed) {
       await api
@@ -449,39 +479,8 @@ function LocumPage() {
       return;
     }
 
-    await api.patch(`/locum/invites/${invite.id}`, {
-      status: "accepted",
-      responded_at: new Date().toISOString(),
-    });
-
-    // Update this nurse's shift assignment OFF → locum shift type (always, for every acceptee)
-    let shiftFlipped = !invite.locum_request;
-    if (nurseId && invite.locum_request) {
-      try {
-        await api.patch(
-          `/shift-assignments?nurse_ids=${nurseId}&shift_date_from=${invite.locum_request.shift_date.slice(0, 10)}&shift_date_to=${invite.locum_request.shift_date.slice(0, 10)}&shift=OFF`,
-          { shift: invite.locum_request.shift },
-        );
-        shiftFlipped = true;
-      } catch {
-        shiftFlipped = false;
-        // Surface the desync to managers — the invite is accepted but the rota cell is
-        // still OFF and locked against editing until an admin reconciles it on the Rota page.
-        await api
-          .post("/notifications/upsert", [
-            {
-              user_id: invite.locum_request.requested_by,
-              notif_key: `locum_flip_failed_${invite.id}`,
-              is_read: false,
-            },
-          ])
-          .catch(() => {});
-        await logAudit(
-          "Locum shift-assignment update failed",
-          `${fullName ?? "Nurse"} accepted the invite but the rota cell for ${fmtDate(invite.locum_request.shift_date)} could not be updated — needs manual reconciliation on the Rota page.`,
-        );
-      }
-    }
+    // A retry of an already-accepted claim reports the rota state from the first claim.
+    const shiftFlipped = claimed.rota_updated !== false;
 
     // Only close remaining pending invites and notify matron/CNO when ALL spots are filled.
     // claimed.status stays 'invites_sent' until accepted count reaches nurses_needed.
@@ -522,7 +521,13 @@ function LocumPage() {
         const notifRows = [
           { user_id: req.requested_by, notif_key: `locum_filled_matron_${req.id}`, is_read: false },
           ...(req.reviewed_by
-            ? [{ user_id: req.reviewed_by, notif_key: `locum_filled_cno_${req.id}`, is_read: false }]
+            ? [
+                {
+                  user_id: req.reviewed_by,
+                  notif_key: `locum_filled_cno_${req.id}`,
+                  is_read: false,
+                },
+              ]
             : []),
         ];
         await api.post("/notifications/upsert", notifRows).catch(() => {});
@@ -531,7 +536,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum shift accepted",
-      `${invite.locum_request?.ward} · ${invite.locum_request?.shift === "M" ? "Morning" : "Night"} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
+      `${invite.locum_request?.ward} · ${locumShiftLabel(invite.locum_request)} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
     );
     if (!shiftFlipped) {
       toast.error(
@@ -563,7 +568,7 @@ function LocumPage() {
 
     await logAudit(
       "Locum invite declined",
-      `${invite.locum_request?.ward} · ${invite.locum_request?.shift === "M" ? "Morning" : "Night"} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
+      `${invite.locum_request?.ward} · ${locumShiftLabel(invite.locum_request)} · ${fmtDate(invite.locum_request?.shift_date ?? "")}`,
     );
     toast.success("Invite declined.");
     qc.invalidateQueries({ queryKey: ["locum-invites"] });
@@ -643,7 +648,9 @@ function LocumPage() {
       <div>
         <FacilityChips
           value={lockedLocumFacility ?? selectedLocumFacility}
-          onChange={(f) => { setSelectedLocumFacility(f); }}
+          onChange={(f) => {
+            setSelectedLocumFacility(f);
+          }}
           locked={!!lockedLocumFacility}
           showAll={canFilterLocumFacility}
         />
@@ -700,7 +707,9 @@ function LocumPage() {
           }}
         />
       )}
-      {tab === "status" && <AllRequestsView requests={facilityRequests} loading={facilityLoading} />}
+      {tab === "status" && (
+        <AllRequestsView requests={facilityRequests} loading={facilityLoading} />
+      )}
       {tab === "all" && <AllRequestsView requests={allRequests} loading={allLoading} />}
       {tab === "history" && (
         <LocumHistoryView requests={filledRequests} logs={locumLogs} loading={historyLoading} />
@@ -824,7 +833,7 @@ function InviteCard({
                 req?.shift === "M" ? "text-amber-600" : "text-blue-600",
               )}
             >
-              {req?.shift === "M" ? "Morning Shift" : "Night Shift"}
+              {locumShiftLabel(req)} Shift
             </span>
           </p>
           <p className="text-xs text-muted-foreground">
@@ -1030,88 +1039,88 @@ function LocumHistoryView({
       {/* Full log table */}
       <div className="rounded-lg border overflow-hidden">
         <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead className="bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
-            <tr>
-              <th className="text-left px-4 py-2.5">Date</th>
-              <th className="text-left px-4 py-2.5">Nurse</th>
-              <th className="text-left px-4 py-2.5">Ward</th>
-              <th className="text-left px-4 py-2.5">Facility</th>
-              <th className="text-center px-4 py-2.5">Shift</th>
-              <th className="text-center px-4 py-2.5">Hours</th>
-              <th className="text-left px-4 py-2.5">Late</th>
-              <th className="text-center px-4 py-2.5">Status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y">
-            {requests.map((r) => {
-              const log = r.accepted_by_nurse_id
-                ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
-                : undefined;
-              return (
-                <tr key={r.id} className="hover:bg-muted/20">
-                  <td className="px-4 py-2.5 text-xs">{fmtDate(r.shift_date)}</td>
-                  <td className="px-4 py-2.5 font-medium text-sm">
-                    {r.accepted_by_nurse_name ?? "—"}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.ward}</td>
-                  <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.facility}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span
-                      className={cn(
-                        "text-xs px-2 py-0.5 rounded-full font-semibold",
-                        r.shift === "M"
-                          ? "bg-amber-100 text-amber-700"
-                          : "bg-indigo-100 text-indigo-700",
-                      )}
-                    >
-                      {r.shift === "M" ? "Morning" : "Night"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-center text-xs font-semibold">
-                    {log?.hours_logged != null ? fmtH(log.hours_logged) : "—"}
-                  </td>
-                  <td className="px-4 py-2.5 text-xs">
-                    {log?.is_late ? (
+          <table className="w-full text-sm">
+            <thead className="bg-muted/50 text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-4 py-2.5">Date</th>
+                <th className="text-left px-4 py-2.5">Nurse</th>
+                <th className="text-left px-4 py-2.5">Ward</th>
+                <th className="text-left px-4 py-2.5">Facility</th>
+                <th className="text-center px-4 py-2.5">Shift</th>
+                <th className="text-center px-4 py-2.5">Hours</th>
+                <th className="text-left px-4 py-2.5">Late</th>
+                <th className="text-center px-4 py-2.5">Status</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {requests.map((r) => {
+                const log = r.accepted_by_nurse_id
+                  ? logMap.get(`${r.accepted_by_nurse_id}|${r.shift_date.slice(0, 10)}`)
+                  : undefined;
+                return (
+                  <tr key={r.id} className="hover:bg-muted/20">
+                    <td className="px-4 py-2.5 text-xs">{fmtDate(r.shift_date)}</td>
+                    <td className="px-4 py-2.5 font-medium text-sm">
+                      {r.accepted_by_nurse_name ?? "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.ward}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{r.facility}</td>
+                    <td className="px-4 py-2.5 text-center">
                       <span
-                        className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
-                        title={log.late_reason ?? undefined}
-                      >
-                        {log.late_minutes}m late
-                        {log.late_reason && (
-                          <span className="hidden sm:inline text-amber-600 max-w-35 truncate">
-                            — {log.late_reason}
-                          </span>
+                        className={cn(
+                          "text-xs px-2 py-0.5 rounded-full font-semibold",
+                          r.shift === "M"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-indigo-100 text-indigo-700",
                         )}
+                      >
+                        {locumShiftLabel(r)}
                       </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    {!log ? (
-                      <span className="text-xs text-muted-foreground">Not started</span>
-                    ) : !log.ended_at ? (
-                      <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                        Active
-                      </span>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">
-                        {new Date(log.ended_at).toLocaleString("en-GB", {
-                          day: "numeric",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </span>
-                    )}
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+                    </td>
+                    <td className="px-4 py-2.5 text-center text-xs font-semibold">
+                      {log?.hours_logged != null ? fmtH(log.hours_logged) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs">
+                      {log?.is_late ? (
+                        <span
+                          className="inline-flex items-center gap-1 text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full"
+                          title={log.late_reason ?? undefined}
+                        >
+                          {log.late_minutes}m late
+                          {log.late_reason && (
+                            <span className="hidden sm:inline text-amber-600 max-w-35 truncate">
+                              — {log.late_reason}
+                            </span>
+                          )}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      {!log ? (
+                        <span className="text-xs text-muted-foreground">Not started</span>
+                      ) : !log.ended_at ? (
+                        <span className="inline-flex items-center gap-1 text-xs text-emerald-700 font-medium">
+                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                          Active
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">
+                          {new Date(log.ended_at).toLocaleString("en-GB", {
+                            day: "numeric",
+                            month: "short",
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -1137,7 +1146,8 @@ function RequestCard({
 
   // Fetch the invite list when expanded and invites have been sent
   const showInvites =
-    expanded && (req.status === "invites_sent" || req.status === "filled" || req.status === "expired");
+    expanded &&
+    (req.status === "invites_sent" || req.status === "filled" || req.status === "expired");
   const { data: reqInvites = [] } = useQuery<LocumInvite[]>({
     queryKey: ["locum-invites-req", req.id],
     enabled: showInvites,
@@ -1159,7 +1169,7 @@ function RequestCard({
                 req.shift === "M" ? "bg-amber-50 text-amber-700" : "bg-blue-50 text-blue-700",
               )}
             >
-              {req.shift === "M" ? "Morning" : "Night"}
+              {locumShiftLabel(req)}
             </span>
             <span
               className={cn(
@@ -1273,9 +1283,16 @@ function RequestCard({
             <div className="flex items-start gap-2 bg-gray-50 border border-gray-200 rounded-md px-3 py-2.5">
               <Clock className="h-4 w-4 text-gray-500 shrink-0 mt-0.5" />
               <p className="text-xs text-gray-600">
-                Time elapsed — the shift's cutoff ({req.shift === "N" ? "4:00 PM" : "7:00 AM"} on{" "}
-                {fmtDate(req.shift_date)}) passed before the request was filled. No further action
-                can be taken on it.
+                Time elapsed — the shift's cutoff (
+                {req.shift_starts_at
+                  ? fmtTime(
+                      new Date(new Date(req.shift_starts_at).getTime() - 3600000).toISOString(),
+                    )
+                  : req.shift === "N"
+                    ? "4:00 PM"
+                    : "7:00 AM"}{" "}
+                on {fmtDate(req.shift_date)}) passed before the request was filled. No further
+                action can be taken on it.
               </p>
             </div>
           )}
@@ -1369,7 +1386,7 @@ function CreateRequestModal({
   onClose: () => void;
   onSubmit: (form: {
     shift_date: string;
-    shift: "M" | "N";
+    shift: string;
     facility: string;
     ward: string;
     nurses_in_ward: number;
@@ -1384,7 +1401,7 @@ function CreateRequestModal({
 
   const [busy, setBusy] = useState(false);
   const [shiftDate, setShiftDate] = useState(todayYmd());
-  const [shift, setShift] = useState<"M" | "N">("M");
+  const [shift, setShift] = useState("M");
   const [facility, setFacility] = useState(lockedFacility ?? facilities[0] ?? "");
   const [ward, setWard] = useState("");
   const [roleNeeded, setRoleNeeded] = useState("Nurse");
@@ -1396,6 +1413,21 @@ function CreateRequestModal({
   // Wards available for the selected facility
   const facilityWards = wards.filter((w) => w.facility === facility);
 
+  // Shift choices come from the facility's activated configuration for the date.
+  const { data: shiftOptions = [] } = useQuery({
+    queryKey: ["locum-shift-options", facility, shiftDate],
+    enabled: !!facility && !!shiftDate,
+    queryFn: async () => {
+      const res = await api.get<{ shifts: LocumShiftOption[] }>(
+        `/locum/shift-options?facility=${encodeURIComponent(facility)}&date=${shiftDate}`,
+      );
+      return res.shifts;
+    },
+  });
+  const selectedShift = shiftOptions.some((o) => o.code === shift)
+    ? shift
+    : (shiftOptions[0]?.code ?? "");
+
   function handleFacilityChange(f: string) {
     setFacility(f);
     setWard(""); // reset ward whenever facility changes
@@ -1405,6 +1437,7 @@ function CreateRequestModal({
     e.preventDefault();
     if (!shiftDate || !facility) return toast.error("Please select a facility.");
     if (!ward) return toast.error("Please select a ward.");
+    if (!selectedShift) return toast.error("No shifts are available for this date.");
     if (!nursesInWard || !ventPatients || !hduNurses)
       return toast.error("Please answer all assessment questions.");
     if (!nursesNeeded || parseInt(nursesNeeded) < 1)
@@ -1413,7 +1446,7 @@ function CreateRequestModal({
     try {
       await onSubmit({
         shift_date: shiftDate,
-        shift,
+        shift: selectedShift,
         facility,
         ward,
         nurses_in_ward: parseInt(nursesInWard),
@@ -1448,11 +1481,18 @@ function CreateRequestModal({
             <select
               aria-label="Shift type"
               className={inp}
-              value={shift}
-              onChange={(e) => setShift(e.target.value as "M" | "N")}
+              value={selectedShift}
+              onChange={(e) => setShift(e.target.value)}
+              disabled={!shiftOptions.length}
             >
-              <option value="M">Morning (M)</option>
-              <option value="N">Night (N)</option>
+              {!shiftOptions.length && (
+                <option value="">{facility ? "Loading shifts…" : "Select a facility first"}</option>
+              )}
+              {shiftOptions.map((o) => (
+                <option key={o.code} value={o.code}>
+                  {o.name} ({o.code}) · {fmtTime(o.startsAt)}
+                </option>
+              ))}
             </select>
           </Field>
         </div>
@@ -1651,9 +1691,7 @@ function ManageEligibleWardsModal({
             </div>
           </div>
         ))}
-        {!wards.length && (
-          <p className="text-sm text-muted-foreground italic">No wards found.</p>
-        )}
+        {!wards.length && <p className="text-sm text-muted-foreground italic">No wards found.</p>}
       </div>
       <div className="flex justify-end pt-4">
         <button
@@ -1714,8 +1752,7 @@ function ReviewModal({
             <span className="font-medium">Date:</span> {fmtDate(request.shift_date)}
           </p>
           <p>
-            <span className="font-medium">Shift:</span>{" "}
-            {request.shift === "M" ? "Morning" : "Night"}
+            <span className="font-medium">Shift:</span> {locumShiftLabel(request)}
           </p>
           <p>
             <span className="font-medium">Requested by:</span> {request.requested_by_name}
@@ -1817,7 +1854,13 @@ function SendInvitesModal({
       // 1. Get nurses at this facility — profile_id is included so no name-matching needed
       const facilityNurses = await api
         .get<
-          { id: string; name: string; role: string | null; ward: string | null; profile_id: string | null }[]
+          {
+            id: string;
+            name: string;
+            role: string | null;
+            ward: string | null;
+            profile_id: string | null;
+          }[]
         >(`/nurses?facility=${encodeURIComponent(request.facility)}`)
         .catch(() => []);
 
@@ -1838,7 +1881,10 @@ function SendInvitesModal({
       // 3. Filter by ward and role_needed.
       // startsWith so "Nursing Assistant" covers both "Nursing Assistant" and "Nursing Assistant - Day".
       const eligible = offNursesList.filter((n) => {
-        const inWard = (n.ward ?? "").split("|").map((w) => w.trim()).includes(request.ward);
+        const inWard = (n.ward ?? "")
+          .split("|")
+          .map((w) => w.trim())
+          .includes(request.ward);
         if (!inWard) return false;
         if (!request.role_needed) return true;
         return n.role?.toLowerCase().startsWith(request.role_needed.toLowerCase()) ?? false;
@@ -1876,8 +1922,8 @@ function SendInvitesModal({
             <span className="font-medium">Date:</span> {fmtDate(request.shift_date)}
           </p>
           <p>
-            <span className="font-medium">Shift:</span>{" "}
-            {request.shift === "M" ? "Morning" : "Night"} · {request.ward} · {request.facility}
+            <span className="font-medium">Shift:</span> {locumShiftLabel(request)} · {request.ward}{" "}
+            · {request.facility}
           </p>
         </div>
 
@@ -1991,11 +2037,13 @@ function RespondInviteModal({
           </p>
           <p>
             <span className="font-medium">Shift:</span>{" "}
-            {req?.shift === "M"
-              ? "Morning (08:00 – 17:00)"
-              : req?.shift === "N"
-                ? "Night (17:00 – 08:00)"
-                : "—"}
+            {req?.shift_starts_at
+              ? `${locumShiftLabel(req)} (starts ${fmtTime(req.shift_starts_at)})`
+              : req?.shift === "M"
+                ? "Morning (08:00 – 17:00)"
+                : req?.shift === "N"
+                  ? "Night (17:00 – 08:00)"
+                  : locumShiftLabel(req)}
           </p>
         </div>
 

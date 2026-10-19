@@ -2,7 +2,12 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { currentRotaStart } from "@/lib/rota-window";
+import { currentRotaStart, rotaToday } from "@/lib/rota-window";
+import {
+  assignmentScheduledHours,
+  assignmentTimeLabel,
+  type AssignmentDefinition,
+} from "@/lib/assignment-shift-definition";
 import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { useAuth } from "@/lib/auth-context";
 import { toast } from "sonner";
@@ -46,7 +51,7 @@ type ShiftLog = {
   id: string;
   nurse_id: string;
   shift_date: string;
-  shift_type: "M" | "N";
+  shift_type: string;
   started_at: string;
   ended_at: string | null;
   expected_end_at: string;
@@ -63,9 +68,9 @@ type ShiftLog = {
   is_missed: boolean;
 };
 
-type Assignment = {
+type Assignment = AssignmentDefinition & {
   id: string;
-  shift: "M" | "N" | "MWC" | "NC" | "OFF" | "LEAVE";
+  shift: string;
   shift_date: string;
   ward: string | null;
   status: string;
@@ -79,8 +84,7 @@ type PeriodHours = {
 };
 
 function todayYmd() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  return rotaToday();
 }
 
 function fmtTime(iso: string) {
@@ -103,7 +107,7 @@ function fmtHours(decHours: number) {
 }
 
 /** Calculate the expected end timestamp for a shift started at `startedAt`. */
-function calcExpectedEnd(shiftType: "M" | "N", startedAt: Date): Date {
+function calcExpectedEnd(shiftType: string, startedAt: Date): Date {
   const d = new Date(startedAt);
   if (shiftType === "M") {
     d.setHours(17, 0, 0, 0);
@@ -134,18 +138,17 @@ function isNightShift(shift: string) {
 function isWorkShift(shift: string) {
   return isMorningShift(shift) || isNightShift(shift);
 }
-/** Maps MWC→M and NC→N for shift_log recording (DB only stores M/N). */
-function normalizeShiftType(shift: string): "M" | "N" {
-  return isMorningShift(shift) ? "M" : "N";
+/** Configured cells carry their saved definition; any non-OFF/LEAVE code with one is work. */
+function isWorkAssignment(a: Assignment) {
+  if (a.shift === "OFF" || a.shift === "LEAVE") return false;
+  return !!a.scheduled_shift || !!a.shift_definition_error || isWorkShift(a.shift);
 }
-/** Hours implied by a published shift_assignments cell (9h M/MWC, 15h N/NC, 0h OFF).
- *  A LEAVE cell is credited using pre_leave_shift — the shift it covered before
- *  being flipped to LEAVE — so approved leave still counts toward the period total. */
-function scheduledHoursFor(shift: string, preLeaveShift: string | null): number {
-  const code = shift === "LEAVE" ? (preLeaveShift ?? "") : shift;
-  if (isMorningShift(code)) return 9;
-  if (isNightShift(code)) return 15;
-  return 0;
+/** Maps MWC→M and NC→N for shift_log recording; hospital-defined codes are logged as-is. */
+function normalizeShiftType(shift: string): string {
+  return isMorningShift(shift) ? "M" : isNightShift(shift) ? "N" : shift;
+}
+function shiftTypeLabel(code: string) {
+  return code === "M" ? "Morning" : code === "N" ? "Night" : code;
 }
 function shiftLabel(shift: string) {
   if (shift === "M") return "Morning Shift";
@@ -191,29 +194,34 @@ function ShiftPage() {
 
   // Today's rota assignment — poll every 30 s so the Start Shift button unlocks
   // automatically once an admin publishes the rota without the nurse needing to reload.
-  // Before 08:00 we first check yesterday for an N/NC shift still within its window
-  // (night shifts run 17:00 day D → 08:00 day D+1, so they span midnight).
+  // Check yesterday first for a saved overnight window that is still active.
   const { data: queryAssignment } = useQuery<Assignment | null>({
     queryKey: ["my-assignment", nurseId, today],
     enabled: !!nurseId,
     refetchInterval: 30000,
     queryFn: async () => {
-      // Matches the Night shift's actual window end (17:00 D → 08:00 D+1) — using a
-      // looser cutoff here (this was previously < 12, i.e. all morning) meant any
-      // legitimate new assignment for today (e.g. from an approved shift swap) was
-      // masked by yesterday's already-finished Night shift until noon.
-      if (new Date().getHours() < 8) {
-        const yd = new Date();
-        yd.setDate(yd.getDate() - 1);
-        const yesterdayStr = `${yd.getFullYear()}-${String(yd.getMonth() + 1).padStart(2, "0")}-${String(yd.getDate()).padStart(2, "0")}`;
+      // A finished overnight assignment must not hide today's assignment.
+      {
+        const yd = new Date(today + "T00:00:00Z");
+        yd.setUTCDate(yd.getUTCDate() - 1);
+        const yesterdayStr = yd.toISOString().slice(0, 10);
         const ydArr = await api.get<Assignment[]>(
-          `/shift-assignments?nurse_id=${nurseId}&shift_date=${yesterdayStr}&status=published&limit=1`,
+          `/shift-assignments?nurse_id=${nurseId}&shift_date=${yesterdayStr}&status=published&limit=1&include_shift_definition=true`,
         );
         const ydAssignment = ydArr[0] ?? null;
-        if (ydAssignment && isNightShift(ydAssignment.shift)) return ydAssignment;
+        if (ydAssignment && isWorkAssignment(ydAssignment)) {
+          const window = ydAssignment.scheduled_shift;
+          if (
+            window
+              ? Date.now() >= Date.parse(window.startsAt) && Date.now() < Date.parse(window.endsAt)
+              : isNightShift(ydAssignment.shift) &&
+                Date.now() < Date.parse(today + "T08:00:00+01:00")
+          )
+            return ydAssignment;
+        }
       }
       const arr = await api.get<Assignment[]>(
-        `/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1`,
+        `/shift-assignments?nurse_id=${nurseId}&shift_date=${today}&status=published&limit=1&include_shift_definition=true`,
       );
       return arr[0] ?? null;
     },
@@ -270,7 +278,7 @@ function ShiftPage() {
   // the shift_assignments row still reads "OFF" (e.g. RLS prevented the update).
   const { data: todayLocum } = useQuery<{
     id: string;
-    shift: "M" | "N";
+    shift: string;
     ward: string;
     facility: string;
   } | null>({
@@ -280,7 +288,7 @@ function ShiftPage() {
     queryFn: async () => {
       const arr = await api
         .get<
-          { id: string; shift: "M" | "N"; ward: string; facility: string }[]
+          { id: string; shift: string; ward: string; facility: string }[]
         >(`/locum/requests?accepted_by_nurse_id=${nurseId}&shift_date=${today}&status=filled&limit=1`)
         .catch(() => []);
       return arr[0] ?? null;
@@ -390,7 +398,12 @@ function ShiftPage() {
 
     // Determine the effective shift from locum or published assignment
     const effectiveShift = todayLocum?.shift ?? queryAssignment?.shift ?? null;
-    if (!effectiveShift || !isWorkShift(effectiveShift)) return;
+    // A claimed locum flips the nurse's own cell, so a configured cell with the
+    // same code holds the locum duty's saved timing.
+    const savedCell =
+      !todayLocum || queryAssignment?.shift === todayLocum.shift ? queryAssignment : null;
+    if (!effectiveShift || !(savedCell ? isWorkAssignment(savedCell) : isWorkShift(effectiveShift)))
+      return;
 
     // Schedule is only published when a real query-backed assignment (or locum) exists
     const schedulePublished = !!(todayLocum ?? queryAssignment);
@@ -401,12 +414,16 @@ function ShiftPage() {
     const endTime = new Date(assignmentDate + "T00:00:00");
     if (isNightShift(effectiveShift)) endTime.setDate(endTime.getDate() + 1);
     endTime.setHours(endHour, 0, 0, 0);
+    if (savedCell?.shift_definition_error) return;
+    if (savedCell?.scheduled_shift) endTime.setTime(Date.parse(savedCell.scheduled_shift.endsAt));
     if (now < endTime) return;
 
     missedRecordedRef.current = true;
     const shiftType = normalizeShiftType(effectiveShift);
     const officialStart = new Date(assignmentDate + "T00:00:00");
     officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
+    if (savedCell?.scheduled_shift)
+      officialStart.setTime(Date.parse(savedCell.scheduled_shift.startsAt));
 
     void (async () => {
       const winRows = await api
@@ -464,6 +481,12 @@ function ShiftPage() {
         shift_date: today,
         ward: `${todayLocum.ward} · ${todayLocum.facility}`,
         status: "published",
+        ...(queryAssignment?.shift === todayLocum.shift
+          ? {
+              scheduled_shift: queryAssignment.scheduled_shift,
+              shift_definition_error: queryAssignment.shift_definition_error,
+            }
+          : {}),
       }
     : null;
   const assignment = locumAssignment ?? queryAssignment ?? matronAssignment;
@@ -471,7 +494,13 @@ function ShiftPage() {
   // ── Actions ───────────────────────────────────────────────────────────────
 
   async function startShift(lateReason?: string, lateMins?: number) {
-    if (!nurseId || !assignment || !isWorkShift(assignment.shift)) return;
+    if (
+      !nurseId ||
+      !assignment ||
+      !isWorkAssignment(assignment) ||
+      assignment.shift_definition_error
+    )
+      return;
     // Re-entry guard: a slow network double-tap (main button or late-dialog confirm)
     // must not create two shift_log rows for the same shift.
     if (startingRef.current) return;
@@ -486,8 +515,12 @@ function ShiftPage() {
       // the 15-minute early window don't accumulate hours before the shift begins.
       const officialStart = new Date();
       officialStart.setHours(shiftType === "M" ? 8 : 17, 0, 0, 0);
+      if (assignment.scheduled_shift)
+        officialStart.setTime(Date.parse(assignment.scheduled_shift.startsAt));
       const startedAt = actualNow < officialStart ? officialStart : actualNow;
-      const expectedEnd = calcExpectedEnd(shiftType, startedAt);
+      const expectedEnd = assignment.scheduled_shift
+        ? new Date(assignment.scheduled_shift.endsAt)
+        : calcExpectedEnd(shiftType, startedAt);
       const geo = pendingGeoRef.current;
       pendingGeoRef.current = null;
 
@@ -520,13 +553,13 @@ function ShiftPage() {
         is_swap: !!todaySwap && !todaySwap.isDirect,
         swap_note:
           todaySwap && !todaySwap.isDirect
-            ? `Swap coverage for ${todaySwap.nurseAName} – ${todaySwap.shiftType === "M" ? "Morning" : "Night"} shift`
+            ? `Swap coverage for ${todaySwap.nurseAName} – ${shiftTypeLabel(todaySwap.shiftType)} shift`
             : null,
       });
 
       void logAudit(
         "Started shift",
-        `${fullName ?? "Nurse"} — ${shiftType === "M" ? "Morning" : "Night"} shift on ${fmtDate(assignment.shift_date)}${recordedLate ? ` (${lateMins}m late)` : ""}`,
+        `${fullName ?? "Nurse"} — ${assignment.scheduled_shift?.name ?? shiftTypeLabel(shiftType)} shift on ${fmtDate(assignment.shift_date)}${recordedLate ? ` (${lateMins}m late)` : ""}`,
       );
 
       setLateDialog({ open: false, reason: "", capturedMinutes: 0 });
@@ -568,19 +601,25 @@ function ShiftPage() {
 
   async function endShift(log: ShiftLog, isAuto = false) {
     const endedAt = isAuto ? new Date(log.expected_end_at) : new Date();
-    const hours = hoursLogged(log.started_at, endedAt.toISOString());
+    let hours = hoursLogged(log.started_at, endedAt.toISOString());
+    let creditedByServer = false;
 
     try {
-      await api.patch(`/shift-logs/${log.id}`, {
-        ended_at: endedAt.toISOString(),
-        hours_logged: hours,
-      });
+      const saved = await api.patch<{ hours_logged: number; hours_credited_by_server?: boolean }>(
+        `/shift-logs/${log.id}`,
+        {
+          ended_at: endedAt.toISOString(),
+          hours_logged: hours,
+        },
+      );
+      hours = Number(saved.hours_logged);
+      creditedByServer = !!saved.hours_credited_by_server;
     } catch (e) {
       return toast.error(e instanceof Error ? e.message : "Failed to end shift");
     }
 
     // Locum and swap-coverage hours are tracked separately — do not add to the nurse's regular monthly total.
-    if (nurseId && !log.is_locum && !log.is_swap)
+    if (nurseId && !log.is_locum && !log.is_swap && !creditedByServer)
       await api
         .post("/rpc/increment-nurse-hours", { p_nurse_id: nurseId, p_hours: hours })
         .catch(() => {});
@@ -589,7 +628,7 @@ function ShiftPage() {
       toast.success(`Shift ended — ${fmtHours(hours)} logged`);
       void logAudit(
         "Ended shift",
-        `${fullName ?? "Nurse"} — ${log.shift_type === "M" ? "Morning" : "Night"} shift on ${fmtDate(log.shift_date)} (${fmtHours(hours)})`,
+        `${fullName ?? "Nurse"} — ${shiftTypeLabel(log.shift_type)} shift on ${fmtDate(log.shift_date)} (${fmtHours(hours)})`,
       );
     }
     qc.invalidateQueries({ queryKey: ["my-shift-log"] });
@@ -604,7 +643,9 @@ function ShiftPage() {
   // Anchored to assignment.shift_date so night shifts that span midnight
   // (e.g. assigned July 11 but viewed on July 12 at 02:00) compute correctly.
   const shiftStartTime = (() => {
-    if (!assignment || !isWorkShift(assignment.shift)) return null;
+    if (!assignment || !isWorkAssignment(assignment) || assignment.shift_definition_error)
+      return null;
+    if (assignment.scheduled_shift) return new Date(assignment.scheduled_shift.startsAt);
     const t = new Date(assignment.shift_date.slice(0, 10) + "T00:00:00");
     t.setHours(isMorningShift(assignment.shift) ? 8 : 17, 0, 0, 0);
     return t;
@@ -613,7 +654,9 @@ function ShiftPage() {
   // The official end time (used to detect a missed shift).
   // M / MWC → 17:00 on shift_date; N / NC → 08:00 on shift_date + 1 day.
   const shiftEndTime = (() => {
-    if (!assignment || !isWorkShift(assignment.shift)) return null;
+    if (!assignment || !isWorkAssignment(assignment) || assignment.shift_definition_error)
+      return null;
+    if (assignment.scheduled_shift) return new Date(assignment.scheduled_shift.endsAt);
     const t = new Date(assignment.shift_date.slice(0, 10) + "T00:00:00");
     if (isNightShift(assignment.shift)) t.setDate(t.getDate() + 1);
     t.setHours(isNightShift(assignment.shift) ? 8 : 17, 0, 0, 0);
@@ -642,7 +685,7 @@ function ShiftPage() {
   // Check published status directly from the DB-backed sources — never the matron fallback,
   // which has status:"published" hardcoded and would otherwise bypass the published gate.
   const isSchedulePublished = !!(locumAssignment ?? queryAssignment);
-  const hasShiftToday = !!(assignment && isWorkShift(assignment.shift));
+  const hasShiftToday = !!(assignment && isWorkAssignment(assignment));
   const isActive = shiftLog && !shiftLog.ended_at;
   const isEnded = shiftLog && !!shiftLog.ended_at;
   // Shift window closed without a log being started → missed.
@@ -682,9 +725,15 @@ function ShiftPage() {
             </p>
             {hasShiftToday ? (
               <p className="text-2xl font-bold mt-1">
-                {shiftLabel(assignment.shift)}
-                <span className="ml-2 text-sm font-normal text-muted-foreground">
-                  {shiftTimeLabel(assignment.shift)}
+                {assignment.shift_definition_error
+                  ? "Shift definition needs review"
+                  : (assignment.scheduled_shift?.name ?? shiftLabel(assignment.shift))}
+                <span className="mt-1 block text-sm font-normal text-muted-foreground sm:ml-2 sm:mt-0 sm:inline">
+                  {assignment.shift_definition_error
+                    ? "Contact your administrator"
+                    : assignment.scheduled_shift
+                      ? assignmentTimeLabel(assignment.scheduled_shift)
+                      : shiftTimeLabel(assignment.shift)}
                 </span>
                 {todayLocum && (
                   <span className="ml-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-violet-100 text-violet-700 border border-violet-200">
@@ -1204,7 +1253,7 @@ function AllNursesShiftView() {
   // Total hours each nurse is rostered for in the current period, computed from her
   // own published shift_assignments, using the same calendar period as live totals.
   const { data: periodAssignments = [] } = useQuery<
-    { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
+    (AssignmentDefinition & { nurse_id: string })[]
   >({
     queryKey: ["all-period-assignments", currentPeriodStart],
     enabled: !!livePeriod,
@@ -1215,16 +1264,18 @@ function AllNursesShiftView() {
       const periodEnd = `${periodEndDate.getFullYear()}-${String(periodEndDate.getMonth() + 1).padStart(2, "0")}-${String(periodEndDate.getDate()).padStart(2, "0")}`;
       return api
         .get<
-          { nurse_id: string; shift: string; pre_leave_shift: string | null }[]
-        >(`/shift-assignments?from=${periodStart}&to=${periodEnd}&status=published`)
+          (AssignmentDefinition & { nurse_id: string })[]
+        >(`/shift-assignments?from=${periodStart}&to=${periodEnd}&status=published&include_shift_definition=true`)
         .catch(() => []);
     },
   });
 
   const scheduledHoursMap = new Map<string, number>();
+  const unknownScheduledHours = new Set<string>();
   for (const a of periodAssignments) {
-    const h = scheduledHoursFor(a.shift, a.pre_leave_shift);
-    if (h > 0) scheduledHoursMap.set(a.nurse_id, (scheduledHoursMap.get(a.nurse_id) ?? 0) + h);
+    const h = assignmentScheduledHours(a);
+    if (h === null) unknownScheduledHours.add(a.nurse_id);
+    else scheduledHoursMap.set(a.nurse_id, (scheduledHoursMap.get(a.nurse_id) ?? 0) + h);
   }
 
   function openEndModal(nurseId: string, nurseName: string) {
@@ -1254,12 +1305,16 @@ function AllNursesShiftView() {
         toast.error("End time must be after shift start time");
         return;
       }
-      const hours = Math.round(((endedAt.getTime() - startedAt.getTime()) / 3600000) * 100) / 100;
-      await api.patch(`/shift-logs/${endModal.logId}`, {
-        ended_at: endedAt.toISOString(),
-        hours_logged: hours,
-      });
-      if (!endModal.isLocum && !endModal.isSwap && hours > 0) {
+      let hours = Math.round(((endedAt.getTime() - startedAt.getTime()) / 3600000) * 100) / 100;
+      const saved = await api.patch<{ hours_logged: number; hours_credited_by_server?: boolean }>(
+        `/shift-logs/${endModal.logId}`,
+        {
+          ended_at: endedAt.toISOString(),
+          hours_logged: hours,
+        },
+      );
+      hours = Number(saved.hours_logged);
+      if (!endModal.isLocum && !endModal.isSwap && hours > 0 && !saved.hours_credited_by_server) {
         await api
           .post("/rpc/increment-nurse-hours", { p_nurse_id: endModal.nurseId, p_hours: hours })
           .catch(() => {});
@@ -1390,8 +1445,11 @@ function AllNursesShiftView() {
                 // from her own shift_assignments (9h per M/MWC, 15h per N/NC — including
                 // LEAVE cells via pre_leave_shift) — not the manually-set target_hours,
                 // which is a fixed figure that doesn't reflect what she's really scheduled.
-                const target = scheduledHoursMap.get(n.id) || n.target_hours || 180;
-                const pct = Math.min(Math.round((hrs / target) * 100), 100);
+                const target = unknownScheduledHours.has(n.id)
+                  ? null
+                  : (scheduledHoursMap.get(n.id) ?? n.target_hours ?? 180);
+                const pct =
+                  target && target > 0 ? Math.min(Math.round((hrs / target) * 100), 100) : 0;
                 const activeEntry = activeMap.get(n.id);
                 const isActive = !!activeEntry;
                 return (
@@ -1408,14 +1466,18 @@ function AllNursesShiftView() {
                     <td className="px-4 py-3 text-right tabular-nums font-semibold">
                       {fmtHours(hrs)}
                       <span className="text-xs font-normal text-muted-foreground ml-1">
-                        / {Math.round(target)}h
+                        {target === null
+                          ? "/ scheduled hours unavailable"
+                          : `/ ${fmtHours(target)}`}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       <div className="h-2 rounded-full bg-muted overflow-hidden w-32">
                         <Progress value={pct} className="h-full rounded-full" />
                       </div>
-                      <p className="text-[10px] text-muted-foreground mt-0.5">{pct}%</p>
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        {target === null ? "Shift definition needs review" : `${pct}%`}
+                      </p>
                     </td>
                     <td className="px-4 py-3 text-right">
                       {lateCount > 0 ? (

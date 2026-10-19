@@ -16,6 +16,7 @@
 // the existing bell UI in AppShell.tsx picks these up with no extra wiring.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 
 // Arbitrary fixed key for this job's mutex, distinct from AUTO_END_LOCK_KEY
 // (729312) and AUTO_DECLINE_LOCK_KEY (729313) — see jobs/auto-end-shifts.js for
@@ -51,7 +52,9 @@ async function runAutoExpireLocumRequests() {
          SELECT 1 FROM locum_invites li
          WHERE li.locum_request_id = lr.id AND li.status = 'accepted'
        )
-       AND (
+       AND COALESCE(
+         -- Requests record their configured start; the cutoff is one hour before it.
+         lr.shift_starts_at - INTERVAL '1 hour',
          CASE WHEN lr.shift = 'N'
            THEN (lr.shift_date::timestamp + INTERVAL '16 hours') AT TIME ZONE 'Africa/Lagos'
            ELSE (lr.shift_date::timestamp + INTERVAL '7 hours') AT TIME ZONE 'Africa/Lagos'
@@ -105,13 +108,18 @@ async function notify(userId, notifKey) {
 }
 
 function startAutoExpireLocumJob() {
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoExpireLocumRequests()).catch((err) =>
+      console.error("[auto-expire-locum-requests] hospital loop failed:", err.message),
+    );
   // Run once immediately on startup to catch anything that expired while the
   // server was down — this also backfills any currently pending/approved/
   // invites_sent requests already past their cutoff from before this job existed.
-  autoExpireLocumRequests();
+  tick();
   // Then run every 5 minutes via cron.
-  cron.schedule("*/5 * * * *", autoExpireLocumRequests);
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-expire-locum] Auto-expire locum job started (runs every 5 minutes)");
 }
 
-module.exports = { startAutoExpireLocumJob };
+module.exports = { startAutoExpireLocumJob, runAutoExpireLocumRequests };

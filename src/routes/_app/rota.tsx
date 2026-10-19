@@ -1,5 +1,12 @@
 /* eslint-disable prettier/prettier */
+import { useHospitalFacilities } from "@/lib/use-hospital-facilities";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import {
+  assignmentDescription,
+  scheduledHoursByNurse,
+  type AssignmentDefinition,
+  type ScheduledShift,
+} from "@/lib/assignment-shift-definition";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -29,11 +36,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
-  isInternType,
-  isGlobalHead,
-  isMatron,
-  isPorterType,
-  SHIFT_TIMES,
   summariseViolations,
   type ShiftCode,
   type NurseInput,
@@ -41,6 +43,7 @@ import {
   type LeaveInput,
   type ExtraShift,
 } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType, isMatron, isPorterType } from "@/lib/role-groups";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -69,7 +72,6 @@ export const Route = createFileRoute("/_app/rota")({
 });
 
 const DAYS = 28;
-const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"];
 
 const shiftStyles: Record<ShiftCode, string> = {
   M: "bg-amber-100 text-amber-900 border-amber-200",
@@ -79,6 +81,12 @@ const shiftStyles: Record<ShiftCode, string> = {
   NC: "bg-purple-200 text-purple-900 border-purple-300",
   MWC: "bg-cyan-100 text-cyan-900 border-cyan-200",
 };
+// Hospital-defined codes have no fixed palette entry; they share one style and
+// are identified by their code and saved name.
+const customShiftStyle = "bg-teal-100 text-teal-900 border-teal-200";
+function shiftClass(code: string) {
+  return shiftStyles[code as ShiftCode] ?? customShiftStyle;
+}
 
 // Short cell labels for each leave type — cells are tiny (10px font), so
 // full names like "Compassionate Leave" don't fit. Falls back to the
@@ -113,7 +121,9 @@ function ymd(d: Date) {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
-type Assignment = {
+type Assignment = AssignmentDefinition & {
+  shift_definition_run_id?: string | null;
+  scheduling_run_id?: string | null;
   id: string;
   nurse_id: string;
   ward: string | null;
@@ -133,6 +143,7 @@ type GenForm = {
 type FacilityWideGroup = "matron" | "head" | "porter" | "intern";
 
 function RotaPage() {
+  const FACILITIES = useHospitalFacilities();
   const {
     canEditRota,
     canAutoGenerate,
@@ -300,20 +311,20 @@ function RotaPage() {
           n.ward ? parseWards(n.ward).includes(wardName) : false,
         );
       } else if (targetWardSlug === "matron") {
-        scopedNurses = scopedNurses.filter((n) => isMatron(n.role));
+        scopedNurses = scopedNurses.filter((n) => isMatron(n.role, n.facility));
       } else if (targetWardSlug === "head") {
-        scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role));
+        scopedNurses = scopedNurses.filter((n) => isGlobalHead(n.role, n.facility));
       } else if (targetWardSlug === "porter") {
-        scopedNurses = scopedNurses.filter((n) => isPorterType(n.role));
+        scopedNurses = scopedNurses.filter((n) => isPorterType(n.role, n.facility));
       } else if (targetWardSlug === "intern") {
-        scopedNurses = scopedNurses.filter((n) => isInternType(n.role));
+        scopedNurses = scopedNurses.filter((n) => isInternType(n.role, n.facility));
       } else {
         scopedNurses = scopedNurses.filter(
           (n) =>
-            isMatron(n.role) ||
-            isGlobalHead(n.role) ||
-            isPorterType(n.role) ||
-            isInternType(n.role),
+            isMatron(n.role, n.facility) ||
+            isGlobalHead(n.role, n.facility) ||
+            isPorterType(n.role, n.facility) ||
+            isInternType(n.role, n.facility),
         );
       }
       await api.post("/shift-assignments/reapply-leave", {
@@ -376,9 +387,7 @@ function RotaPage() {
       // An archive provides a known boundary. The calendar advances this
       // anchor below if later periods have ended without being archived.
       if (latestArchivedPeriod?.period_end) {
-        const nextStart = new Date(
-          latestArchivedPeriod.period_end.slice(0, 10) + "T00:00:00",
-        );
+        const nextStart = new Date(latestArchivedPeriod.period_end.slice(0, 10) + "T00:00:00");
         nextStart.setDate(nextStart.getDate() + 1);
         return ymd(nextStart);
       }
@@ -449,8 +458,7 @@ function RotaPage() {
   });
   // Most recent request for this unit/period (the API already orders by created_at DESC).
   const myEditRequest = myEditRequests[0] ?? null;
-  const hasActiveEditGrant =
-    myEditRequest?.status === "Approved" && !myEditRequest.revoked_at;
+  const hasActiveEditGrant = myEditRequest?.status === "Approved" && !myEditRequest.revoked_at;
   const [showEditRequestModal, setShowEditRequestModal] = useState(false);
   const [editRequestReason, setEditRequestReason] = useState("");
   const [submittingEditRequest, setSubmittingEditRequest] = useState(false);
@@ -531,7 +539,7 @@ function RotaPage() {
           ? `&nurse_ids=${displayNurseIds.join(",")}`
           : "";
       return api.get<Assignment[]>(
-        `/shift-assignments?from=${ymd(startDate)}&to=${ymd(endDate)}${nurseParam}${statusParam}`,
+        `/shift-assignments?from=${ymd(startDate)}&to=${ymd(endDate)}${nurseParam}${statusParam}&include_shift_definition=true&include_edit_options=true`,
       );
     },
   });
@@ -594,25 +602,7 @@ function RotaPage() {
   // leave-credited so the UI can show both the actual hours the nurse is to
   // work and the total including the hours leave replaced — not just a
   // merged figure.
-  const nurseScheduledHours = useMemo(() => {
-    const shiftHours = (shift: ShiftCode | null | undefined) =>
-      shift === "M" || shift === "MWC"
-        ? SHIFT_TIMES.M.hours
-        : shift === "N" || shift === "NC"
-          ? SHIFT_TIMES.N.hours
-          : 0;
-    const m = new Map<string, { worked: number; leave: number }>();
-    assignments.forEach((a) => {
-      const entry = m.get(a.nurse_id) ?? { worked: 0, leave: 0 };
-      if (a.shift === "LEAVE") {
-        entry.leave += shiftHours(a.pre_leave_shift);
-      } else {
-        entry.worked += shiftHours(a.shift);
-      }
-      m.set(a.nurse_id, entry);
-    });
-    return m;
-  }, [assignments]);
+  const nurseScheduledHours = useMemo(() => scheduledHoursByNurse(assignments), [assignments]);
 
   const extraShiftIds = useMemo(() => new Set(extraShifts.map((e) => e.nurseId)), [extraShifts]);
 
@@ -621,7 +611,7 @@ function RotaPage() {
   const internsAreScheduled = useMemo(() => {
     const facilityInternIds = new Set(
       nurses
-        .filter((n) => isInternType(n.role) && n.facility === effectiveFacility)
+        .filter((n) => isInternType(n.role, n.facility) && n.facility === effectiveFacility)
         .map((n) => n.id),
     );
     return assignments.some((a) => facilityInternIds.has(a.nurse_id) && a.status !== "draft");
@@ -638,10 +628,10 @@ function RotaPage() {
         scoped
           .filter(
             (n) =>
-              !isGlobalHead(n.role) &&
-              !isMatron(n.role) &&
-              !isPorterType(n.role) &&
-              !isInternType(n.role),
+              !isGlobalHead(n.role, n.facility) &&
+              !isMatron(n.role, n.facility) &&
+              !isPorterType(n.role, n.facility) &&
+              !isInternType(n.role, n.facility),
           )
           .map((n) => n.role)
           .filter(Boolean),
@@ -667,27 +657,31 @@ function RotaPage() {
       // matrons, coverage nurses and porters that appear in their ward's schedule.
       list = list.filter(
         (n) =>
-          isGlobalHead(n.role) ||
-          isMatron(n.role) ||
-          isPorterType(n.role) ||
+          isGlobalHead(n.role, n.facility) ||
+          isMatron(n.role, n.facility) ||
+          isPorterType(n.role, n.facility) ||
           parseWards(n.ward).includes(lockedWard),
       );
     } else if (selectedWard) {
       // Manager clicked a ward chip: strict ward-only. Exclude all facility-wide roles.
       list = list.filter(
         (n) =>
-          !isGlobalHead(n.role) &&
-          !isMatron(n.role) &&
-          !isPorterType(n.role) &&
-          !isInternType(n.role) &&
+          !isGlobalHead(n.role, n.facility) &&
+          !isMatron(n.role, n.facility) &&
+          !isPorterType(n.role, n.facility) &&
+          !isInternType(n.role, n.facility) &&
           parseWards(n.ward).includes(selectedWard),
       );
     } else if (selectedFacilityWide) {
       // Manager clicked a facility-wide card: show only that role group.
-      if (selectedFacilityWide === "matron") list = list.filter((n) => isMatron(n.role));
-      else if (selectedFacilityWide === "head") list = list.filter((n) => isGlobalHead(n.role));
-      else if (selectedFacilityWide === "porter") list = list.filter((n) => isPorterType(n.role));
-      else if (selectedFacilityWide === "intern") list = list.filter((n) => isInternType(n.role));
+      if (selectedFacilityWide === "matron")
+        list = list.filter((n) => isMatron(n.role, n.facility));
+      else if (selectedFacilityWide === "head")
+        list = list.filter((n) => isGlobalHead(n.role, n.facility));
+      else if (selectedFacilityWide === "porter")
+        list = list.filter((n) => isPorterType(n.role, n.facility));
+      else if (selectedFacilityWide === "intern")
+        list = list.filter((n) => isInternType(n.role, n.facility));
     }
     // else: no selection → all nurses in facility (separated visually in the grid)
 
@@ -877,10 +871,10 @@ function RotaPage() {
       const primaryWard = n.ward?.split("|")[0];
       if (
         primaryWard &&
-        !isGlobalHead(n.role) &&
-        !isMatron(n.role) &&
-        !isPorterType(n.role) &&
-        !isInternType(n.role)
+        !isGlobalHead(n.role, n.facility) &&
+        !isMatron(n.role, n.facility) &&
+        !isPorterType(n.role, n.facility) &&
+        !isInternType(n.role, n.facility)
       ) {
         nurseWardMap.set(n.id, primaryWard);
       }
@@ -913,10 +907,10 @@ function RotaPage() {
     return nurses.filter(
       (n) =>
         n.facility === effectiveFacility &&
-        !isGlobalHead(n.role) &&
-        !isMatron(n.role) &&
-        !isPorterType(n.role) &&
-        !isInternType(n.role) &&
+        !isGlobalHead(n.role, n.facility) &&
+        !isMatron(n.role, n.facility) &&
+        !isPorterType(n.role, n.facility) &&
+        !isInternType(n.role, n.facility) &&
         parseWards(n.ward)[0] === selectedWard &&
         !assignedIds.has(n.id),
     );
@@ -936,10 +930,10 @@ function RotaPage() {
     return nurses.filter(
       (n) =>
         n.facility === effectiveFacility &&
-        !isGlobalHead(n.role) &&
-        !isMatron(n.role) &&
-        !isPorterType(n.role) &&
-        !isInternType(n.role) &&
+        !isGlobalHead(n.role, n.facility) &&
+        !isMatron(n.role, n.facility) &&
+        !isPorterType(n.role, n.facility) &&
+        !isInternType(n.role, n.facility) &&
         parseWards(n.ward)[0] === selectedWard &&
         draftNurseIds.has(n.id) &&
         !nonDraftNurseIds.has(n.id),
@@ -953,10 +947,10 @@ function RotaPage() {
       ? nurses.filter((n) => n.facility === effectiveFacility)
       : nurses;
     const groups: { key: FacilityWideGroup; label: string; count: number }[] = [];
-    const matronCount = scoped.filter((n) => isMatron(n.role)).length;
-    const headCount = scoped.filter((n) => isGlobalHead(n.role)).length;
-    const porterCount = scoped.filter((n) => isPorterType(n.role)).length;
-    const internCount = scoped.filter((n) => isInternType(n.role)).length;
+    const matronCount = scoped.filter((n) => isMatron(n.role, n.facility)).length;
+    const headCount = scoped.filter((n) => isGlobalHead(n.role, n.facility)).length;
+    const porterCount = scoped.filter((n) => isPorterType(n.role, n.facility)).length;
+    const internCount = scoped.filter((n) => isInternType(n.role, n.facility)).length;
     if (matronCount > 0) groups.push({ key: "matron", label: "Matron", count: matronCount });
     if (headCount > 0) groups.push({ key: "head", label: "Coverage Nurse", count: headCount });
     if (porterCount > 0) groups.push({ key: "porter", label: "Porter", count: porterCount });
@@ -977,10 +971,10 @@ function RotaPage() {
       const nurse = nurseById.get(a.nurse_id);
       if (!nurse) continue;
       if (effectiveFacility && nurse.facility !== effectiveFacility) continue;
-      if (isMatron(nurse.role)) statuses.matron.push(a.status);
-      else if (isGlobalHead(nurse.role)) statuses.head.push(a.status);
-      else if (isPorterType(nurse.role)) statuses.porter.push(a.status);
-      else if (isInternType(nurse.role)) statuses.intern.push(a.status);
+      if (isMatron(nurse.role, nurse.facility)) statuses.matron.push(a.status);
+      else if (isGlobalHead(nurse.role, nurse.facility)) statuses.head.push(a.status);
+      else if (isPorterType(nurse.role, nurse.facility)) statuses.porter.push(a.status);
+      else if (isInternType(nurse.role, nurse.facility)) statuses.intern.push(a.status);
     }
     const dominant = (s: string[]): string => {
       if (!s.length) return "none";
@@ -1007,10 +1001,10 @@ function RotaPage() {
     const assignedIds = new Set(assignments.map((a) => a.nurse_id));
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
-      if (key === "matron") return fac.filter((n) => isMatron(n.role));
-      if (key === "head") return fac.filter((n) => isGlobalHead(n.role));
-      if (key === "porter") return fac.filter((n) => isPorterType(n.role));
-      return fac.filter((n) => isInternType(n.role));
+      if (key === "matron") return fac.filter((n) => isMatron(n.role, n.facility));
+      if (key === "head") return fac.filter((n) => isGlobalHead(n.role, n.facility));
+      if (key === "porter") return fac.filter((n) => isPorterType(n.role, n.facility));
+      return fac.filter((n) => isInternType(n.role, n.facility));
     };
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
@@ -1043,17 +1037,15 @@ function RotaPage() {
     );
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
-      if (key === "matron") return fac.filter((n) => isMatron(n.role));
-      if (key === "head") return fac.filter((n) => isGlobalHead(n.role));
-      if (key === "porter") return fac.filter((n) => isPorterType(n.role));
-      return fac.filter((n) => isInternType(n.role));
+      if (key === "matron") return fac.filter((n) => isMatron(n.role, n.facility));
+      if (key === "head") return fac.filter((n) => isGlobalHead(n.role, n.facility));
+      if (key === "porter") return fac.filter((n) => isPorterType(n.role, n.facility));
+      return fac.filter((n) => isInternType(n.role, n.facility));
     };
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
       if (facilityWideStatusMap[key] !== "none") {
-        const draftOnly = getGroup(key).filter(
-          (n) => draftIds.has(n.id) && !nonDraftIds.has(n.id),
-        );
+        const draftOnly = getGroup(key).filter((n) => draftIds.has(n.id) && !nonDraftIds.has(n.id));
         if (draftOnly.length) result.set(key, draftOnly);
       }
     }
@@ -1113,10 +1105,10 @@ function RotaPage() {
     // independently via their own cards — never included in a ward run.
     let wardNurses = facilityNurses.filter(
       (n) =>
-        !isGlobalHead(n.role) &&
-        !isMatron(n.role) &&
-        !isInternType(n.role) &&
-        !isPorterType(n.role),
+        !isGlobalHead(n.role, n.facility) &&
+        !isMatron(n.role, n.facility) &&
+        !isInternType(n.role, n.facility) &&
+        !isPorterType(n.role, n.facility),
     );
     wardNurses = wardNurses.filter((n) => parseWards(n.ward)[0] === genForm.ward);
 
@@ -1272,12 +1264,7 @@ function RotaPage() {
       //    period 1 stays "Current" until it naturally elapses; period 2 stays "Next".
       if (startOffset === 0) {
         qc.setQueryData(
-          [
-            "schedule-window-start",
-            activeRole,
-            genForm.facility,
-            latestArchivedPeriod?.period_end,
-          ],
+          ["schedule-window-start", activeRole, genForm.facility, latestArchivedPeriod?.period_end],
           genForm.startDate,
         );
         // Also update the display's anchor key — it's keyed by effectiveFacility (the toolbar
@@ -1327,10 +1314,10 @@ function RotaPage() {
       const wardNurseIds = facilityNurseList
         .filter(
           (n) =>
-            !isGlobalHead(n.role) &&
-            !isMatron(n.role) &&
-            !isPorterType(n.role) &&
-            !isInternType(n.role) &&
+            !isGlobalHead(n.role, n.facility) &&
+            !isMatron(n.role, n.facility) &&
+            !isPorterType(n.role, n.facility) &&
+            !isInternType(n.role, n.facility) &&
             parseWards(n.ward)[0] === selectedWard,
         )
         .map((n) => n.id);
@@ -1411,10 +1398,10 @@ function RotaPage() {
     const facilityNurses = nurses.filter((n) => n.facility === effectiveFacility);
     const allWardNurses = facilityNurses.filter(
       (n) =>
-        !isGlobalHead(n.role) &&
-        !isMatron(n.role) &&
-        !isInternType(n.role) &&
-        !isPorterType(n.role) &&
+        !isGlobalHead(n.role, n.facility) &&
+        !isMatron(n.role, n.facility) &&
+        !isInternType(n.role, n.facility) &&
+        !isPorterType(n.role, n.facility) &&
         parseWards(n.ward)[0] === selectedWard,
     );
 
@@ -1566,10 +1553,10 @@ function RotaPage() {
 
       const fac = nurses.filter((n) => n.facility === effectiveFacility);
       const getGroup = (k: FacilityWideGroup) => {
-        if (k === "matron") return fac.filter((n) => isMatron(n.role));
-        if (k === "head") return fac.filter((n) => isGlobalHead(n.role));
-        if (k === "porter") return fac.filter((n) => isPorterType(n.role));
-        return fac.filter((n) => isInternType(n.role));
+        if (k === "matron") return fac.filter((n) => isMatron(n.role, n.facility));
+        if (k === "head") return fac.filter((n) => isGlobalHead(n.role, n.facility));
+        if (k === "porter") return fac.filter((n) => isPorterType(n.role, n.facility));
+        return fac.filter((n) => isInternType(n.role, n.facility));
       };
       const allGroupNurses = getGroup(key);
       const facilityIds = fac.map((n) => n.id);
@@ -1705,10 +1692,10 @@ function RotaPage() {
 
     const facilityNurses = freshNurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
-      if (key === "matron") return facilityNurses.filter((n) => isMatron(n.role));
-      if (key === "head") return facilityNurses.filter((n) => isGlobalHead(n.role));
-      if (key === "porter") return facilityNurses.filter((n) => isPorterType(n.role));
-      return facilityNurses.filter((n) => isInternType(n.role));
+      if (key === "matron") return facilityNurses.filter((n) => isMatron(n.role, n.facility));
+      if (key === "head") return facilityNurses.filter((n) => isGlobalHead(n.role, n.facility));
+      if (key === "porter") return facilityNurses.filter((n) => isPorterType(n.role, n.facility));
+      return facilityNurses.filter((n) => isInternType(n.role, n.facility));
     };
     let targetNurses = getGroup(fwRoleGroup);
 
@@ -1903,12 +1890,12 @@ function RotaPage() {
       const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
       const getIds = (k: FacilityWideGroup) => {
         if (k === "matron")
-          return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isMatron(n.role, n.facility)).map((n) => n.id);
         if (k === "head")
-          return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isGlobalHead(n.role, n.facility)).map((n) => n.id);
         if (k === "porter")
-          return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
-        return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isPorterType(n.role, n.facility)).map((n) => n.id);
+        return facilityNurseList.filter((n) => isInternType(n.role, n.facility)).map((n) => n.id);
       };
       const ids = getIds(key);
       const BATCH = 200;
@@ -1938,12 +1925,12 @@ function RotaPage() {
       const facilityNurseList = nurses.filter((n) => n.facility === effectiveFacility);
       const getIds = (k: FacilityWideGroup) => {
         if (k === "matron")
-          return facilityNurseList.filter((n) => isMatron(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isMatron(n.role, n.facility)).map((n) => n.id);
         if (k === "head")
-          return facilityNurseList.filter((n) => isGlobalHead(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isGlobalHead(n.role, n.facility)).map((n) => n.id);
         if (k === "porter")
-          return facilityNurseList.filter((n) => isPorterType(n.role)).map((n) => n.id);
-        return facilityNurseList.filter((n) => isInternType(n.role)).map((n) => n.id);
+          return facilityNurseList.filter((n) => isPorterType(n.role, n.facility)).map((n) => n.id);
+        return facilityNurseList.filter((n) => isInternType(n.role, n.facility)).map((n) => n.id);
       };
       const ids = getIds(key);
       const BATCH = 200;
@@ -2063,6 +2050,7 @@ function RotaPage() {
 
   async function swapCells(a: Assignment, b: Assignment) {
     if (!canEdit) return;
+    const configured = !!(a.configured_edit || b.configured_edit);
     // Only swap cells that are both still in draft status, and neither is LEAVE.
     if (a.status !== "draft" || b.status !== "draft") return;
     if (a.shift === "LEAVE" || b.shift === "LEAVE") return;
@@ -2079,15 +2067,24 @@ function RotaPage() {
     );
 
     try {
-      await Promise.all([
-        api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
-        api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
-      ]);
+      if (configured)
+        await api.post("/shift-assignments/configured-swap", {
+          assignments: [a, b].map((cell) => ({
+            id: cell.id,
+            shift: cell.shift,
+            definitionRunId: cell.shift_definition_run_id ?? cell.scheduling_run_id,
+          })),
+        });
+      else
+        await Promise.all([
+          api.patch(`/shift-assignments/${a.id}`, { shift: b.shift }),
+          api.patch(`/shift-assignments/${b.id}`, { shift: a.shift }),
+        ]);
       const dateNote =
         a.shift_date.slice(0, 10) === b.shift_date.slice(0, 10)
           ? a.shift_date.slice(0, 10)
           : `${a.shift_date.slice(0, 10)} ↔ ${b.shift_date.slice(0, 10)}`;
-      await logAudit("Swapped shifts", dateNote);
+      if (!configured) await logAudit("Swapped shifts", dateNote);
     } catch (e: unknown) {
       qc.invalidateQueries({ queryKey: ["assignments"] }); // rollback
       toast.error(e instanceof Error ? e.message : "Swap failed");
@@ -2194,7 +2191,9 @@ function RotaPage() {
                   </p>
                   <p className="mt-0.5 opacity-80">
                     Request edit access from CNO before making changes
-                    {myEditRequest?.status === "Declined" ? " — your last request was declined." : "."}
+                    {myEditRequest?.status === "Declined"
+                      ? " — your last request was declined."
+                      : "."}
                   </p>
                 </>
               )}
@@ -2212,7 +2211,10 @@ function RotaPage() {
         )}
 
       {showEditRequestModal && (
-        <div className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/50" onClick={() => setShowEditRequestModal(false)}>
+        <div
+          className="fixed inset-0 z-50 grid place-items-center p-4 bg-black/50"
+          onClick={() => setShowEditRequestModal(false)}
+        >
           <div
             onClick={(e) => e.stopPropagation()}
             className="bg-card border rounded-xl shadow-card w-full max-w-sm p-5 space-y-3"
@@ -2816,7 +2818,15 @@ function RotaPage() {
         </div>
       )}
 
-      <Legend />
+      <Legend
+        custom={[
+          ...new Map(
+            assignments
+              .filter((a) => a.scheduled_shift && !(a.scheduled_shift.code in shiftStyles))
+              .map((a) => [a.scheduled_shift!.code, a.scheduled_shift!]),
+          ).values(),
+        ]}
+      />
 
       {/* Personal schedule banner */}
       {myOnly && (
@@ -2972,7 +2982,11 @@ function RotaPage() {
                         </td>
                         <td className="px-2 py-2 text-muted-foreground text-xs">
                           {(() => {
-                            if (isGlobalHead(n.role) || isMatron(n.role) || isPorterType(n.role))
+                            if (
+                              isGlobalHead(n.role, n.facility) ||
+                              isMatron(n.role, n.facility) ||
+                              isPorterType(n.role, n.facility)
+                            )
                               return "—";
                             const ws = parseWards(n.ward);
                             if (!ws.length) return "—";
@@ -2990,8 +3004,18 @@ function RotaPage() {
                         </td>
                         <td className="px-2 py-2 text-center text-xs font-medium tabular-nums">
                           {(() => {
-                            const { worked = 0, leave = 0 } = nurseScheduledHours.get(n.id) ?? {};
+                            const {
+                              worked = 0,
+                              leave = 0,
+                              unavailable = false,
+                            } = nurseScheduledHours.get(n.id) ?? {};
                             const total = worked + leave;
+                            if (unavailable)
+                              return (
+                                <span className="text-xs text-amber-700">
+                                  Scheduled hours unavailable
+                                </span>
+                              );
                             return (
                               <>
                                 <span
@@ -3100,12 +3124,15 @@ function RotaPage() {
                                   cell
                                     ? isLocum
                                       ? "bg-black text-white border-black"
-                                      : shiftStyles[cell.shift]
+                                      : shiftClass(cell.shift)
                                     : "bg-muted/30 text-muted-foreground/40 border-transparent hover:bg-muted",
                                   // Switch-covered cells keep their normal shift color (still a
                                   // real, legible M/N/etc.) but get a distinct ring so a switch
                                   // is visible at a glance without hiding what shift it actually is.
-                                  cell && isSwitch && !isLocum && "ring-2 ring-inset ring-sky-500 dark:ring-sky-400",
+                                  cell &&
+                                    isSwitch &&
+                                    !isLocum &&
+                                    "ring-2 ring-inset ring-sky-500 dark:ring-sky-400",
                                   isDragOver &&
                                     cell?.status === "draft" &&
                                     "ring-2 ring-primary scale-105",
@@ -3116,7 +3143,8 @@ function RotaPage() {
                                       ? "cursor-default"
                                       : "",
                                 )}
-                                title={
+                                title={[
+                                  assignmentDescription(cell),
                                   isWindowLocked
                                     ? windowLockStatus === "published"
                                       ? "Published — this schedule is locked"
@@ -3129,14 +3157,17 @@ function RotaPage() {
                                           ? "Shift switch — covers or replaces this nurse's original assignment"
                                           : canEdit
                                             ? "Click to cycle · drag to swap with same-day shift"
-                                            : "View only"
-                                }
+                                            : "View only",
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ")}
                               >
                                 {cell
                                   ? isLocum
                                     ? "LO"
                                     : cell.shift === "LEAVE"
-                                      ? (cell.leave_type && LEAVE_TYPE_ABBR[cell.leave_type]) || "LEAVE"
+                                      ? (cell.leave_type && LEAVE_TYPE_ABBR[cell.leave_type]) ||
+                                        "LEAVE"
                                       : cell.shift
                                   : "—"}
                                 {cell && isSwitch && !isLocum && (
@@ -3199,19 +3230,28 @@ function RotaPage() {
             className="fixed z-50 flex gap-1 rounded-lg border bg-card p-1.5 shadow-lg"
             style={{ left: shiftPicker.x, top: shiftPicker.y }}
           >
-            {(["M", "N", "NC", "MWC", "OFF"] as ShiftCode[]).map((s) => (
+            {(
+              assignments.find((a) => a.id === shiftPicker.existingId)?.configured_edit?.shifts ??
+              ["M", "N", "NC", "MWC", "OFF"].map((code) => ({ code, name: code }))
+            ).map(({ code: s, name }) => (
               <button
                 key={s}
                 type="button"
-                onClick={() => applyShift(s)}
+                onClick={() => applyShift(s as ShiftCode)}
+                title={name}
                 className={cn(
                   "min-w-9.5 rounded border px-2 py-1 text-[11px] font-bold transition hover:opacity-75",
-                  shiftStyles[s],
+                  shiftClass(s),
                 )}
               >
                 {s}
               </button>
             ))}
+            {assignments.find((a) => a.id === shiftPicker.existingId)?.configured_edit?.error && (
+              <span className="text-xs text-amber-700 p-2">
+                Saved role shift choices unavailable
+              </span>
+            )}
           </div>
         </>
       )}
@@ -3511,14 +3551,15 @@ function RotaPage() {
   );
 }
 
-function Legend() {
-  const items: { code: ShiftCode; label: string; time: string }[] = [
+function Legend({ custom = [] }: { custom?: ScheduledShift[] }) {
+  const items: { code: string; label: string; time: string }[] = [
     { code: "M", label: "Morning", time: "08:00–17:00" },
     { code: "N", label: "Night", time: "17:00–08:00" },
     { code: "NC", label: "Night Coverage", time: "17:00–08:00" },
     { code: "MWC", label: "Morning Weekend Coverage", time: "08:00–17:00" },
     { code: "OFF", label: "Off", time: "" },
     { code: "LEAVE", label: "Leave", time: "" },
+    ...custom.map((d) => ({ code: d.code, label: d.name, time: `${d.start}–${d.end}` })),
   ];
   return (
     <div className="flex flex-wrap items-center gap-2 mb-3 text-xs">
@@ -3527,7 +3568,7 @@ function Legend() {
           key={i.code}
           className={cn(
             "inline-flex items-center gap-1.5 px-2 py-1 rounded border",
-            shiftStyles[i.code],
+            shiftClass(i.code),
           )}
         >
           <span className="font-bold">{i.code}</span> {i.label}

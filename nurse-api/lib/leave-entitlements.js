@@ -1,3 +1,4 @@
+const { requestWindows } = require("./leave-entitlement-windows");
 const pool = require("../db");
 const {
   isMatron,
@@ -58,6 +59,22 @@ const LEAVE_ENTITLEMENTS = {
   Maternity: { days: 84, period: "year" },
   Sick: { days: 12, period: "month" },
 };
+
+// Each hospital sets its own default caps (portal setting
+// leave_entitlement_defaults, entered when the hospital is created). Hospitals
+// without the setting keep the system defaults above. Periods never change.
+async function hospitalDefaultCaps(queryable = pool) {
+  const { rows } = await queryable.query(
+    "SELECT value FROM portal_settings WHERE key = 'leave_entitlement_defaults'",
+  );
+  const saved = rows[0]?.value ?? {};
+  const out = {};
+  for (const [type, { days }] of Object.entries(LEAVE_ENTITLEMENTS)) {
+    const value = Number(saved[type]);
+    out[type] = Number.isFinite(value) && value >= 0 ? value : days;
+  }
+  return out;
+}
 
 function ymd(d) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -120,8 +137,16 @@ function chargeableDayPredicate(dayExpr, nurseExpr) {
       WHERE sa.nurse_id = ${nurseExpr}
         AND sa.shift_date = ${dayExpr}::date
         AND (
-          sa.shift IN (${WORKING_SHIFT_CODES_SQL})
-          OR sa.pre_leave_shift IN (${WORKING_SHIFT_CODES_SQL})
+          (
+            COALESCE(sa.shift_definition_run_id, sa.scheduling_run_id) IS NULL
+            AND (sa.shift IN (${WORKING_SHIFT_CODES_SQL})
+              OR sa.pre_leave_shift IN (${WORKING_SHIFT_CODES_SQL}))
+          )
+          OR (
+            COALESCE(sa.shift_definition_run_id, sa.scheduling_run_id) IS NOT NULL
+            AND CASE WHEN sa.shift = 'LEAVE' THEN sa.pre_leave_shift::text
+                     ELSE sa.shift::text END NOT IN ('OFF', 'LEAVE')
+          )
         )
     )
   )`;
@@ -169,6 +194,13 @@ async function isAnnualBlockedByMaternity(nurseId, year, opts = {}) {
 
 // Bulk version — one query for however many nurses, instead of one query per
 // nurse. Returns a Set of nurse_ids currently blocked for the given year.
+async function annualMaternityConflict(nurseId, fromDate, toDate, opts = {}) {
+  for (const window of requestWindows("year", fromDate, toDate)) {
+    if (await isAnnualBlockedByMaternity(nurseId, window.year, opts)) return window;
+  }
+  return null;
+}
+
 async function annualBlockedByMaternityForNurses(nurseIds, year) {
   if (nurseIds.length === 0) return new Set();
   const { rows } = await pool.query(
@@ -188,8 +220,8 @@ async function annualBlockedByMaternityForNurses(nurseIds, year) {
 // this precedence and why it's admin-only to set. `role` is the nurse's
 // literal role string (e.g. "Surgical Nurse - Day"); resolved to its role
 // GROUP key before matching against a role-scoped override.
-async function effectiveCap(nurseId, role, type) {
-  const { rows } = await pool.query(
+async function effectiveCap(nurseId, role, type, opts = {}) {
+  const { rows } = await (opts.queryable ?? pool).query(
     `SELECT days FROM leave_entitlement_overrides
       WHERE type = $3 AND (
         (scope = 'individual' AND nurse_id = $1) OR
@@ -199,7 +231,7 @@ async function effectiveCap(nurseId, role, type) {
       LIMIT 1`,
     [nurseId, roleGroupKey(role), type],
   );
-  return rows[0] ? Number(rows[0].days) : LEAVE_ENTITLEMENTS[type].days;
+  return rows[0] ? Number(rows[0].days) : (await hospitalDefaultCaps(opts.queryable ?? pool))[type];
 }
 
 // Same precedence as effectiveCap, but resolved for many nurses at once —
@@ -208,11 +240,8 @@ async function effectiveCap(nurseId, role, type) {
 // Returns { [nurseId]: { [type]: capNumber } }.
 async function effectiveCapsForNurses(nurses) {
   const out = {};
-  for (const n of nurses) {
-    out[n.id] = {};
-    for (const type of Object.keys(LEAVE_ENTITLEMENTS))
-      out[n.id][type] = LEAVE_ENTITLEMENTS[type].days;
-  }
+  const defaults = await hospitalDefaultCaps();
+  for (const n of nurses) out[n.id] = { ...defaults };
   if (nurses.length === 0) return out;
 
   const groupKeys = [...new Set(nurses.map((n) => roleGroupKey(n.role)))];
@@ -291,8 +320,8 @@ async function daysUsedFromRequests(nurseId, type, windowStart, windowEnd, opts 
 // Manually-credited days (leave taken before this system existed, or any
 // other case never submitted as a real request) for one nurse/type in the
 // current window — see migrations/033_leave_entitlement_adjustments.sql.
-async function daysUsedFromAdjustments(nurseId, type, period, year, month) {
-  const { rows } = await pool.query(
+async function daysUsedFromAdjustments(nurseId, type, period, year, month, opts = {}) {
+  const { rows } = await (opts.queryable ?? pool).query(
     period === "month"
       ? `SELECT COALESCE(SUM(days), 0) AS days FROM leave_entitlement_adjustments
           WHERE nurse_id = $1 AND type = $2 AND period_year = $3 AND period_month = $4`
@@ -348,32 +377,44 @@ async function wouldExceedEntitlement(nurseId, type, fromDate, toDate, opts = {}
   const entitlement = LEAVE_ENTITLEMENTS[type];
   if (!entitlement) return null;
 
-  const { rows: nurseRows } = await pool.query(`SELECT role FROM nurses WHERE id = $1`, [nurseId]);
-  const role = nurseRows[0]?.role ?? "";
-  const cap = await effectiveCap(nurseId, role, type);
-
-  const { start, end, year, month } = currentWindow(entitlement.period);
-  const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end, opts);
-  const usedFromAdjustments = await daysUsedFromAdjustments(
-    nurseId,
-    type,
-    entitlement.period,
-    year,
-    month,
+  const { rows: nurseRows } = await (opts.queryable ?? pool).query(
+    `SELECT role FROM nurses WHERE id = $1`,
+    [nurseId],
   );
-  const used = usedFromRequests + usedFromAdjustments;
+  const role = nurseRows[0]?.role ?? "";
+  const cap = await effectiveCap(nurseId, role, type, opts);
 
-  const overlapStart = fromDate > start ? fromDate : start;
-  const overlapEnd = toDate < end ? toDate : end;
-  const requestedDaysInWindow =
-    overlapStart <= overlapEnd
-      ? type === "Sick"
-        ? daysBetweenInclusive(overlapStart, overlapEnd)
-        : await countChargeableLeaveDays(nurseId, overlapStart, overlapEnd, opts)
-      : 0;
+  for (const { start, end, year, month } of requestWindows(entitlement.period, fromDate, toDate)) {
+    const usedFromRequests = await daysUsedFromRequests(nurseId, type, start, end, opts);
+    const usedFromAdjustments = await daysUsedFromAdjustments(
+      nurseId,
+      type,
+      entitlement.period,
+      year,
+      month,
+      opts,
+    );
+    const used = usedFromRequests + usedFromAdjustments;
 
-  if (used + requestedDaysInWindow > cap) {
-    return { cap, used, requestedDaysInWindow, period: entitlement.period };
+    const overlapStart = fromDate > start ? fromDate : start;
+    const overlapEnd = toDate < end ? toDate : end;
+    const requestedDaysInWindow =
+      overlapStart <= overlapEnd
+        ? type === "Sick"
+          ? daysBetweenInclusive(overlapStart, overlapEnd)
+          : await countChargeableLeaveDays(nurseId, overlapStart, overlapEnd, opts)
+        : 0;
+
+    if (used + requestedDaysInWindow > cap) {
+      return {
+        cap,
+        used,
+        requestedDaysInWindow,
+        period: entitlement.period,
+        windowStart: start,
+        windowEnd: end,
+      };
+    }
   }
   return null;
 }
@@ -532,7 +573,7 @@ async function upsertOverride({ scope, nurseId, role, type, days, createdBy, cre
          RETURNING *`
       : `INSERT INTO leave_entitlement_overrides (scope, role, type, days, created_by, created_by_name)
          VALUES ('role', $1, $2, $3, $4, $5)
-         ON CONFLICT (role, type) WHERE scope = 'role'
+         ON CONFLICT (hospital_id, role, type) WHERE scope = 'role'
          DO UPDATE SET days = EXCLUDED.days, created_by = EXCLUDED.created_by,
                         created_by_name = EXCLUDED.created_by_name, updated_at = NOW()
          RETURNING *`,
@@ -564,12 +605,14 @@ const ROLE_GROUP_OPTIONS = [
 
 module.exports = {
   LEAVE_ENTITLEMENTS,
+  hospitalDefaultCaps,
   ROLE_GROUP_OPTIONS,
   getEntitlementUsage,
   getEntitlementUsageForNurses,
   wouldExceedEntitlement,
   countChargeableLeaveDays,
   isAnnualBlockedByMaternity,
+  annualMaternityConflict,
   leaveYearForDate,
   createAdjustment,
   getAdjustmentHistory,

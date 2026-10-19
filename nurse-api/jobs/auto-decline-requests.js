@@ -15,6 +15,7 @@
 // picks these up with no frontend changes needed.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { checkDraftPeriodLeaveClosed } = require("../lib/rota-period-dates");
 
 // Mirrors leave-requests.js's own EXEMPT_LEAVE_TYPES (kept as a separate
@@ -36,7 +37,9 @@ async function getGraceTypes() {
   const { rows } = await pool.query(
     "SELECT value FROM portal_settings WHERE key = 'grace_leave_types'",
   );
-  return Array.isArray(rows[0]?.value) && rows[0].value.length ? rows[0].value : DEFAULT_GRACE_TYPES;
+  return Array.isArray(rows[0]?.value) && rows[0].value.length
+    ? rows[0].value
+    : DEFAULT_GRACE_TYPES;
 }
 
 async function autoDeclineExpiredRequests() {
@@ -201,10 +204,15 @@ async function notify(userId, notifKey) {
 }
 
 function startAutoDeclineJob() {
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoDeclineExpiredRequests()).catch((err) =>
+      console.error("[auto-decline-requests] hospital loop failed:", err.message),
+    );
   // Run once immediately on startup to catch anything that expired while the server was down.
-  autoDeclineExpiredRequests();
+  tick();
   // Then run every 5 minutes via cron.
-  cron.schedule("*/5 * * * *", autoDeclineExpiredRequests);
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-decline] Auto-decline job started (runs every 5 minutes)");
 }
 

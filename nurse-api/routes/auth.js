@@ -4,6 +4,7 @@ const jwt = require("jsonwebtoken");
 const crypto = require("crypto");
 const pool = require("../db");
 const { requireAuth } = require("../middleware/auth");
+const { runInHospital, runInPlatform } = require("../lib/tenant-context");
 const { requireCapability } = require("../middleware/capability");
 const { sendMail, portalUrl } = require("../lib/mailer");
 
@@ -13,18 +14,24 @@ const MAX_OTP_ATTEMPTS = 5;
 
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
-async function getPasswordExpiryDays() {
+// Password policy is a per-hospital setting, but accounts are shared. Inside a
+// hospital this reads that hospital's value; signed-out flows (platform scope)
+// apply the strictest value across hospitals.
+async function passwordSetting(key, aggregate) {
   const { rows } = await pool.query(
-    "SELECT value FROM portal_settings WHERE key = 'password_expiry_days'",
+    `SELECT ${aggregate}((value #>> '{}')::int) AS value FROM portal_settings
+     WHERE key = $1 AND (value #>> '{}') ~ '^[0-9]+$'`,
+    [key],
   );
-  return rows[0] ? parseInt(rows[0].value, 10) || 30 : 30;
+  return rows[0]?.value ?? null;
+}
+
+async function getPasswordExpiryDays() {
+  return (await passwordSetting("password_expiry_days", "MIN")) || 30;
 }
 
 async function getMinPasswordLength() {
-  const { rows } = await pool.query(
-    "SELECT value FROM portal_settings WHERE key = 'min_password_length'",
-  );
-  return rows[0] ? parseInt(rows[0].value, 10) || 8 : 8;
+  return (await passwordSetting("min_password_length", "MAX")) || 8;
 }
 
 function computeExpiresInDays(passwordChangedAt, expiryDays) {
@@ -128,78 +135,104 @@ router.post(
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
-    const [{ rows: roleRows }, expiryDays, { rows: overrideRows }] = await Promise.all([
-      pool.query("SELECT role FROM user_roles WHERE user_id = $1", [user.id]),
-      getPasswordExpiryDays(),
-      pool.query("SELECT capability_key FROM user_capability_overrides WHERE user_id = $1", [
-        user.id,
-      ]),
-    ]);
-    const roles = roleRows.map((r) => r.role);
-    const capabilityOverrides = overrideRows.map((r) => r.capability_key);
-    const isAdminUser = roles.includes("admin");
-    const passwordExpiresInDays = isAdminUser
-      ? null
-      : computeExpiresInDays(user.password_changed_at ?? new Date(), expiryDays);
-
-    // Reject expired passwords — admin must reset before the user can log back in.
-    if (passwordExpiresInDays !== null && passwordExpiresInDays <= 0) {
-      return res.status(401).json({
-        error: "Your password has expired. Contact your administrator to reset it.",
-      });
-    }
-
-    // Try direct profile_id link first (exact, no name-collision risk)
-    let { rows: nurseRows } = await pool.query(
-      "SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1",
+    // Sign in to the user's first hospital (super admins: the first hospital).
+    // Staff-record matching, capability overrides and the audit row are per hospital.
+    const {
+      rows: [home],
+    } = await pool.query(
+      `SELECT p.is_super_admin,
+         (SELECT h.id FROM hospitals h
+           WHERE p.is_super_admin OR EXISTS (
+             SELECT 1 FROM hospital_memberships m WHERE m.hospital_id = h.id AND m.user_id = p.id)
+           ORDER BY h.created_at, h.name LIMIT 1) AS hospital_id
+       FROM profiles p WHERE p.id = $1`,
       [user.id],
     );
-    if (!nurseRows[0]) {
-      const { rows: byName } = await pool.query(
-        "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
-        [user.full_name],
-      );
-      if (byName[0]) {
-        nurseRows = byName;
+    if (!home?.hospital_id)
+      return res.status(403).json({ error: "Your account is not assigned to a hospital" });
+
+    await runInHospital(
+      home.hospital_id,
+      async () => {
+        const [{ rows: roleRows }, expiryDays, { rows: overrideRows }] = await Promise.all([
+          pool.query("SELECT role FROM user_roles WHERE user_id = $1", [user.id]),
+          getPasswordExpiryDays(),
+          pool.query("SELECT capability_key FROM user_capability_overrides WHERE user_id = $1", [
+            user.id,
+          ]),
+        ]);
+        const roles = roleRows.map((r) => r.role);
+        // Super admins administer whichever hospital they enter.
+        if (home.is_super_admin && !roles.includes("admin")) roles.push("admin");
+        const capabilityOverrides = overrideRows.map((r) => r.capability_key);
+        const isAdminUser = roles.includes("admin");
+        const passwordExpiresInDays = isAdminUser
+          ? null
+          : computeExpiresInDays(user.password_changed_at ?? new Date(), expiryDays);
+
+        // Reject expired passwords — admin must reset before the user can log back in.
+        if (passwordExpiresInDays !== null && passwordExpiresInDays <= 0) {
+          return res.status(401).json({
+            error: "Your password has expired. Contact your administrator to reset it.",
+          });
+        }
+
+        // Try direct profile_id link first (exact, no name-collision risk)
+        let { rows: nurseRows } = await pool.query(
+          "SELECT id, facility FROM nurses WHERE profile_id = $1 LIMIT 1",
+          [user.id],
+        );
+        if (!nurseRows[0]) {
+          const { rows: byName } = await pool.query(
+            "SELECT id, facility FROM nurses WHERE LOWER(name) = LOWER($1) LIMIT 1",
+            [user.full_name],
+          );
+          if (byName[0]) {
+            nurseRows = byName;
+            pool
+              .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [user.id, byName[0].id])
+              .catch(() => {});
+          }
+        }
+        const nurse = nurseRows[0] ?? null;
+
+        const token = jwt.sign(
+          {
+            userId: user.id,
+            full_name: user.full_name,
+            roles,
+            mustChangePassword: user.must_change_password,
+          },
+          process.env.JWT_SECRET,
+          { expiresIn: "10h" },
+        );
+
         pool
-          .query("UPDATE nurses SET profile_id = $1 WHERE id = $2", [user.id, byName[0].id])
+          .query(
+            "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
+            ["Logged in", user.id, user.full_name, roles[0] ?? null],
+          )
           .catch(() => {});
-      }
-    }
-    const nurse = nurseRows[0] ?? null;
 
-    const token = jwt.sign(
-      {
-        userId: user.id,
-        full_name: user.full_name,
-        roles,
-        mustChangePassword: user.must_change_password,
+        res.json({
+          token,
+          user: {
+            id: user.id,
+            email: user.email,
+            full_name: user.full_name,
+            roles,
+            must_change_password: user.must_change_password,
+            password_expires_in_days: passwordExpiresInDays,
+            nurse_id: nurse?.id ?? null,
+            nurse_facility: nurse?.facility ?? null,
+            capability_overrides: capabilityOverrides,
+            hospital_id: home.hospital_id,
+            is_super_admin: home.is_super_admin,
+          },
+        });
       },
-      process.env.JWT_SECRET,
-      { expiresIn: "10h" },
+      user.id,
     );
-
-    pool
-      .query(
-        "INSERT INTO audit_logs (action, actor_id, actor_name, actor_role) VALUES ($1,$2,$3,$4)",
-        ["Logged in", user.id, user.full_name, roles[0] ?? null],
-      )
-      .catch(() => {});
-
-    res.json({
-      token,
-      user: {
-        id: user.id,
-        email: user.email,
-        full_name: user.full_name,
-        roles,
-        must_change_password: user.must_change_password,
-        password_expires_in_days: passwordExpiresInDays,
-        nurse_id: nurse?.id ?? null,
-        nurse_facility: nurse?.facility ?? null,
-        capability_overrides: capabilityOverrides,
-      },
-    });
   }),
 );
 
@@ -240,6 +273,7 @@ router.get(
     }
     const nurse = nurseRows[0] ?? null;
     const meRoles = roleRows.map((r) => r.role);
+    if (req.user.isSuperAdmin && !meRoles.includes("admin")) meRoles.push("admin");
     const isAdminUser = meRoles.includes("admin");
     const passwordExpiresInDays = isAdminUser
       ? null
@@ -251,6 +285,9 @@ router.get(
       nurse_id: nurse?.id ?? null,
       nurse_facility: nurse?.facility ?? null,
       capability_overrides: overrideRows.map((r) => r.capability_key),
+      // The hospital this request resolved to (from X-Hospital-Id or the default).
+      hospital_id: req.hospitalId,
+      is_super_admin: req.user.isSuperAdmin,
     });
   }),
 );
@@ -500,12 +537,16 @@ router.post(
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Prevent duplicate profiles for the same email
-    const { rows: existing } = await pool.query("SELECT id FROM profiles WHERE lower(email) = $1", [
-      normalizedEmail,
-    ]);
+    // Prevent duplicate profiles for the same email. Logins are global, so check
+    // every hospital; a person working in two hospitals is granted access instead.
+    const { rows: existing } = await runInPlatform(() =>
+      pool.query("SELECT id FROM profiles WHERE lower(email) = $1", [normalizedEmail]),
+    );
     if (existing.length > 0) {
-      return res.status(409).json({ error: "An account with this email already exists" });
+      return res.status(409).json({
+        error:
+          "An account with this email already exists. If they work in another hospital, ask a platform administrator to grant access.",
+      });
     }
 
     const hash = await bcrypt.hash(password, 12);

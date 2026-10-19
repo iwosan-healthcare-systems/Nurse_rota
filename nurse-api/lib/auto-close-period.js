@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { periodShiftReadiness } = require("./period-shift-readiness");
 
 async function closeCompletedPeriod() {
   const client = await pool.connect();
@@ -15,24 +16,19 @@ async function closeCompletedPeriod() {
     }
     const { rows: periodRows } = await client.query(`
       WITH published AS (
-        SELECT shift_date::date AS d,
-          CASE WHEN shift IN ('N', 'NC')
-            THEN (shift_date::timestamp + INTERVAL '1 day 8 hours') AT TIME ZONE 'Africa/Lagos'
-            ELSE (shift_date::timestamp + INTERVAL '17 hours') AT TIME ZONE 'Africa/Lagos'
-          END AS close_at
+        SELECT shift_date::date AS d
         FROM shift_assignments WHERE status = 'published'
       ), anchored AS (
-        SELECT d, close_at, MIN(d) OVER () AS anchor FROM published
+        SELECT d, MIN(d) OVER () AS anchor FROM published
       ), bucketed AS (
-        SELECT d, close_at, anchor + ((d - anchor) / 28) * 28 AS period_start
+        SELECT d, anchor + ((d - anchor) / 28) * 28 AS period_start
         FROM anchored
       ), periods AS (
         SELECT period_start, period_start + 27 AS period_end,
-          GREATEST(MAX(close_at),
-            (period_start + 28)::timestamp AT TIME ZONE 'Africa/Lagos') AS close_at
+          (period_start + 28)::timestamp AT TIME ZONE 'Africa/Lagos' AS close_at
         FROM bucketed GROUP BY period_start
       )
-      SELECT periods.period_start::text, periods.period_end::text
+      SELECT periods.period_start::text, periods.period_end::text, NOW() AS evaluated_at
       FROM periods
       WHERE close_at <= NOW()
         AND NOT EXISTS (
@@ -54,15 +50,25 @@ async function closeCompletedPeriod() {
       return empty;
     }
     const { period_start, period_end } = periodRows[0];
+    const readiness = await periodShiftReadiness(
+      client,
+      period_start,
+      period_end,
+      new Date(periodRows[0].evaluated_at),
+    );
+    if (!readiness.ready) {
+      await client.query("COMMIT");
+      return { ...empty, reason: readiness.reason, assignmentId: readiness.assignmentId };
+    }
 
     // Finalize overdue logs instead of waiting indefinitely for another job.
     // The archive and live counters below include these hours atomically.
     await client.query(
       `UPDATE shift_logs
        SET ended_at = expected_end_at,
-           hours_logged = GREATEST(0, ROUND(
+           hours_logged = CASE WHEN scheduling_definition IS NOT NULL THEN configured_attendance_hours(scheduling_definition,started_at,expected_end_at) ELSE GREATEST(0, ROUND(
              EXTRACT(EPOCH FROM (expected_end_at - started_at)) / 3600 * 100
-           ) / 100)
+           ) / 100) END
        WHERE shift_date BETWEEN $1::date AND $2::date
          AND ended_at IS NULL AND expected_end_at <= NOW()`,
       [period_start, period_end],

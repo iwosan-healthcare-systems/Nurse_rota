@@ -1,7 +1,18 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useHospitalFacilities } from "@/lib/use-hospital-facilities";
 import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { scheduleExportDefinitions } from "@/lib/schedule-export";
+import { assessScheduleStaffing, type StaffingAssignment } from "@/lib/schedule-staffing";
+import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
+import {
+  attendanceShiftLabel,
+  attendanceShiftKey,
+  attendanceShiftOptions,
+  attendanceDefinitionColumns,
+  type AttendanceDefinition,
+} from "@/lib/attendance-report";
 import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -31,10 +42,6 @@ import { toast } from "sonner";
 import { xlsWorkbook, xlsAddJsonSheet, xlsAddAoaSheet, xlsDownload } from "@/lib/excel-export";
 import { useAuth } from "@/lib/auth-context";
 import {
-  isGlobalHead,
-  isMatron,
-  isPorterType,
-  isInternType,
   isNADayType,
   enforceMinima,
   groupViolationsByDay,
@@ -43,6 +50,7 @@ import {
   type DraftAssignment,
   type SafetyViolation,
 } from "@/lib/auto-schedule";
+import { isGlobalHead, isInternType, isMatron, isPorterType } from "@/lib/role-groups";
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
@@ -72,14 +80,17 @@ const REPORTS_TABS: readonly ReportsTab[] = [
   "schedules",
 ];
 
+// Locum requests created from configured shifts store their name; older rows are M/N.
+function locumShiftName(r: { shift: string; shift_name?: string | null }) {
+  return r.shift_name ?? (r.shift === "M" ? "Morning" : r.shift === "N" ? "Night" : r.shift);
+}
+
 export const Route = createFileRoute("/_app/reports")({
   validateSearch: (search: Record<string, unknown>) => ({
     tab: REPORTS_TABS.includes(search.tab as ReportsTab) ? (search.tab as ReportsTab) : undefined,
   }),
   component: ReportsPage,
 });
-
-const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 // Display decimal hours as plain English — e.g. 0.2333 → "0 hours 14 minutes", 1.5 → "1 hour 30 minutes".
 function fmtHoursLog(decHours: number): string {
@@ -105,14 +116,20 @@ function fmtPercent(value: number): string {
 function periodProgress(row: PeriodHours) {
   const completed = num(row.total_hours);
   const assigned = num(row.assigned_hours);
+  const available = row.assigned_hours != null && !row.assigned_hours_error;
   const percentage = assigned > 0 ? (completed / assigned) * 100 : 0;
   const isCompleted = assigned > 0 && percentage >= 100;
   return {
+    available,
     completed,
     assigned,
     percentage,
     barValue: Math.min(100, Math.max(0, percentage)),
-    status: isCompleted ? "Completed" : `${fmtPercent(percentage)} completed`,
+    status: !available
+      ? "Scheduled hours unavailable"
+      : isCompleted
+        ? "Completed"
+        : `${fmtPercent(percentage)} completed`,
   };
 }
 
@@ -126,7 +143,7 @@ type Nurse = {
   hours_this_month: number;
   target_hours: number;
 };
-type ShiftLog = {
+type ShiftLog = AttendanceDefinition & {
   nurse_id: string;
   shift_date: string;
   shift_type: string;
@@ -182,6 +199,7 @@ type PeriodHours = {
   period_end: string;
   total_hours: number;
   assigned_hours: number | null;
+  assigned_hours_error?: string | null;
   total_shifts: number;
 };
 type LeaveRequest = {
@@ -226,11 +244,11 @@ const FW_LABELS: Record<FacilityWideGroup, string> = {
   naday: "Nursing Assistant - Day",
 };
 
-function roleGroupOf(role: string): FacilityWideGroup | null {
-  if (isMatron(role)) return "matron";
-  if (isGlobalHead(role)) return "head";
-  if (isPorterType(role)) return "porter";
-  if (isInternType(role)) return "intern";
+function roleGroupOf(role: string, facility?: string | null): FacilityWideGroup | null {
+  if (isMatron(role, facility)) return "matron";
+  if (isGlobalHead(role, facility)) return "head";
+  if (isPorterType(role, facility)) return "porter";
+  if (isInternType(role, facility)) return "intern";
   if (isNADayType(role)) return "naday";
   return null;
 }
@@ -345,7 +363,7 @@ function groupArchiveWindows(
     } else {
       ward = null;
       const role = row.nurse_role ?? nurseToRole.get(row.nurse_id) ?? "";
-      roleGroup = roleGroupOf(role);
+      roleGroup = roleGroupOf(role, fac);
       key = `${fac ?? "__NONE__"}|fw|${roleGroup ?? "other"}`;
     }
 
@@ -429,6 +447,7 @@ function ReportsPage() {
 }
 
 function ReportsContent() {
+  const FACILITIES = useHospitalFacilities();
   const qc = useQueryClient();
   const { canPrintStaff, canPrintSchedule, nurseFacility, isAdmin, activeRole } = useAuth();
 
@@ -465,7 +484,7 @@ function ReportsContent() {
   // Date range filters per tab (Today / Yesterday / Last Week / custom range)
   const [hoursRange, setHoursRange] = useState<DateRangeFilterValue>({ from: "", to: "" });
   const [hoursStatusFilter, setHoursStatusFilter] = useState<"all" | "running" | "ended">("all");
-  const [hoursShiftTypeFilter, setHoursShiftTypeFilter] = useState<"all" | "M" | "N">("all");
+  const [hoursShiftTypeFilter, setHoursShiftTypeFilter] = useState("all");
   const [hoursCategoryFilter, setHoursCategoryFilter] = useState<
     "all" | "regular" | "swap" | "leave"
   >("all");
@@ -481,7 +500,7 @@ function ReportsContent() {
   const [archiveStaffSearch, setArchiveStaffSearch] = useState("");
   const [archivePage, setArchivePage] = useState(1);
   const [archivePageSize, setArchivePageSize] = useState(20);
-  const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? FACILITIES[0]);
+  const [dirFacility, setDirFacility] = useState<string>(reportFacility ?? "");
   const [archiveFacility, setArchiveFacility] = useState<string>(reportFacility ?? "");
   const [archiveDownloading, setArchiveDownloading] = useState<string | null>(null);
 
@@ -614,7 +633,7 @@ function ReportsContent() {
     if (hoursStatusFilter === "running") data = data.filter((l) => !l.ended_at);
     if (hoursStatusFilter === "ended") data = data.filter((l) => !!l.ended_at);
     if (hoursShiftTypeFilter !== "all") {
-      data = data.filter((l) => l.shift_type === hoursShiftTypeFilter);
+      data = data.filter((l) => attendanceShiftKey(l) === hoursShiftTypeFilter);
     }
     if (hoursCategoryFilter === "swap") data = data.filter((l) => l.is_swap);
     else if (hoursCategoryFilter === "leave") data = data.filter((l) => l.is_leave);
@@ -945,7 +964,8 @@ function ReportsContent() {
 
   // Staff directory: nurses by selected facility, grouped by ward.
   // When a top-level facility chip is active, it takes priority over the tab's own sub-chip.
-  const effectiveDirFacility = reportFacility || dirFacility;
+  // Facilities load per hospital; default to the first once they arrive.
+  const effectiveDirFacility = reportFacility || dirFacility || FACILITIES[0] || "";
   const facilityNurses = useMemo(
     () => scopedNurses.filter((n) => n.facility === effectiveDirFacility),
     [scopedNurses, effectiveDirFacility],
@@ -1094,7 +1114,8 @@ function ReportsContent() {
           Role: nurse?.role ?? "",
           Ward: nurse?.ward ?? "",
           Date: fmtDate(l.shift_date),
-          "Shift Type": l.shift_type === "M" ? "Morning" : "Night",
+          "Shift Type": attendanceShiftLabel(l),
+          ...attendanceDefinitionColumns(l),
           "Started At": l.started_at ? new Date(l.started_at).toLocaleString("en-GB") : "",
           "Ended At": l.ended_at ? new Date(l.ended_at).toLocaleString("en-GB") : "In Progress",
           "Hours Logged": l.hours_logged != null ? Number(l.hours_logged).toFixed(2) : "",
@@ -1128,9 +1149,9 @@ function ReportsContent() {
           "Period Start": fmtDate(p.period_start),
           "Period End": fmtDate(p.period_end),
           "Hours Completed": progress.completed.toFixed(2),
-          "Hours Assigned": progress.assigned.toFixed(2),
-          "Total Hours": `${progress.completed.toFixed(2)} / ${progress.assigned.toFixed(2)}`,
-          "Progress %": fmtPercent(progress.percentage),
+          "Hours Assigned": progress.available ? progress.assigned.toFixed(2) : "Unavailable",
+          "Total Hours": `${progress.completed.toFixed(2)} / ${progress.available ? progress.assigned.toFixed(2) : "Unavailable"}`,
+          "Progress %": progress.available ? fmtPercent(progress.percentage) : "",
           Status: progress.status,
           "Total Shifts": p.total_shifts,
         };
@@ -1157,7 +1178,7 @@ function ReportsContent() {
           Nurse: r.accepted_by_nurse_name ?? "Unknown",
           Ward: r.ward,
           Facility: r.facility,
-          "Shift Type": r.shift === "M" ? "Morning" : "Night",
+          "Shift Type": locumShiftName(r),
           "Started At":
             !missed && log?.started_at ? new Date(log.started_at).toLocaleString("en-GB") : "",
           "Ended At": missed
@@ -1198,7 +1219,7 @@ function ReportsContent() {
       };
       const rows = filteredLocumRequestsAll.map((r) => ({
         Date: fmtDate(r.shift_date),
-        "Shift Type": r.shift === "M" ? "Morning" : "Night",
+        "Shift Type": locumShiftName(r),
         Facility: r.facility,
         Ward: r.ward,
         "Nurses Needed": r.nurses_needed,
@@ -1301,7 +1322,8 @@ function ReportsContent() {
           Nurse: nurse?.name ?? "Unknown",
           Facility: nurse?.facility ?? "",
           Ward: nurse?.ward?.split("|")[0] ?? "",
-          Shift: l.shift_type === "M" ? "Morning" : l.shift_type === "N" ? "Night" : l.shift_type,
+          Shift: attendanceShiftLabel(l),
+          ...attendanceDefinitionColumns(l),
           Type: l.is_locum ? "Locum" : "Roster",
         };
       });
@@ -1420,28 +1442,35 @@ ${staffToPrint
       win.ward !== null ? `&ward=${encodeURIComponent(win.ward)}` : "&ward_null=true";
     let allAssignments = facilityNurseIds.length
       ? await api.get<
-          {
-            nurse_id: string;
-            shift_date: string;
-            shift: string;
-            ward: string | null;
-            nurse_role: string | null;
-          }[]
+          (AssignmentDefinition &
+            StaffingAssignment & {
+              nurse_id: string;
+              shift_date: string;
+              shift: string;
+              ward: string | null;
+              nurse_role: string | null;
+            })[]
         >(
-          `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published${wardParam}`,
+          `/shift-assignments?nurse_ids=${facilityNurseIds.join(",")}&from=${win.startDate}&to=${win.endDate}&status=published&include_shift_definition=true&include_staffing_definition=true${wardParam}`,
         )
       : [];
 
     if (win.ward === null && win.roleGroup) {
       const nurseRoleMap = new Map(nurses.map((n) => [n.id, n.role]));
       allAssignments = allAssignments.filter(
-        (a) => roleGroupOf(a.nurse_role ?? nurseRoleMap.get(a.nurse_id) ?? "") === win.roleGroup,
+        (a) =>
+          roleGroupOf(a.nurse_role ?? nurseRoleMap.get(a.nurse_id) ?? "", win.facility) ===
+          win.roleGroup,
       );
     }
 
-    const assignMap = new Map(
-      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a.shift]),
-    );
+    const definitions = scheduleExportDefinitions(allAssignments);
+    const staffing =
+      win.ward !== null
+        ? assessScheduleStaffing(allAssignments, dateRange(win.startDate, win.endDate))
+        : null;
+    if (staffing) definitions.html += staffing.html;
+    const assignMap = definitions.cells;
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = nurses.filter((n) => activeIds.has(n.id));
 
@@ -1453,7 +1482,7 @@ ${staffToPrint
     // for a real ward — facility-wide role groups (matron, coverage nurse,
     // etc.) have no per-ward min_* to check against.
     let violations: SafetyViolation[] = [];
-    if (win.ward !== null) {
+    if (win.ward !== null && !staffing) {
       const wardConfig = wards.find((w) => w.name === win.ward && w.facility === win.facility);
       if (wardConfig) {
         const draftLike: DraftAssignment[] = allAssignments.map((a) => ({
@@ -1469,14 +1498,14 @@ ${staffToPrint
       }
     }
 
-    return { activeNurses, assignMap, violations };
+    return { activeNurses, assignMap, violations, definitions, staffing };
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
+      const { activeNurses, assignMap, violations, definitions } = await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward
         ? ` — ${win.ward}`
@@ -1493,12 +1522,6 @@ ${staffToPrint
               )
               .join("")}</tbody></table>`
           : "";
-      const shiftBg: Record<string, string> = {
-        M: "#fef3c7",
-        N: "#e0e7ff",
-        OFF: "#f3f4f6",
-        LEAVE: "#fee2e2",
-      };
       const dateHeaders = dates
         .map((d) => {
           const dt = new Date(d + "T00:00:00");
@@ -1510,7 +1533,7 @@ ${staffToPrint
           const cells = dates
             .map((d) => {
               const s = assignMap.get(`${n.id}|${d}`) ?? "";
-              return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
+              return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
             })
             .join("");
           return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
@@ -1540,12 +1563,7 @@ td.sm{text-align:left;color:#444;min-width:55px}
 <thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead>
 <tbody>${bodyRows}</tbody>
 </table>
-<div class="legend">
-<span><span class="lb" style="background:#fef3c7"></span>M Morning</span>
-<span><span class="lb" style="background:#e0e7ff"></span>N Night</span>
-<span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
-<span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
-</div>
+${definitions.html}
 ${violationsHtml}
 <script>window.onload=()=>{window.print()}</script>
 </body></html>`;
@@ -1561,7 +1579,8 @@ ${violationsHtml}
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
+      const { activeNurses, assignMap, violations, definitions, staffing } =
+        await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward
         ? ` — ${win.ward}`
@@ -1588,8 +1607,11 @@ ${violationsHtml}
         22,
         18,
         14,
-        ...dates.map(() => 5),
+        ...dates.map(() => 9),
       ]);
+      xlsAddJsonSheet(wb, definitions.rows, "Shift Definitions", [14, 30, 10, 20, 24, 16, 16]);
+      if (staffing)
+        xlsAddJsonSheet(wb, staffing.rows, "Staffing Assessment", [16, 14, 18, 12, 12, 12, 70]);
       if (violations.length > 0) {
         const grouped = groupViolationsByDay(violations);
         xlsAddAoaSheet(
@@ -1638,22 +1660,16 @@ ${violationsHtml}
       const isMultiFacility = distinctFacilities.length > 1;
       const allData = await Promise.all(
         periodWins.map(async (win) => {
-          const { activeNurses, assignMap, violations } = await fetchScheduleData(win);
+          const { activeNurses, assignMap, violations, definitions } = await fetchScheduleData(win);
           const baseLabel =
             win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
           const label =
             isMultiFacility && win.facility ? `${baseLabel} — ${win.facility}` : baseLabel;
-          return { label, activeNurses, assignMap, violations };
+          return { label, activeNurses, assignMap, violations, definitions };
         }),
       );
       const endDate = scheduleEndDate(periodStart);
       const dates = dateRange(periodStart, endDate);
-      const shiftBg: Record<string, string> = {
-        M: "#fef3c7",
-        N: "#e0e7ff",
-        OFF: "#f3f4f6",
-        LEAVE: "#fee2e2",
-      };
       const dateHeaders = dates
         .map((d) => {
           const dt = new Date(d + "T00:00:00");
@@ -1665,13 +1681,13 @@ ${violationsHtml}
         : (distinctFacilities[0] ?? periodWins[0]?.facility ?? "");
       const sections = allData
         .filter(({ activeNurses }) => activeNurses.length > 0)
-        .map(({ label, activeNurses, assignMap, violations }) => {
+        .map(({ label, activeNurses, assignMap, violations, definitions }) => {
           const bodyRows = activeNurses
             .map((n) => {
               const cells = dates
                 .map((d) => {
                   const s = assignMap.get(`${n.id}|${d}`) ?? "";
-                  return `<td style="background:${shiftBg[s] ?? "#fff"}">${s || "—"}</td>`;
+                  return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
                 })
                 .join("");
               return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
@@ -1687,7 +1703,7 @@ ${violationsHtml}
                   )
                   .join("")}</tbody></table>`
               : "";
-          return `<h2>${label}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>${violationRows}`;
+          return `<h2>${escHtml(label)}</h2><table><thead><tr><th>Nurse</th><th>Role</th><th>Ward</th>${dateHeaders}</tr></thead><tbody>${bodyRows}</tbody></table>${definitions.html}${violationRows}`;
         })
         .join("<br/>");
       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
@@ -1710,12 +1726,6 @@ td.sm{text-align:left;color:#444;min-width:55px}
 <h1>Unified Rota — ${facility}</h1>
 <p>${fmtDate(periodStart)} — ${fmtDate(endDate)}</p>
 ${sections}
-<div class="legend">
-<span><span class="lb" style="background:#fef3c7"></span>M Morning</span>
-<span><span class="lb" style="background:#e0e7ff"></span>N Night</span>
-<span><span class="lb" style="background:#f3f4f6"></span>OFF</span>
-<span><span class="lb" style="background:#fee2e2"></span>LEAVE</span>
-</div>
 <script>window.onload=()=>{window.print()}</script>
 </body></html>`;
       openPrintWindow(html);
@@ -1891,8 +1901,11 @@ ${sections}
               className="h-9 rounded-md border border-input bg-card px-3 text-sm"
             >
               <option value="all">All shifts</option>
-              <option value="M">Morning</option>
-              <option value="N">Night</option>
+              {attendanceShiftOptions(scopedShiftLogs).map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
             </select>
             <select
               value={hoursCategoryFilter}
@@ -1984,7 +1997,7 @@ ${sections}
                             <span
                               className={`text-xs px-2 py-0.5 rounded-full font-semibold ${log.shift_type === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
                             >
-                              {log.shift_type === "M" ? "Morning" : "Night"}
+                              {attendanceShiftLabel(log)}
                             </span>
                           </td>
                           <td className="px-4 py-3">
@@ -2182,7 +2195,7 @@ ${sections}
                               <span
                                 className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
                               >
-                                {r.shift === "M" ? "Morning" : "Night"}
+                                {locumShiftName(r)}
                               </span>
                             </td>
                             <td className="px-4 py-3 tabular-nums text-muted-foreground">
@@ -2408,7 +2421,7 @@ ${sections}
                               <span
                                 className={`text-xs px-2 py-0.5 rounded-full font-semibold ${r.shift === "M" ? "bg-amber-100 text-amber-700" : "bg-indigo-100 text-indigo-700"}`}
                               >
-                                {r.shift === "M" ? "Morning" : "Night"}
+                                {locumShiftName(r)}
                               </span>
                             </td>
                             <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
@@ -3021,14 +3034,16 @@ ${sections}
                               {fmtHoursLog(progress.completed)} completed
                             </div>
                             <div className="text-xs text-muted-foreground">
-                              / {fmtHoursLog(progress.assigned)} assigned
+                              {progress.available
+                                ? `/ ${fmtHoursLog(progress.assigned)} assigned`
+                                : "Scheduled hours unavailable"}
                             </div>
                           </td>
                           <td className="px-4 py-3 min-w-44">
                             <div className="mb-2 text-xs">
                               <span className="font-medium">{progress.status}</span>
                             </div>
-                            <Progress value={progress.barValue} />
+                            {progress.available && <Progress value={progress.barValue} />}
                           </td>
                         </tr>
                       );
@@ -3134,11 +3149,7 @@ ${sections}
                                       : "bg-indigo-100 text-indigo-800"
                                   }`}
                                 >
-                                  {l.shift_type === "M"
-                                    ? "Morning"
-                                    : l.shift_type === "N"
-                                      ? "Night"
-                                      : l.shift_type}
+                                  {attendanceShiftLabel(l)}
                                 </span>
                               </td>
                               <td className="px-4 py-3">

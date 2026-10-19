@@ -35,4 +35,8 @@ const pool = new Pool({
 
 pool.on("error", (err) => console.error("DB pool error:", err));
 
+// Stamp every checked-out connection with the request's hospital context so
+// row-level security (migration 049) keeps each hospital's data separate.
+require("./lib/tenant-context").bindTenantPool(pool);
+
 module.exports = pool;

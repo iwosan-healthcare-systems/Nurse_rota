@@ -30,7 +30,7 @@ test("future schedules, timestamp dates, leap days and year changes preserve bou
   assert.match(rotaToday(), /^\d{4}-\d{2}-\d{2}$/);
 });
 
-function archiveFixture({ locked = true, period = true, failArchive = false } = {}) {
+function archiveFixture({ locked = true, period = true, failArchive = false, ready = true } = {}) {
   const calls = [];
   let released = false;
   const client = {
@@ -54,7 +54,19 @@ function archiveFixture({ locked = true, period = true, failArchive = false } = 
   const module = { exports: {} };
   vm.runInNewContext(
     readFileSync(new URL("../nurse-api/lib/auto-close-period.js", import.meta.url), "utf8"),
-    { module, require: () => ({ connect: async () => client }) },
+    {
+      module,
+      require: (name) =>
+        name === "../db"
+          ? { connect: async () => client }
+          : {
+              periodShiftReadiness: async () => ({
+                ready,
+                reason: "A scheduled shift has not ended",
+                assignmentId: "a1",
+              }),
+            },
+    },
   );
   return { close: module.exports.closeCompletedPeriod, calls, released: () => released };
 }
@@ -89,6 +101,19 @@ test("closure rolls back without resetting counters when archiving fails", async
   assert.equal(f.released(), true);
 });
 
+test("an unfinished saved shift holds the archive without changing logs or counters", async () => {
+  const f = archiveFixture({ ready: false });
+  const result = await f.close();
+  assert.equal(result.closed, false);
+  assert.equal(result.assignmentId, "a1");
+  assert.equal(
+    f.calls.some((c) => /UPDATE|INSERT/.test(c.sql)),
+    false,
+  );
+  assert.equal(f.calls.at(-1).sql, "COMMIT");
+  assert.equal(f.released(), true);
+});
+
 test("overlapping jobs and no eligible period produce no data changes", async () => {
   for (const options of [{ locked: false }, { period: false }]) {
     const f = archiveFixture(options);
@@ -106,7 +131,7 @@ test("archive candidates use full periods, wait for overnight shifts and catch u
   await f.close();
   const sql = f.calls.find((c) => c.sql.includes("WITH published")).sql;
   assert.match(sql, /period_start \+ 27 AS period_end/);
-  assert.match(sql, /1 day 8 hours/);
+  assert.match(sql, /period_start \+ 28/);
   assert.match(sql, /sl.expected_end_at > NOW\(\)/);
   assert.match(sql, /nph.period_end = periods.period_end/);
   assert.match(sql, /ORDER BY periods.period_end ASC/);

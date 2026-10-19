@@ -5,6 +5,7 @@
 // Mirrors the per-unit enumeration in auto-submit-draft.js / auto-publish-rota.js.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
 const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const { roleGroupOf, resolveUnitNurseIds } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
@@ -187,8 +188,13 @@ async function runSendRotaApprovalReminders() {
 }
 
 function startRotaApprovalReminderJob() {
-  sendRotaApprovalReminders();
-  cron.schedule("*/5 * * * *", sendRotaApprovalReminders);
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => sendRotaApprovalReminders()).catch((err) =>
+      console.error("[auto-rota-approval-reminder] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log("[rota-approval-reminder] Rota approval reminder job started (runs every 5 minutes)");
 }
 

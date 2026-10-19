@@ -2,12 +2,7 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { useAuth } from "@/lib/auth-context";
-import {
-  FACILITY_LOCATIONS,
-  GEO_FENCE_RADIUS_M,
-  type FacilityLocation,
-  type GpsSettings,
-} from "@/lib/geo-fence";
+import { GEO_FENCE_RADIUS_M, type FacilityLocation, type GpsSettings } from "@/lib/geo-fence";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import {
@@ -186,12 +181,8 @@ function SystemSettingsPage() {
   }
 
   // GPS fence settings
-  const defaultGps: GpsSettings = {
-    radius_m: GEO_FENCE_RADIUS_M,
-    facilities: Object.fromEntries(
-      Object.entries(FACILITY_LOCATIONS).map(([k, locs]) => [k, locs.map((l) => ({ ...l }))]),
-    ),
-  };
+  // Until this hospital's saved settings load, show no sites rather than another hospital's.
+  const defaultGps: GpsSettings = { radius_m: GEO_FENCE_RADIUS_M, facilities: {} };
   const [gpsSettings, setGpsSettings] = useState<GpsSettings>(defaultGps);
   const [gpsEditing, setGpsEditing] = useState(false);
   const [gpsDraft, setGpsDraft] = useState<GpsSettings | null>(null);

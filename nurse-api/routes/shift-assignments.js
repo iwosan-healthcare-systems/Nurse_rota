@@ -2,7 +2,21 @@ const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability, checkCapability } = require("../middleware/capability");
 const { sendMail, portalUrl } = require("../lib/mailer");
-const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
+const { guardLegacyGeneration } = require("../lib/legacy-generation-guard");
+const { withAssignmentShiftDefinitions } = require("../lib/assignment-shift-definition");
+const { validateConfiguredEdit } = require("../lib/configured-assignment-edit");
+const { swapConfiguredAssignments } = require("../lib/configured-assignment-swap");
+const { applyValidatedAssignmentBatch } = require("../lib/configured-assignment-batch");
+const wrap = (fn) => (req, res, next) =>
+  fn(req, res, next).catch((error) =>
+    [
+      "CONFIGURED_GENERATION_REQUIRED",
+      "CONFIGURED_EDIT_INVALID",
+      "CONFIGURED_SWAP_INVALID",
+    ].includes(error.code)
+      ? res.status(error.status ?? 409).json({ error: error.message })
+      : next(error),
+  );
 
 // Mirrors leave-requests.js's facilityWideGroupSlug — maps a nurse's job role
 // to the facility-wide role_group used on ward-less rota_edit_requests rows.
@@ -77,6 +91,66 @@ async function headNurseHasEditGrantForAll(req, cells) {
   });
 }
 
+router.post(
+  "/configured-swap",
+  requireCapability("manage_shift_assignments", ["admin", "cno", "head_nurse", "hr_admin"]),
+  wrap(async (req, res) => {
+    res.json(
+      await swapConfiguredAssignments(
+        pool,
+        req.body.assignments,
+        { userId: req.user?.userId ?? null, name: req.user?.full_name ?? null },
+        (cells) => headNurseHasEditGrantForAll(req, cells),
+      ),
+    );
+  }),
+);
+
+router.post(
+  "/configured-switch-approval",
+  requireCapability("approve_rota", ["admin", "cno"]),
+  wrap(async (req, res) => {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        req.body.requestId ?? "",
+      )
+    )
+      return res.status(400).json({ error: "Valid switch request ID required" });
+    const result = await swapConfiguredAssignments(
+      pool,
+      req.body.assignments,
+      { userId: req.user?.userId ?? null, name: req.user?.full_name ?? null },
+      (cells) => headNurseHasEditGrantForAll(req, cells),
+      { requestId: req.body.requestId, note: req.body.note },
+    );
+    // Only reached after commit. Delivery failure must not undo an approved switch.
+    try {
+      const { rows: recipients } = await pool.query(
+        `SELECT DISTINCT p.email FROM profiles p
+         JOIN notification_state ns ON ns.user_id=p.id
+         WHERE ns.notif_key=$1 AND p.email IS NOT NULL AND btrim(p.email)<>''`,
+        [`switch_approved_${req.body.requestId}`],
+      );
+      await Promise.all(
+        recipients.map(({ email }) =>
+          sendMail({
+            to: email,
+            subject: "Shift switch request approved",
+            title: "Shift switch request approved",
+            bodyHtml:
+              "<p>Your shift switch request has been <strong>approved</strong> and the updated duties are available in the rota.</p>",
+            ctaText: "Open Leave & Requests",
+            ctaUrl: portalUrl("/leave"),
+          }).catch(() => {}),
+        ),
+      );
+    } catch {
+      // In-app notifications remain available if email lookup or delivery fails.
+    }
+    res.json(result);
+  }),
+);
+
 router.get(
   "/",
   wrap(async (req, res) => {
@@ -127,7 +201,7 @@ router.get(
     }
     if (req.query.shift_in) {
       const shifts = req.query.shift_in.split(",");
-      conditions.push(`shift = ANY($${params.length + 1}::shift_code[])`);
+      conditions.push(`shift = ANY($${params.length + 1}::text[])`);
       params.push(shifts);
     }
     if (req.query.ward_in) {
@@ -140,13 +214,20 @@ router.get(
     }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    let query = `SELECT * FROM shift_assignments ${where} ORDER BY shift_date`;
+    let query = `SELECT *,shift_date::text FROM shift_assignments ${where} ORDER BY shift_assignments.shift_date`;
     if (req.query.limit) {
       query += ` LIMIT $${params.length + 1}`;
       params.push(parseInt(req.query.limit, 10));
     }
     const { rows } = await pool.query(query, params);
-    res.json(rows);
+    res.json(
+      req.query.include_shift_definition === "true"
+        ? await withAssignmentShiftDefinitions(pool, rows, {
+            includeStaffing: req.query.include_staffing_definition === "true",
+            includeEditOptions: req.query.include_edit_options === "true",
+          })
+        : rows,
+    );
   }),
 );
 
@@ -165,24 +246,36 @@ router.post(
     // created_by/created_by_name come from the authenticated actor, not the
     // request body — trusting a client-supplied value would let anyone
     // attribute a cell to someone else.
-    const { rows } = await pool.query(
-      `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, created_by_name, nurse_role)
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await guardLegacyGeneration(client, [nurse_id], shift_date);
+      const { rows } = await client.query(
+        `INSERT INTO shift_assignments (nurse_id, shift, shift_date, ward, status, created_by, created_by_name, nurse_role)
      VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT role FROM nurses WHERE id = $1)) RETURNING *`,
-      [
-        nurse_id,
-        shift,
-        shift_date,
-        ward || null,
-        status || "draft",
-        req.user?.userId ?? null,
-        req.user?.full_name ?? null,
-      ],
-    );
-    await reapplyApprovedLeave(pool, [nurse_id], shift_date, shift_date);
-    const { rows: finalRows } = await pool.query("SELECT * FROM shift_assignments WHERE id = $1", [
-      rows[0].id,
-    ]);
-    res.status(201).json(finalRows[0] ?? rows[0]);
+        [
+          nurse_id,
+          shift,
+          shift_date,
+          ward || null,
+          status || "draft",
+          req.user?.userId ?? null,
+          req.user?.full_name ?? null,
+        ],
+      );
+      await reapplyApprovedLeave(client, [nurse_id], shift_date, shift_date);
+      const { rows: finalRows } = await client.query(
+        "SELECT * FROM shift_assignments WHERE id = $1",
+        [rows[0].id],
+      );
+      await client.query("COMMIT");
+      res.status(201).json(finalRows[0] ?? rows[0]);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }),
 );
 
@@ -213,7 +306,7 @@ async function reapplyApprovedLeave(queryable, nurseIds, minDate, maxDate) {
         AND sa.shift != 'LEAVE'
         AND (
           EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
-          OR sa.shift IN ('M','MWC','N','NC')
+          OR sa.shift <> 'OFF'
         )
         AND EXISTS (
           SELECT 1 FROM leave_requests lr
@@ -240,15 +333,26 @@ async function upsertAssignments(rows, actor = { id: null, name: null }) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await guardLegacyGeneration(
+      client,
+      [...new Set(rows.map((r) => r.nurse_id))],
+      rows
+        .map((r) => r.shift_date)
+        .sort()
+        .at(-1),
+      rows,
+    );
     for (const row of rows) {
-      await client.query(
+      const written = await client.query(
         `INSERT INTO shift_assignments
            (nurse_id, shift, shift_date, ward, status, created_by, created_by_name, nurse_role, pre_leave_shift, leave_type)
        VALUES ($1, $2, $3, $4, $5, $6, $7, (SELECT role FROM nurses WHERE id = $1), $8, $9)
        ON CONFLICT (nurse_id, shift_date)
        DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
          pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW(),
-         updated_by = $6, updated_by_name = $7`,
+         updated_by = $6, updated_by_name = $7
+       WHERE shift_assignments.shift_definition_run_id IS NULL
+         AND shift_assignments.scheduling_run_id IS NULL`,
         [
           row.nurse_id,
           row.shift,
@@ -261,6 +365,13 @@ async function upsertAssignments(rows, actor = { id: null, name: null }) {
           row.leave_type || null,
         ],
       );
+      if (!written.rowCount) {
+        const error = new Error(
+          "Configured assignments must use reviewed scheduling edits, not legacy upsert",
+        );
+        error.code = "CONFIGURED_EDIT_INVALID";
+        throw error;
+      }
     }
 
     // Re-apply approved leave over the freshly upserted shifts.
@@ -355,7 +466,7 @@ router.patch(
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
 
     const { rows: existingRows } = await pool.query(
-      "SELECT nurse_id, ward, shift_date FROM shift_assignments WHERE id = $1",
+      "SELECT *,shift_date::text FROM shift_assignments WHERE id = $1",
       [req.params.id],
     );
     if (!existingRows[0]) return res.status(404).json({ error: "Assignment not found" });
@@ -372,6 +483,62 @@ router.patch(
       return res.status(403).json({ error: "No active edit-access grant for this ward/period" });
     }
 
+    if (
+      (existing.shift_definition_run_id ?? existing.scheduling_run_id) &&
+      fields.includes("status")
+    ) {
+      if (fields.length !== 1)
+        return res
+          .status(400)
+          .json({ error: "Change configured duties separately from approval status" });
+      const transitions = {
+        "draft:submitted": ["submit_approval", ["admin", "head_nurse"]],
+        "submitted:cno_approved": ["approve_rota", ["admin", "cno"]],
+        "submitted:draft": ["approve_rota", ["admin", "cno"]],
+        "cno_approved:draft": ["approve_rota", ["admin", "cno"]],
+        "cno_approved:published": ["publish_rota", ["admin", "cno"]],
+        "published:draft": ["revert_published", ["admin"]],
+      };
+      const transition = transitions[`${existing.status}:${req.body.status}`];
+      if (!transition) return res.status(400).json({ error: "Unsupported status transition" });
+      if (!(await checkCapability(req, transition[0], transition[1])))
+        return res.status(403).json({ error: "Forbidden" });
+      const where = `WHERE id=$1 AND status=$2
+        AND shift_definition_run_id IS NOT DISTINCT FROM $3::uuid
+        AND scheduling_run_id IS NOT DISTINCT FROM $4::uuid
+        AND nurse_id=$5::uuid AND shift_date=$6::date
+        AND ward IS NOT DISTINCT FROM $7::text`;
+      const filters = [
+        existing.id,
+        existing.status,
+        existing.shift_definition_run_id,
+        existing.scheduling_run_id,
+        existing.nurse_id,
+        existing.shift_date,
+        existing.ward,
+      ];
+      const result = await applyValidatedAssignmentBatch(pool, {
+        where,
+        filterParams: filters,
+        updateSql: `UPDATE shift_assignments SET status=$8,updated_by=$9,updated_by_name=$10,updated_at=NOW() ${where}`,
+        updateParams: [
+          ...filters,
+          req.body.status,
+          req.user?.userId ?? null,
+          req.user?.full_name ?? null,
+        ],
+        body: { status: req.body.status },
+      });
+      if (!result.rowCount)
+        return res
+          .status(409)
+          .json({ error: "Assignment changed while editing. Reload and try again." });
+      const { rows: updated } = await pool.query("SELECT * FROM shift_assignments WHERE id=$1", [
+        existing.id,
+      ]);
+      return res.json(updated[0]);
+    }
+    await validateConfiguredEdit(pool, existing, req.body);
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
     sets.push(
       `updated_by = $${fields.length + 1}`,
@@ -380,12 +547,31 @@ router.patch(
     );
     const values = fields.map((f) => req.body[f]);
     values.push(req.user?.userId ?? null, req.user?.full_name ?? null, req.params.id);
+    const idParameter = values.length;
+    values.push(
+      existing.shift_definition_run_id,
+      existing.scheduling_run_id,
+      existing.nurse_role,
+      existing.shift_date,
+      existing.nurse_id,
+      existing.ward,
+      existing.status,
+    );
 
     const { rows } = await pool.query(
-      `UPDATE shift_assignments SET ${sets.join(", ")} WHERE id = $${values.length} RETURNING *`,
+      `UPDATE shift_assignments SET ${sets.join(", ")} WHERE id = $${idParameter}
+       AND shift_definition_run_id IS NOT DISTINCT FROM $${idParameter + 1}::uuid
+       AND scheduling_run_id IS NOT DISTINCT FROM $${idParameter + 2}::uuid
+       AND nurse_role IS NOT DISTINCT FROM $${idParameter + 3}::text
+       AND shift_date=$${idParameter + 4}::date AND nurse_id=$${idParameter + 5}::uuid
+       AND ward IS NOT DISTINCT FROM $${idParameter + 6}::text
+       AND status::text=$${idParameter + 7}::text RETURNING *`,
       values,
     );
-    if (!rows[0]) return res.status(404).json({ error: "Assignment not found" });
+    if (!rows[0])
+      return res
+        .status(409)
+        .json({ error: "Assignment changed while editing. Reload and try again." });
 
     if (fields.includes("shift") || fields.includes("shift_date")) {
       const affectedDate = req.body.shift_date ?? existing.shift_date;
@@ -623,7 +809,7 @@ router.patch(
             AND sa.shift != 'LEAVE'
             AND (
               EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
-              OR sa.shift IN ('M','MWC','N','NC')
+              OR sa.shift <> 'OFF'
             )
             AND sa.shift_date BETWEEN $2 AND $3`,
         [nurseIdArr, shift_date_from, shift_date_to],
@@ -638,6 +824,7 @@ router.patch(
       }
     }
 
+    const filterParams = [...params];
     const sets = [];
     if (shift) {
       sets.push(`shift = $${params.length + 1}`);
@@ -660,7 +847,22 @@ router.patch(
     sets.push("updated_at = NOW()");
 
     const where = "WHERE " + conditions.join(" AND ");
-    await pool.query(`UPDATE shift_assignments SET ${sets.join(", ")} ${where}`, params);
+    await applyValidatedAssignmentBatch(pool, {
+      where,
+      filterParams,
+      updateSql: `UPDATE shift_assignments SET ${sets.join(", ")} ${where}`,
+      updateParams: params,
+      body: req.body,
+      staffingWindow:
+        shift_date_from && shift_date_to
+          ? { start: shift_date_from, end: shift_date_to }
+          : undefined,
+      authorize: (cells) => headNurseHasEditGrantForAll(req, cells),
+      after:
+        shift && nurse_ids && shift_date_from && shift_date_to
+          ? (db) => reapplyApprovedLeave(db, nurse_ids.split(","), shift_date_from, shift_date_to)
+          : null,
+    });
 
     // A manager bulk-editing shift values (not a status transition) can hit
     // the same class of mismatch a single edit can — re-apply approved leave
@@ -669,9 +871,6 @@ router.patch(
     // from an OFF cell, which can't coexist with approved leave — see the
     // guard above requiring filterShift === "OFF" — approved leave already
     // flips a cell to LEAVE regardless of status).
-    if (shift && nurse_ids && shift_date_from && shift_date_to) {
-      await reapplyApprovedLeave(pool, nurse_ids.split(","), shift_date_from, shift_date_to);
-    }
 
     // Publishing spends any edit-access grant that was open for this unit —
     // a grant that was live pre-publish (e.g. for finishing the original
@@ -887,8 +1086,39 @@ router.delete(
       return res.status(400).json({ error: "At least one filter required for bulk delete" });
 
     const where = "WHERE " + conditions.join(" AND ");
-    const result = await pool.query(`DELETE FROM shift_assignments ${where}`, params);
-    res.json({ success: true, deleted: result.rowCount });
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const { rows: targets } = await client.query(
+        `SELECT id,nurse_id,shift_date::text,shift_definition_run_id,scheduling_run_id FROM shift_assignments ${where} ORDER BY id FOR UPDATE`,
+        params,
+      );
+      if (targets.some((row) => row.shift_definition_run_id ?? row.scheduling_run_id)) {
+        const error = new Error(
+          "Configured assignments require reviewed schedule replacement and cannot be deleted here",
+        );
+        error.code = "CONFIGURED_EDIT_INVALID";
+        throw error;
+      }
+      await guardLegacyGeneration(
+        client,
+        [...new Set(targets.map((r) => r.nurse_id))],
+        targets
+          .map((r) => r.shift_date)
+          .sort()
+          .at(-1),
+      );
+      const result = await client.query("DELETE FROM shift_assignments WHERE id=ANY($1::uuid[])", [
+        targets.map((row) => row.id),
+      ]);
+      await client.query("COMMIT");
+      res.json({ success: true, deleted: result.rowCount });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   }),
 );
 
@@ -896,7 +1126,14 @@ router.delete(
   "/:id",
   requireCapability("manage_shift_assignments", ["admin", "cno", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
-    await pool.query("DELETE FROM shift_assignments WHERE id = $1", [req.params.id]);
+    const result = await pool.query(
+      "DELETE FROM shift_assignments WHERE id=$1 AND shift_definition_run_id IS NULL AND scheduling_run_id IS NULL",
+      [req.params.id],
+    );
+    if (!result.rowCount)
+      return res
+        .status(409)
+        .json({ error: "Assignment is unavailable or requires reviewed schedule replacement" });
     res.json({ success: true });
   }),
 );
@@ -925,7 +1162,7 @@ router.post(
           AND sa.shift != 'LEAVE'
           AND (
             EXTRACT(ISODOW FROM sa.shift_date)::int BETWEEN 1 AND 5
-            OR sa.shift IN ('M','MWC','N','NC')
+            OR sa.shift <> 'OFF'
           )
           AND EXISTS (
             SELECT 1 FROM leave_requests lr

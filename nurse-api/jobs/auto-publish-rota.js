@@ -5,6 +5,8 @@
 // system never silently publishes an unapproved rota.
 const cron = require("node-cron");
 const pool = require("../db");
+const { forEachHospital } = require("../lib/tenant-context");
+const { applyValidatedAssignmentBatch } = require("../lib/configured-assignment-batch");
 const { getWindowForPeriod, getUnitPeriod } = require("../lib/rota-period-dates");
 const { roleGroupOf, resolveUnitNurseIds } = require("../lib/force-submit-rota");
 const { sendMail, portalUrl } = require("../lib/mailer");
@@ -97,13 +99,24 @@ async function runAutoPublish({ simulateToday } = {}) {
       ? [nurseIds, period.periodStart, period.periodEnd, row.ward]
       : [nurseIds, period.periodStart, period.periodEnd];
 
-    const { rowCount } = await pool.query(
-      `UPDATE shift_assignments sa
-          SET status = 'published', updated_at = NOW(), updated_by_name = 'System (auto-published)'
-        WHERE sa.nurse_id = ANY($1) AND sa.shift_date BETWEEN $2 AND $3
-          AND sa.status = 'cno_approved' ${wardClause}`,
-      params,
-    );
+    const where = `WHERE nurse_id=ANY($1) AND shift_date BETWEEN $2 AND $3
+      AND status='cno_approved' ${wardClause.replaceAll("sa.", "")}`;
+    let rowCount;
+    try {
+      ({ rowCount } = await applyValidatedAssignmentBatch(pool, {
+        where,
+        filterParams: params,
+        updateParams: params,
+        body: { status: "published" },
+        staffingWindow: { start: period.periodStart, end: period.periodEnd },
+        updateSql: `UPDATE shift_assignments SET status='published',updated_at=NOW(),updated_by_name='System (auto-published)' ${where}`,
+      }));
+    } catch (error) {
+      if (error.code !== "CONFIGURED_EDIT_INVALID") throw error;
+      console.error(`[auto-publish-rota] skipped ${unitKey}: ${error.message}`);
+      continue;
+    }
+    if (!rowCount) continue;
 
     // Same reasoning as the manual-publish path in routes/shift-assignments.js:
     // publishing spends any open edit-access grant for this unit — a fresh
@@ -289,8 +302,13 @@ async function notifyUnit(facility, prefix, unitLabel, periodStart, roles) {
 }
 
 function startAutoPublishJob() {
-  autoPublishRota();
-  cron.schedule("*/5 * * * *", () => autoPublishRota());
+  // Every run happens once per hospital, inside that hospital's data context.
+  const tick = () =>
+    forEachHospital(pool, () => autoPublishRota()).catch((err) =>
+      console.error("[auto-publish-rota] hospital loop failed:", err.message),
+    );
+  tick();
+  cron.schedule("*/5 * * * *", tick);
   console.log("[auto-publish-rota] Auto-publish rota job started (runs every 5 minutes)");
 }
 

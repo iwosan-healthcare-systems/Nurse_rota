@@ -1,7 +1,11 @@
+import { isGlobalHead } from "@/lib/role-groups";
+import { useHospitalFacilities } from "@/lib/use-hospital-facilities";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { PageHeader } from "@/components/PageHeader";
 import { type QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
+import { switchRestIssue } from "@/lib/switch-rest";
 import { useEffect, useMemo, useState } from "react";
 import {
   Plus,
@@ -390,11 +394,21 @@ function LeavePage() {
       if (status === "Approved" && l.nurse_id) {
         const publishedRows = await api
           .get<
-            { id: string; shift_date: string; shift: string }[]
-          >(`/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published`)
+            {
+              id: string;
+              shift_date: string;
+              shift: string;
+              shift_definition_run_id?: string | null;
+              scheduling_run_id?: string | null;
+              scheduled_shift?: { name: string } | null;
+            }[]
+          >(
+            `/shift-assignments?nurse_id=${l.nurse_id}&from=${l.from_date}&to=${l.to_date}&status=published&include_shift_definition=true`,
+          )
           .catch(() => []);
-        const publishedShifts = publishedRows.filter((s) =>
-          ["M", "N", "MWC", "NC"].includes(s.shift),
+        // Any working duty counts, including hospital-defined codes on configured cells.
+        const publishedShifts = publishedRows.filter(
+          (s) => s.shift !== "OFF" && s.shift !== "LEAVE",
         );
 
         if (publishedShifts.length > 0) {
@@ -410,6 +424,8 @@ function LeavePage() {
           const today = todayYmd();
           const shiftsToCredit = publishedShifts.filter(
             (s) =>
+              !s.shift_definition_run_id &&
+              !s.scheduling_run_id &&
               !alreadyLogged.has(s.shift_date.slice(0, 10)) &&
               (s.shift === "M" || s.shift === "N" || s.shift === "MWC" || s.shift === "NC") &&
               s.shift_date <= today,
@@ -438,22 +454,28 @@ function LeavePage() {
               .catch(() => {});
           }
 
-          await api.patch(`/leave-requests/${l.id}`, {
-            status: "Approved",
-            reviewed_by: user?.id,
-            reviewed_at: new Date().toISOString(),
-            review_note: note || null,
-          });
+          const approval = await api.patch<{ staffing_warnings?: string[] }>(
+            `/leave-requests/${l.id}`,
+            {
+              status: "Approved",
+              reviewed_by: user?.id,
+              reviewed_at: new Date().toISOString(),
+              review_note: note || null,
+            },
+          );
 
-          const mDates = publishedShifts
-            .filter((s) => s.shift === "M" || s.shift === "MWC")
-            .map((s) => s.shift_date);
-          const nDates = publishedShifts
-            .filter((s) => s.shift === "N" || s.shift === "NC")
-            .map((s) => s.shift_date);
-          const parts: string[] = [];
-          if (mDates.length > 0) parts.push(`${mDates.length} Morning (${mDates.join(", ")})`);
-          if (nDates.length > 0) parts.push(`${nDates.length} Night (${nDates.join(", ")})`);
+          if (approval.staffing_warnings?.length)
+            toast.warning(approval.staffing_warnings.join("\n"), { duration: 12000 });
+          const byShift = new Map<string, string[]>();
+          for (const s of publishedShifts) {
+            const label =
+              s.scheduled_shift?.name ??
+              (isMorningType(s.shift) ? "Morning" : isNightType(s.shift) ? "Night" : s.shift);
+            byShift.set(label, [...(byShift.get(label) ?? []), s.shift_date.slice(0, 10)]);
+          }
+          const parts = [...byShift].map(
+            ([label, dates]) => `${dates.length} ${label} (${dates.join(", ")})`,
+          );
           toast.success(
             `Leave approved — rota updated. Chief Matron: arrange cover for ${parts.join("; ")}.`,
             { duration: 8000 },
@@ -484,13 +506,18 @@ function LeavePage() {
       }
 
       // No locked working shifts in this window (draft rota or Rejected) — standard path.
-      await api.patch(`/leave-requests/${l.id}`, {
-        status,
-        reviewed_by: user?.id,
-        reviewed_at: new Date().toISOString(),
-        review_note: note || null,
-      });
+      const approval = await api.patch<{ staffing_warnings?: string[] }>(
+        `/leave-requests/${l.id}`,
+        {
+          status,
+          reviewed_by: user?.id,
+          reviewed_at: new Date().toISOString(),
+          review_note: note || null,
+        },
+      );
       toast.success(`Leave ${status.toLowerCase()}`);
+      if (approval.staffing_warnings?.length)
+        toast.warning(approval.staffing_warnings.join("\n"), { duration: 12000 });
       logAudit(`${status} leave request`, l.nurse_name);
       if (l.requested_by) {
         await api
@@ -526,10 +553,26 @@ function LeavePage() {
         if (!sw) return toast.error("Invalid shift switch data");
 
         const [arrA, arrB] = await Promise.all([
-          api.get<{ id: string; shift: string; ward: string | null }[]>(
+          api.get<
+            {
+              id: string;
+              shift: string;
+              ward: string | null;
+              shift_definition_run_id?: string | null;
+              scheduling_run_id?: string | null;
+            }[]
+          >(
             `/shift-assignments?nurse_id=${l.nurse_id ?? ""}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
-          api.get<{ id: string; shift: string; ward: string | null }[]>(
+          api.get<
+            {
+              id: string;
+              shift: string;
+              ward: string | null;
+              shift_definition_run_id?: string | null;
+              scheduling_run_id?: string | null;
+            }[]
+          >(
             `/shift-assignments?nurse_id=${sw.nurseBId}&shift_date=${sw.date.slice(0, 10)}&status=published&limit=1`,
           ),
         ]);
@@ -542,6 +585,24 @@ function LeavePage() {
           );
         }
 
+        if (
+          [assignA, assignB].some(
+            (assignment) => assignment.shift_definition_run_id || assignment.scheduling_run_id,
+          )
+        ) {
+          await api.post("/shift-assignments/configured-switch-approval", {
+            requestId: l.id,
+            note,
+            assignments: [assignA, assignB].map((assignment) => ({
+              id: assignment.id,
+              shift: assignment.shift,
+              definitionRunId: assignment.shift_definition_run_id ?? assignment.scheduling_run_id,
+            })),
+          });
+          toast.success("Configured switch approved and applied");
+          await refreshLeavePageData(qc, { includeAssignments: true });
+          return;
+        }
         if (assignA.shift === "LEAVE") {
           const targetShift = sw.shiftA === "M" || sw.shiftA === "N" ? sw.shiftA : null;
           if (!targetShift) {
@@ -1852,14 +1913,17 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
     isAdmin
       ? []
       : Object.entries(entitlementUsage ?? {})
-          .filter(([, v]) => v.exhausted)
+          .filter(
+            ([, v]) => v.exhausted && datesReady && from <= v.windowEnd && to >= v.windowStart,
+          )
           .map(([t]) => t),
   );
 
   // In-approval rota: all leave blocked for those dates.
   // Published / closure window / this unit's own draft period already
   // closed: only 3 exempt types allowed.
-  // Exhausted-entitlement types are then dropped from whatever's left.
+  // Current exhausted balances only restrict dates overlapping their own window.
+  // The API checks all requested windows, including future periods.
   const allowedTypes = (
     datesInApprovalRota
       ? []
@@ -2082,8 +2146,8 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
                 </p>
               ) : (
                 <p className="text-xs text-muted-foreground mt-1">
-                  {effectiveType} leave is capped at {sickEmergencyMaxDays} calendar day(s) from
-                  the start date.
+                  {effectiveType} leave is capped at {sickEmergencyMaxDays} calendar day(s) from the
+                  start date.
                 </p>
               ))}
           </div>
@@ -2218,9 +2282,7 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
             Cancel
           </button>
           <button
-            disabled={
-              busy || checkingDates || datesInApprovalRota || isSickEmergencyRangeExceeded
-            }
+            disabled={busy || checkingDates || datesInApprovalRota || isSickEmergencyRangeExceeded}
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >
@@ -2233,8 +2295,6 @@ function NewLeaveModal({ onClose }: { onClose: () => void }) {
 }
 
 // ── Shift switch request modal ───────────────────────────────────────────────
-
-const SWITCH_FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
 
 function splitWards(ward: string | null | undefined): string[] {
   if (!ward) return [];
@@ -2262,6 +2322,7 @@ function roleCategory(role: string | null | undefined): string {
 }
 
 function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
+  const SWITCH_FACILITIES = useHospitalFacilities();
   const { user, fullName, nurseFacility, isAdmin } = useAuth();
   const qc = useQueryClient();
 
@@ -2305,7 +2366,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   const [reason, setReason] = useState("");
   const [shiftA, setShiftA] = useState("");
   const [shiftB, setShiftB] = useState("");
-  const [coverShift, setCoverShift] = useState<"M" | "N" | "">("");
+  const [coverShift, setCoverShift] = useState("");
   const [busy, setBusy] = useState(false);
 
   const facilityKey = facility.trim().toLowerCase();
@@ -2337,8 +2398,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     queryKey: ["date-assignments", date, facility],
     enabled: !!date && facilityNurseIds.length > 0,
     queryFn: () =>
-      api.get<{ nurse_id: string; shift: string }[]>(
-        `/shift-assignments?shift_date=${date}&status=published&nurse_ids=${facilityNurseIds.join(",")}`,
+      api.get<
+        (AssignmentDefinition & {
+          nurse_id: string;
+          scheduling_run_id?: string | null;
+          shift_definition_run_id?: string | null;
+          ward?: string | null;
+        })[]
+      >(
+        `/shift-assignments?shift_date=${date}&status=published&include_shift_definition=true&nurse_ids=${facilityNurseIds.join(",")}`,
       ),
   });
   const assignmentMap = useMemo(
@@ -2353,8 +2421,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     const nurseACategory = roleCategory(nurseARole);
     // Mirror the rota's own grouping: Coverage Nurse, Head Nurse, and Coverage
     // Nurse - Day are all interchangeable (same facility-wide "head" group).
-    const isGlobalHeadRole = (r: string | null | undefined) =>
-      !!r && /^(head|coverage)\s*nurse$|^coverage\s*nurse\s*-\s*day$/i.test(r.trim());
+    const isGlobalHeadRole = (r: string | null | undefined) => !!r && isGlobalHead(r, facility);
     const nurseAIsGlobalHead = isGlobalHeadRole(nurseARole);
     const notNurseA = (n: (typeof switchableNurses)[number]) => n.id !== nurseAId;
     const sameRole = (n: (typeof switchableNurses)[number]) => {
@@ -2368,11 +2435,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
     // Direct switch with Nurse A on OFF: Nurse B must be actively on duty.
     // An OFF↔OFF swap is meaningless — nothing changes for either nurse.
-    const workShifts = new Set(["M", "N", "MWC", "NC"]);
     const passesDirectOffRule = (n: (typeof switchableNurses)[number]) => {
       if (exchangeMode !== "direct" || shiftA !== "OFF") return true;
       const s = assignmentMap.get(n.id);
-      return !!s && workShifts.has(s);
+      return !!s && s !== "OFF" && s !== "LEAVE";
     };
 
     // Both modes show all nurses (on & off duty), same role, ward-scoped.
@@ -2444,6 +2510,17 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     setShiftB(nurseBId ? (assignmentMap.get(nurseBId) ?? "") : "");
   }, [assignmentMap, nurseBId]);
 
+  // On configured schedules the duty to cover is Nurse A's saved planned shift,
+  // not a Morning/Night choice.
+  const coverSource = dateAssignments.find((a) => a.nurse_id === nurseAId);
+  const configuredCover =
+    shiftA === "LEAVE" &&
+    !!(coverSource?.shift_definition_run_id || coverSource?.scheduling_run_id);
+  const plannedCover = configuredCover ? (coverSource?.pre_leave_shift ?? "") : null;
+  useEffect(() => {
+    if (plannedCover !== null) setCoverShift(plannedCover);
+  }, [plannedCover]);
+
   async function submit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (nurseAId === nurseBId) return toast.error("Please select two different nurses");
@@ -2453,35 +2530,8 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       return toast.error("Nurse A is on leave — please select the shift type that needs covering");
     if (!reason.trim()) return toast.error("Please provide a reason for this shift switch");
 
-    // Minimum-notice rule (admin-configurable, default 24h): the shift must
-    // start more than switchMinNoticeHours from now — waived unconditionally
-    // when covering an approved Sick/Emergency Leave. A nurse can fall sick
-    // (or have an emergency) mid-shift with zero notice, and the whole point
-    // of allowing the switch request right after that leave is approved is
-    // to let someone else cover it, so the notice rule can't be what stands
-    // in the way.
-    let waive24hRule = false;
-    if (shiftA === "LEAVE") {
-      const coveredLeave = await api
-        .get<
-          { type: string }[]
-        >(`/leave-requests?nurse_id=${nurseAId}&status=Approved&from_date_lte=${date}&to_date_gte=${date}&limit=1`)
-        .catch(() => [] as { type: string }[]);
-      const covered = coveredLeave[0];
-      waive24hRule = !!covered && ["Sick", "Emergency"].includes(covered.type);
-    }
-
-    // Use the actual shift start time: Morning = 08:00, Night = 17:00.
+    // The API checks notice against the saved shift start and applies leave waivers.
     const effectiveShift = shiftA === "LEAVE" ? coverShift : shiftA;
-    const shiftHour = effectiveShift === "N" ? 17 : 8;
-    const shiftStart = new Date(`${date}T${String(shiftHour).padStart(2, "0")}:00:00`);
-    const hoursUntil = (shiftStart.getTime() - Date.now()) / 3_600_000;
-    if (!waive24hRule && hoursUntil < switchMinNoticeHours) {
-      return toast.error(
-        `Shift switch cannot be requested less than ${switchMinNoticeHours} hour(s) before the shift (${Math.max(0, Math.floor(hoursUntil))}h remaining). Please contact the CNO directly.`,
-      );
-    }
-
     if (exchangeMode === "leave" && shiftA !== "LEAVE") {
       return toast.error(
         "Leave mode requires Nurse A to have an approved leave assignment on this date. Use Direct Switch for shift swaps.",
@@ -2499,7 +2549,50 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     // against their own already-published shift the day before and after.
     // Re-validated again at approval time in reviewSwitch (defense in depth).
     const nurseBForCheck = nurses.find((n) => n.id === nurseBId);
-    if (shiftA === "LEAVE") {
+    const currentA = dateAssignments.find((a) => a.nurse_id === nurseAId);
+    const currentB = dateAssignments.find((a) => a.nurse_id === nurseBId);
+    const configured = [currentA, currentB].some(
+      (a) => a?.shift_definition_run_id || a?.scheduling_run_id,
+    );
+    if (configured) {
+      if (!currentA || !currentB)
+        return toast.error("Reload both published duties before requesting this switch");
+      if (
+        !(currentA.shift_definition_run_id || currentA.scheduling_run_id) ||
+        !(currentB.shift_definition_run_id || currentB.scheduling_run_id)
+      )
+        return toast.error("Both duties must use configured schedules for this switch");
+      if (!currentA.ward || !currentB.ward)
+        return toast.error("Facility-wide configured switches are not supported yet");
+      if (shiftA !== "LEAVE" && switchType !== "inter-ward" && currentA.ward !== currentB.ward)
+        return toast.error("Choose an inter-ward switch for duties in different wards");
+      if (shiftB === "LEAVE") return toast.error("Nurse B is on leave on this date");
+      if (shiftA === "LEAVE" && !currentA.pre_leave_shift)
+        return toast.error("Nurse A's planned duty is unavailable. Reload before requesting");
+      const offsetDate = (days: number) => {
+        const value = new Date(`${date}T00:00:00Z`);
+        value.setUTCDate(value.getUTCDate() + days);
+        return value.toISOString().slice(0, 10);
+      };
+      // Leave cover only changes Nurse B, who takes Nurse A's planned duty.
+      const checks: [string, AssignmentDefinition][] =
+        shiftA === "LEAVE"
+          ? [[nurseBId, { ...currentA, shift: currentA.pre_leave_shift ?? "" }]]
+          : [
+              [nurseAId, currentB],
+              [nurseBId, currentA],
+            ];
+      for (const [nurseId, incoming] of checks) {
+        const neighbors = await api.get<(AssignmentDefinition & { shift_date: string })[]>(
+          `/shift-assignments?nurse_id=${nurseId}&from=${offsetDate(-4)}&to=${offsetDate(4)}&include_shift_definition=true`,
+        );
+        const issue = switchRestIssue(
+          incoming,
+          neighbors.filter((a) => a.shift_date.slice(0, 10) !== date),
+        );
+        if (issue) return toast.error(issue);
+      }
+    } else if (shiftA === "LEAVE") {
       const { prevShift, nextShift } = await fetchAdjacentShifts(nurseBId, date);
       if (hasRestConflict(prevShift, coverShift, nextShift)) {
         return toast.error(
@@ -2727,7 +2820,16 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               Published shift: <span className="font-semibold text-foreground">{shiftA}</span>
             </p>
           )}
-          {shiftA === "LEAVE" && (
+          {shiftA === "LEAVE" && plannedCover !== null && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              Nurse A is on approved leave. Nurse B will cover the planned{" "}
+              <span className="font-semibold">
+                {coverSource?.scheduled_shift?.name ?? (plannedCover || "duty")}
+              </span>{" "}
+              shift.
+            </p>
+          )}
+          {shiftA === "LEAVE" && plannedCover === null && (
             <div className="mt-2 p-2 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800">
               <p className="text-xs text-amber-700 dark:text-amber-400 mb-2">
                 Nurse A is on approved leave. Select the shift type that needs covering:

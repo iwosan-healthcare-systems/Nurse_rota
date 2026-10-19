@@ -1,8 +1,6 @@
 import { Building2 } from "lucide-react";
+import { useHospitalFacilities } from "@/lib/use-hospital-facilities";
 import { cn } from "@/lib/utils";
-
-export const FACILITIES = ["Ikeja", "Ikoyi", "Ligali"] as const;
-export type FacilityName = (typeof FACILITIES)[number];
 
 interface FacilityChipsProps {
   /** Currently selected facility, or "" for "All Facilities" */
@@ -22,6 +20,7 @@ export function FacilityChips({
   showAll = false,
   className,
 }: FacilityChipsProps) {
+  const FACILITIES = useHospitalFacilities();
   const chipBase =
     "shrink-0 inline-flex items-center gap-2 h-9 px-4 rounded-xl border text-sm font-medium transition-all";
 
