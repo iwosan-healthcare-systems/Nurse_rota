@@ -79,7 +79,11 @@ async function scenarios(t) {
     const b = facilities.find((f) => f.name === "Other").id;
     let version;
     await t.test("migration preserves capability settings and seeds explicit scope", async () => {
-      assert.equal(facilities.length, 2);
+      // Ward/staff locations plus sites from hospital setup (GPS settings).
+      assert.deepEqual(
+        facilities.map((f) => f.name),
+        ["Ikeja", "Ikoyi", "Ligali", "Other"],
+      );
       assert.equal((await service.listFacilities(reader)).facilities.length, 1);
       const caps = (await pool.query("SELECT value FROM portal_settings WHERE key='capabilities'"))
         .rows[0].value;
@@ -3247,8 +3251,9 @@ async function scenarios(t) {
         (await service.listFacilities(user)).facilities.map((f) => f.name);
       assert.ok((await names(admin)).includes("Newsite"));
       assert.ok(!(await names(reader)).includes("Newsite"), "Non-admins need a staff link");
-      // The admin whose Ikoyi grant was removed regains nothing beyond the new site.
-      assert.deepEqual(await names(outsider), ["Newsite"]);
+      // The admin whose Ikoyi grant was removed regains nothing but new sites.
+      const outsiderSites = await names(outsider);
+      assert.ok(outsiderSites.includes("Newsite") && !outsiderSites.includes("Ikoyi"));
       await pool.query("DELETE FROM scheduling_facility_access WHERE user_id=$1", [outsider]);
       assert.deepEqual(await names(outsider), [], "Revoked grants are not re-added");
       const {
@@ -3256,6 +3261,18 @@ async function scenarios(t) {
       } = await pool.query("SELECT id FROM scheduling_facilities WHERE legacy_facility='Newsite'");
       const { configuration } = await service.defaults(admin, site.id);
       assert.equal(configuration.wardPolicies.length, 1, "New site wards seed its defaults");
+    });
+    await t.test("hospital admins and super admins see every facility of their hospital", async () => {
+      const { rows } = await pool.query(
+        "INSERT INTO profiles (email, full_name) VALUES ('later-admin@test.local','Later admin') RETURNING id",
+      );
+      const lateAdmin = rows[0].id;
+      assert.deepEqual((await service.listFacilities(lateAdmin)).facilities, []);
+      const sites = (await service.listFacilities(lateAdmin, { administrator: true })).facilities;
+      assert.deepEqual(
+        sites.map((f) => f.name),
+        (await service.listFacilities(admin)).facilities.map((f) => f.name),
+      );
     });
     await t.test("custom shift codes and role groups activate end to end", async () => {
       const policyBase = base.replace(a, b);

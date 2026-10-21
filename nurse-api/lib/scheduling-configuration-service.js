@@ -380,17 +380,23 @@ function createSchedulingConfigurationService(pool) {
         inputFingerprint: run.input_fingerprint,
       };
     },
-    async listFacilities(userId) {
+    // `administrator`: the caller is this hospital's admin/CNO or a platform super
+    // admin, who always has access to every facility in the hospital they are in.
+    async listFacilities(userId, { administrator = false } = {}) {
       // Locations created after migration 042 (new wards or staff with a new
       // facility name) join the existing organization, with the same initial
-      // admin/CNO grants the migration gave. Existing grants are never widened.
+      // admin/CNO grants the migration gave. Hospital admins/CNOs and super admins
+      // are also granted every facility of the hospital they are working in.
       // Two statements: row-level security checks each access grant against the
       // facilities visible to the statement, which excludes rows it inserted itself.
       await transaction(async (db) => {
         const { rows: added } = await db.query(
           `INSERT INTO scheduling_facilities (name, legacy_facility)
            SELECT l.facility, l.facility
-           FROM (SELECT facility FROM wards UNION SELECT facility FROM nurses) l
+           FROM (SELECT facility FROM wards UNION SELECT facility FROM nurses
+                 -- Sites entered during hospital setup, before any wards or staff exist.
+                 UNION SELECT jsonb_object_keys(value->'facilities') FROM portal_settings
+                   WHERE key = 'gps_settings' AND jsonb_typeof(value->'facilities') = 'object') l
            WHERE l.facility IS NOT NULL AND btrim(l.facility) <> ''
              AND app_current_hospital() IS NOT NULL
            ON CONFLICT DO NOTHING
@@ -409,6 +415,14 @@ function createSchedulingConfigurationService(pool) {
           [added.map((row) => row.id)],
         );
       });
+      if (administrator)
+        await transaction((db) =>
+          db.query(
+            `INSERT INTO scheduling_facility_access (facility_id, user_id)
+             SELECT id, $1 FROM scheduling_facilities ON CONFLICT DO NOTHING`,
+            [userId],
+          ),
+        );
       const { rows } = await pool.query(
         `SELECT f.id, f.organization_id, f.name, f.timezone FROM scheduling_facilities f
          JOIN scheduling_facility_access a ON a.facility_id = f.id

@@ -58,7 +58,12 @@ router.post(
 router.get(
   "/facilities",
   view(),
-  wrap((req) => service.listFacilities(req.user.userId)),
+  wrap((req) =>
+    service.listFacilities(req.user.userId, {
+      administrator:
+        req.user.isSuperAdmin || (req.user.roles || []).some((r) => r === "admin" || r === "cno"),
+    }),
+  ),
 );
 router.get(
   "/facilities/:facilityId/defaults",

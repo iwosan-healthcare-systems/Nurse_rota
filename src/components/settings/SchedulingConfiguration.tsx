@@ -1108,7 +1108,7 @@ export function SchedulingConfigurationEditor({
                         same number requests an exact count.
                       </p>
                       <div className="overflow-x-auto">
-                        <table className="w-full min-w-[580px] text-left text-sm">
+                        <table className="w-full min-w-145 text-left text-sm">
                           <thead>
                             <tr className="border-b">
                               <th className="p-2">Shift / staff</th>
