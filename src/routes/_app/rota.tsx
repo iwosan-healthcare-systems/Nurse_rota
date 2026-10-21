@@ -1019,6 +1019,55 @@ function RotaPage() {
     setFwDialogOpen(true);
   }
 
+  // Saved scheduling rules (Scheduling page) replace the built-in generator from
+  // the first rota period after they were saved; the server builds those drafts.
+  async function usesSavedRules(facility: string) {
+    const rules = await api
+      .get<{
+        configured: boolean;
+      }>(`/scheduling/rota-rules?facility=${encodeURIComponent(facility)}&date=${ymd(startDate)}`)
+      .catch(() => ({ configured: false }));
+    return rules.configured;
+  }
+
+  async function generateWithSavedRules(
+    body: {
+      facility: string;
+      ward?: string;
+      group?: FacilityWideGroup;
+      nurseIds?: string[];
+      fromDate?: string;
+    },
+    label: string,
+  ) {
+    setBusy(true);
+    try {
+      const result = await api.post<{ written: number; issues?: string[] }>(
+        "/scheduling/rota-generate",
+        { ...body, startDate: ymd(startDate) },
+      );
+      const issues = result.issues?.length ?? 0;
+      await logAudit(
+        "Generated rota draft with saved scheduling rules",
+        `${label} · ${ymd(startDate)} → ${ymd(endDate)} · ${result.written} cells`,
+      );
+      toast.success(
+        `${periodLabel} draft generated for ${label} with the saved scheduling rules${
+          issues
+            ? ` · ${issues} staffing issue${issues === 1 ? "" : "s"}, shown in Approvals and on printouts`
+            : ""
+        }`,
+        { duration: 8000 },
+      );
+    } catch (e: unknown) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate");
+    } finally {
+      await qc.refetchQueries({ queryKey: ["assignments"] });
+      qc.invalidateQueries({ queryKey: ["nurses"] });
+      setBusy(false);
+    }
+  }
+
   async function handleGenerate() {
     if (!genForm.facility) {
       toast.error("Select a facility");
@@ -1094,6 +1143,15 @@ function RotaPage() {
       toast.error(
         `"${genForm.ward}" is in the approval process. Return it to draft from the Approvals page before regenerating.`,
         { duration: 8000 },
+      );
+      return;
+    }
+
+    if (await usesSavedRules(genForm.facility)) {
+      setGenOpen(false);
+      await generateWithSavedRules(
+        { facility: genForm.facility, ward: genForm.ward },
+        `${genForm.facility} / ${genForm.ward}`,
       );
       return;
     }
@@ -1333,6 +1391,18 @@ function RotaPage() {
 
     if (!allWardNurses.length) return;
 
+    if (await usesSavedRules(effectiveFacility)) {
+      await generateWithSavedRules(
+        {
+          facility: effectiveFacility,
+          nurseIds: unscheduledWardNurses.map((n) => n.id),
+          fromDate: today > ymd(startDate) ? today : ymd(startDate),
+        },
+        unscheduledWardNurses.map((n) => n.name).join(", "),
+      );
+      return;
+    }
+
     setBusy(true);
     try {
       // Compute period offset the same way handleGenerate does
@@ -1468,6 +1538,18 @@ function RotaPage() {
     targetNurses: (typeof nurses)[number][],
   ) {
     if (!effectiveFacility || !canScheduleNewStaff || !targetNurses.length) return;
+    if (await usesSavedRules(effectiveFacility)) {
+      const today = todayYmd();
+      await generateWithSavedRules(
+        {
+          facility: effectiveFacility,
+          nurseIds: targetNurses.map((n) => n.id),
+          fromDate: today > ymd(startDate) ? today : ymd(startDate),
+        },
+        targetNurses.map((n) => n.name).join(", "),
+      );
+      return;
+    }
     setBusy(true);
     try {
       const today = todayYmd();
@@ -1720,6 +1802,21 @@ function RotaPage() {
           return;
         }
       }
+    }
+
+    if (await usesSavedRules(effectiveFacility)) {
+      setFwDialogOpen(false);
+      const groupLabels: Record<FacilityWideGroup, string> = {
+        matron: "Matron",
+        head: "Coverage Nurse",
+        porter: "Porter",
+        intern: "Nurse Intern",
+      };
+      await generateWithSavedRules(
+        { facility: effectiveFacility, group: fwRoleGroup },
+        `${effectiveFacility} / ${groupLabels[fwRoleGroup]}`,
+      );
+      return;
     }
 
     setFwDialogOpen(false);

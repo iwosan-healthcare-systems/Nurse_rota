@@ -4,7 +4,11 @@ import { PageHeader } from "@/components/PageHeader";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { scheduleExportDefinitions } from "@/lib/schedule-export";
-import { assessScheduleStaffing, type StaffingAssignment } from "@/lib/schedule-staffing";
+import {
+  assessCoverageGaps,
+  assessScheduleStaffing,
+  type StaffingAssignment,
+} from "@/lib/schedule-staffing";
 import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
 import {
   attendanceShiftLabel,
@@ -1481,6 +1485,12 @@ ${staffToPrint
         ? assessScheduleStaffing(allAssignments, dateRange(win.startDate, win.endDate))
         : null;
     if (staffing) definitions.html += staffing.html;
+    // Coverage nurse printouts list nights/weekends nobody covered.
+    const coverage =
+      win.ward === null && win.roleGroup === "head"
+        ? assessCoverageGaps(allAssignments, dateRange(win.startDate, win.endDate))
+        : null;
+    if (coverage) definitions.html += coverage.html;
     const assignMap = definitions.cells;
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = nurses.filter((n) => activeIds.has(n.id));
@@ -1509,7 +1519,7 @@ ${staffToPrint
       }
     }
 
-    return { activeNurses, assignMap, violations, definitions, staffing };
+    return { activeNurses, assignMap, violations, definitions, staffing, coverage };
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
@@ -1590,7 +1600,7 @@ ${violationsHtml}
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap, violations, definitions, staffing } =
+      const { activeNurses, assignMap, violations, definitions, staffing, coverage } =
         await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward
@@ -1623,6 +1633,7 @@ ${violationsHtml}
       xlsAddJsonSheet(wb, definitions.rows, "Shift Definitions", [14, 30, 10, 20, 24, 16, 16]);
       if (staffing)
         xlsAddJsonSheet(wb, staffing.rows, "Staffing Assessment", [16, 14, 18, 12, 12, 12, 70]);
+      if (coverage?.rows.length) xlsAddJsonSheet(wb, coverage.rows, "Coverage Gaps", [10, 80]);
       if (violations.length > 0) {
         const grouped = groupViolationsByDay(violations);
         xlsAddAoaSheet(

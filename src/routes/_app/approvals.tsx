@@ -19,7 +19,12 @@ import { EmptyState } from "@/components/EmptyState";
 import { Modal } from "./staff";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
-import { assessScheduleStaffing, type StaffingAssignment } from "@/lib/schedule-staffing";
+import {
+  assessCoverageGaps,
+  assessScheduleStaffing,
+  shortfallSummary,
+  type StaffingAssignment,
+} from "@/lib/schedule-staffing";
 import { scheduleExportDefinitions } from "@/lib/schedule-export";
 import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
 import { useAuth } from "@/lib/auth-context";
@@ -748,16 +753,23 @@ function ApprovalsPage() {
       win.ward !== null
         ? assessScheduleStaffing(allAssignments, dateRange(win.startDate, endDate))
         : null;
+    // Coverage nurse printouts list nights/weekends nobody covered.
+    const coverage =
+      win.ward === null && win.roleGroup === "head"
+        ? assessCoverageGaps(allAssignments, dateRange(win.startDate, endDate))
+        : null;
+    if (coverage) definitions.html += coverage.html;
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
-    return { activeNurses, assignMap, definitions, staffing };
+    return { activeNurses, assignMap, definitions, staffing, coverage };
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
     setDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap, definitions, staffing } = await fetchWindowData(win);
+      const { activeNurses, assignMap, definitions, staffing, coverage } =
+        await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const facilityLabel = win.facility ? ` · ${win.facility}` : "";
@@ -792,6 +804,7 @@ function ApprovalsPage() {
       if (staffing) {
         xlsAddJsonSheet(wb, staffing.rows, "Staffing Assessment", [16, 14, 18, 12, 12, 12, 70]);
       }
+      if (coverage?.rows.length) xlsAddJsonSheet(wb, coverage.rows, "Coverage Gaps", [10, 80]);
       const facilitySlug = win.facility
         ? `-${win.facility.replace(/\s+/g, "-").toLowerCase()}`
         : "";
@@ -963,15 +976,21 @@ ${staffing?.html ?? ""}
         {/* Step tracker */}
         {meta?.staffing && (
           <details className="px-4 py-3 border-b text-xs">
-            <summary className="cursor-pointer font-medium">Saved staffing assessment</summary>
+            <summary className="cursor-pointer font-medium">
+              {meta.staffing.shortfalls.length
+                ? `Staffing shortfalls (${meta.staffing.shortfalls.length})`
+                : "Staffing — saved requirements"}
+            </summary>
             <div className="mt-2 max-h-64 overflow-auto">
-              {meta.staffing.rows.map((row, index) => (
-                <p key={index} className="py-1 border-b">
-                  {Object.entries(row)
-                    .map(([label, value]) => `${label}: ${value}`)
-                    .join(" · ")}
-                </p>
-              ))}
+              {meta.staffing.shortfalls.length
+                ? meta.staffing.shortfalls.map((s, index) => (
+                    <p key={index} className="py-1 border-b">
+                      {shortfallSummary(s)}
+                    </p>
+                  ))
+                : meta.staffing.rows.length === 1 && meta.staffing.rows[0].Status
+                  ? String(meta.staffing.rows[0].Status)
+                  : "Every day meets the saved staffing requirements."}
             </div>
           </details>
         )}

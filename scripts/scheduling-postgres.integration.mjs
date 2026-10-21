@@ -887,7 +887,14 @@ async function scenarios(t) {
           `${legacyBase}?nurse_ids=${ids.join(",")}&from=${fresh.startDate}&to=${fresh.endDate}&status=draft`,
           { method: "DELETE" },
         );
-        assert.equal(remove.status, 409);
+        // Clearing drafts is allowed (Rota "Clear draft"); they are regenerated
+        // with the rules in use.
+        assert.equal(remove.status, 200);
+        assert.equal(await count("shift_assignments"), beforeCells);
+        assert.equal(
+          (await post("generate-active", { startDate: fresh.startDate, unit: "all" })).status,
+          201,
+        );
         assert.equal(await count("shift_assignments"), beforeCells + ids.length * DAYS_JAN);
         // Approval changes remain possible; regeneration cannot overwrite them.
         await pool.query(
@@ -1739,23 +1746,13 @@ async function scenarios(t) {
           cells[1].id,
           cells[1].nurse_role,
         ]);
-        const incomplete = await forceSubmitUnit(unit);
-        assert.equal(incomplete.submitted, false);
-        assert.match(incomplete.message, /no assignments on 2090-01-02/);
-        assert.ok(
-          (
-            await pool.query("SELECT status FROM shift_assignments WHERE id=ANY($1::uuid[])", [
-              cells.map((c) => c.id),
-            ])
-          ).rows.every((r) => r.status === "draft"),
-        );
         const result = await forceSubmitUnit({ ...unit, periodEnd: "2090-01-01" });
         assert.equal(result.submitted, true);
         assert.equal(result.count, 2);
       },
     );
     await t.test(
-      "saved ward minima reject publication atomically and accept sufficient staff",
+      "saved ward minima shortfalls do not block publication",
       async () => {
         const { rows: cells } = await pool.query(
           "SELECT * FROM shift_assignments WHERE shift_date='2090-01-01' ORDER BY id",
@@ -1801,13 +1798,7 @@ async function scenarios(t) {
             updateParams: [ids],
             body: { status: "published" },
           });
-        await assert.rejects(publish(), /Ward staffing.*has 0/);
-        assert.ok(
-          (
-            await pool.query("SELECT status FROM shift_assignments WHERE id=ANY($1::uuid[])", [ids])
-          ).rows.every((r) => r.status === "submitted"),
-        );
-        await pool.query("UPDATE shift_assignments SET shift='M' WHERE id=$1", [ids[0]]);
+        // Nobody is on M against a minimum of 1: reported, not blocking.
         await publish();
         assert.ok(
           (
@@ -1817,7 +1808,7 @@ async function scenarios(t) {
       },
     );
     await t.test(
-      "single configured approval enforces staffing, rest and transition rules",
+      "single configured approval enforces rest and transition rules but not staffing",
       async () => {
         const { rows: cells } = await pool.query(
           "SELECT * FROM shift_assignments WHERE shift_date='2090-01-01' ORDER BY id",
@@ -1836,12 +1827,10 @@ async function scenarios(t) {
         assert.equal((await patch({ status: "published", shift: "M" })).status, 400);
         assert.equal((await patch({ status: "submitted" })).status, 400);
         const shortage = await patch({ status: "published" });
-        assert.equal(shortage.status, 409, await shortage.text());
-        assert.equal(
-          (await pool.query("SELECT status FROM shift_assignments WHERE id=$1", [cell.id])).rows[0]
-            .status,
-          "cno_approved",
-        );
+        assert.equal(shortage.status, 200, await shortage.text());
+        await pool.query("UPDATE shift_assignments SET status='cno_approved' WHERE id=$1", [
+          cell.id,
+        ]);
         await pool.query("UPDATE shift_assignments SET shift='M' WHERE id=$1", [cell.id]);
         const {
           rows: [night],
@@ -1922,13 +1911,16 @@ async function scenarios(t) {
           });
           assert.equal(response.status, 409, await response.text());
         }
-        for (const suffix of [
-          "/" + cell.id,
-          `?nurse_ids=${cell.nurse_id}&from=2090-01-01&to=2090-01-01`,
-        ]) {
-          const response = await fetch(apiBase + suffix, { method: "DELETE" });
-          assert.equal(response.status, 409, await response.text());
-        }
+        const single = await fetch(apiBase + "/" + cell.id, { method: "DELETE" });
+        assert.equal(single.status, 409, await single.text());
+        // Bulk clearing is refused unless every targeted cell is still a draft.
+        await pool.query("UPDATE shift_assignments SET status='submitted' WHERE id=$1", [cell.id]);
+        const bulk = await fetch(
+          apiBase + `?nurse_ids=${cell.nurse_id}&from=2090-01-01&to=2090-01-01`,
+          { method: "DELETE" },
+        );
+        assert.equal(bulk.status, 409, await bulk.text());
+        await pool.query("UPDATE shift_assignments SET status='draft' WHERE id=$1", [cell.id]);
         const {
           rows: [after],
         } = await pool.query("SELECT * FROM shift_assignments WHERE id=$1", [cell.id]);
@@ -2267,7 +2259,7 @@ async function scenarios(t) {
         }
       },
     );
-    await t.test("leave restoration rejects saved ward staffing excess atomically", async () => {
+    await t.test("leave restoration is not blocked by saved ward staffing", async () => {
       const { validateConfiguredLeaveRestoration } = require("./lib/configured-leave-restoration");
       const {
         rows: [cell],
@@ -2296,7 +2288,7 @@ async function scenarios(t) {
           "UPDATE shift_assignments SET shift=pre_leave_shift,pre_leave_shift=NULL WHERE id=$1 RETURNING *,shift_date::text",
           [cell.id],
         );
-        await assert.rejects(validateConfiguredLeaveRestoration(db, rows), /Ward staffing.*has 2/);
+        await validateConfiguredLeaveRestoration(db, rows);
         await db.query("ROLLBACK");
         const {
           rows: [unchanged],
@@ -3504,6 +3496,85 @@ async function scenarios(t) {
         "Approved",
       );
     });
+    await t.test(
+      "saving applies rules from the next rota draft and Rota generation reports shortfalls",
+      async () => {
+        const otherBase = base.replace(a, b);
+        const root = base.slice(0, base.indexOf("/facilities"));
+        const call = async (url, method = "GET", body) => {
+          const response = await fetch(url, {
+            method,
+            headers: { "content-type": "application/json" },
+            body: body && JSON.stringify(body),
+          });
+          return { status: response.status, body: await response.json() };
+        };
+        const { versions } = (await call(`${otherBase}/versions`)).body;
+        const current = (await call(`${otherBase}/versions/${versions[0].id}`)).body;
+        // Demand more staff than exist, so every generated day is short.
+        const configuration = structuredClone(current.configuration);
+        configuration.requirements.forEach((r) => {
+          r.minimum = 50;
+          r.maximum = null;
+        });
+        const saved = await call(`${otherBase}/versions/${current.id}`, "PUT", {
+          revision: current.revision,
+          configuration,
+        });
+        assert.equal(saved.status, 200, JSON.stringify(saved.body));
+        const {
+          rows: [next],
+        } = await pool.query(
+          `SELECT GREATEST(rota_period_end(MAX(sa.shift_date)) + 1,
+             rota_period_start((now() AT TIME ZONE 'Africa/Lagos')::date))::text AS start
+           FROM shift_assignments sa JOIN nurses n ON n.id=sa.nurse_id WHERE n.facility='Other'`,
+        );
+        assert.equal(saved.body.appliesFrom, next.start, "The first period without a draft");
+        assert.equal(
+          (await call(`${otherBase}/versions/${current.id}`)).body.appliesFrom,
+          next.start,
+        );
+        const {
+          rows: [event],
+        } = await pool.query(
+          "SELECT state,effective_from::text FROM scheduling_policy_events WHERE facility_id=$1 ORDER BY sequence DESC LIMIT 1",
+          [b],
+        );
+        assert.deepEqual(event, { state: "active", effective_from: next.start });
+        assert.equal(
+          (await call(`${root}/rota-rules?facility=Other&date=${next.start}`)).body.configured,
+          true,
+        );
+        const {
+          rows: [ward],
+        } = await pool.query(
+          `SELECT w.name FROM wards w WHERE w.facility='Other' AND EXISTS (
+             SELECT 1 FROM nurses n WHERE n.facility='Other' AND n.is_active AND n.role='Nurse'
+               AND split_part(n.ward, ',', 1)=w.name) ORDER BY w.name LIMIT 1`,
+        );
+        const generated = await call(`${root}/rota-generate`, "POST", {
+          facility: "Other",
+          startDate: next.start,
+          ward: ward.name,
+        });
+        assert.equal(generated.status, 201, JSON.stringify(generated.body));
+        assert.ok(generated.body.written > 0);
+        assert.ok(
+          generated.body.issues.some((m) => /required 50\+/.test(m)),
+          "Shortfalls are reported, not blocking",
+        );
+        assert.equal(
+          (
+            await call(`${root}/rota-generate`, "POST", {
+              facility: "Other",
+              startDate: next.start,
+              group: "unknown",
+            })
+          ).status,
+          400,
+        );
+      },
+    );
   } finally {
     if (server) await new Promise((resolve) => server.close(resolve));
     await pool.end();

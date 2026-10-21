@@ -76,6 +76,7 @@ export type RotaPreview = {
     wardId?: string;
     date?: string;
     shift?: string;
+    category?: string;
     actual?: number;
     minimum?: number;
     maximum?: number | null;
@@ -141,6 +142,10 @@ export type VersionSummary = {
 export type ConfigurationVersion = VersionSummary & {
   configuration: SchedulingConfiguration;
   warnings: ConfigurationWarning[];
+  /** First rota period using these saved rules (the next rota draft), if any. */
+  appliesFrom?: string | null;
+  /** Why saved rules could not be applied, when appliesFrom is null after a save. */
+  reason?: string;
 };
 export type ConfigurationDefaults = {
   configuration: SchedulingConfiguration;

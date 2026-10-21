@@ -4,7 +4,6 @@ const {
 } = require("./configured-assignment-edit");
 const { assignmentShiftDefinition } = require("./assignment-shift-definition");
 const { validateTransitionRestContext } = require("./configured-transition-rest");
-const { validateTransitionStaffingContext } = require("./configured-transition-staffing");
 const invalid = (message) => {
   const error = new Error(message);
   error.code = "CONFIGURED_EDIT_INVALID";
@@ -13,7 +12,7 @@ const invalid = (message) => {
 
 async function applyValidatedAssignmentBatch(
   pool,
-  { where, filterParams, updateSql, updateParams, body, authorize, after, staffingWindow },
+  { where, filterParams, updateSql, updateParams, body, authorize, after },
 ) {
   const db = await pool.connect();
   try {
@@ -31,7 +30,6 @@ async function applyValidatedAssignmentBatch(
       throw error;
     }
     const forward = ["submitted", "cno_approved", "published"].includes(body.status);
-    let savedRuns = null;
     if (configured.length && (body.shift || body.ward || forward)) {
       const ids = [
         ...new Set(configured.map((r) => r.shift_definition_run_id ?? r.scheduling_run_id)),
@@ -41,7 +39,6 @@ async function applyValidatedAssignmentBatch(
         [ids],
       );
       const byId = new Map(runs.map((r) => [r.id, r]));
-      savedRuns = byId;
       for (const row of configured) {
         if (body.ward && body.ward !== row.ward)
           invalid("Configured ward reassignment requires a new reviewed schedule");
@@ -68,21 +65,9 @@ async function applyValidatedAssignmentBatch(
       ...updateParams,
       rows.map((r) => r.id),
     ]);
+    // Ward staffing shortfalls do not block submission, approval or publication;
+    // they are shown in Approvals and schedule printouts instead.
     if (after) await after(db);
-    if (forward && savedRuns) {
-      const { rows: updated } = await db.query(
-        "SELECT *,shift_date::text FROM shift_assignments WHERE id=ANY($1::uuid[]) ORDER BY id",
-        [rows.map((row) => row.id)],
-      );
-      // Assess the persisted result, including leave reapplication, before commit.
-      await validateTransitionStaffingContext(
-        db,
-        updated,
-        savedRuns,
-        { status: body.status },
-        staffingWindow,
-      );
-    }
     await db.query("COMMIT");
     return result;
   } catch (error) {

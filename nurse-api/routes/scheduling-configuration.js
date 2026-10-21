@@ -35,6 +35,26 @@ router.get(
     return { facilities: await activeRoleGroups(pool, date) };
   }),
 );
+// Whether saved rules apply to a facility's rota period (Rota page generation).
+router.get(
+  "/rota-rules",
+  wrap(async (req) => {
+    const { facility, date } = req.query;
+    if (typeof facility !== "string" || !validDate(date))
+      throw new ConfigurationError(400, "Use a facility and a valid date");
+    return service.rotaRules(facility, date);
+  }),
+);
+// Rota page generation with the saved rules. Whole units need rota generation
+// access; scheduling staff who joined mid-period needs rota editing access.
+router.post(
+  "/rota-generate",
+  (req, res, next) =>
+    (req.body?.nurseIds
+      ? requireCapability("edit_rota", ["admin", "head_nurse"])
+      : requireCapability("auto_generate", ["admin"]))(req, res, next),
+  wrap((req) => service.generateForRota(req.user.userId, req.body), 201),
+);
 router.get(
   "/facilities",
   view(),
@@ -64,7 +84,11 @@ router.post(
   "/facilities/:facilityId/versions",
   manage(),
   wrap(
-    (req) => service.create(req.user.userId, req.params.facilityId, req.body, { single: true }),
+    (req) =>
+      service.create(req.user.userId, req.params.facilityId, req.body, {
+        single: true,
+        apply: true,
+      }),
     201,
   ),
 );
@@ -72,7 +96,9 @@ router.put(
   "/facilities/:facilityId/versions/:versionId",
   manage(),
   wrap((req) =>
-    service.update(req.user.userId, req.params.facilityId, req.params.versionId, req.body),
+    service.update(req.user.userId, req.params.facilityId, req.params.versionId, req.body, {
+      apply: true,
+    }),
   ),
 );
 

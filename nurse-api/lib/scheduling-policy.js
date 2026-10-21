@@ -201,17 +201,20 @@ function createPolicyService({
     );
     const selectedSet = new Set(ids),
       wardIds = new Set(result.staff.filter((n) => selectedSet.has(n.id)).map((n) => n.wardId));
-    const blocking = result.diagnostics.filter(
-      (d) =>
-        d.severity === "error" &&
-        (d.nurseId ? selectedSet.has(d.nurseId) : d.wardId ? wardIds.has(d.wardId) : true),
-    );
-    if (blocking.length)
-      fail(422, "Configured generation has blocking issues; review a preview", blocking);
+    // Shortfalls and other issues never stop a draft: it is generated as well
+    // as staff allow, and the issues show in Approvals and schedule printouts.
+    const issues = result.diagnostics
+      .filter(
+        (d) =>
+          d.severity === "error" &&
+          (d.nurseId ? selectedSet.has(d.nurseId) : d.wardId ? wardIds.has(d.wardId) : true),
+      )
+      .map((d) => d.message);
     if (dryRun)
       return {
         handled: true,
         dryRun: true,
+        issues,
         written: 0,
         assignments: result.assignments.filter((a) => selectedSet.has(a.nurseId) && a.date >= first)
           .length,
@@ -247,10 +250,123 @@ function createPolicyService({
       userId ?? null,
       `Policy ${policy.id}; run ${result.runId}; ${saved.written} cells${fromDate ? `; staff addition from ${fromDate}` : ""}`,
     ]);
-    return { ...saved, handled: true, runId: result.runId, policyId: policy.id };
+    return { ...saved, handled: true, runId: result.runId, policyId: policy.id, issues };
+  }
+  // Saving a configuration puts it into use from the facility's next rota
+  // period without a draft: periods already generated keep the rules they were
+  // made with. Returns the first period start, or null when it cannot apply.
+  async function applyConfiguration(db, userId, facility, version) {
+    if (!isLiveCompatible(version.configuration))
+      return { appliesFrom: null, reason: "Only the Africa/Lagos timezone can be used for rotas" };
+    const {
+      rows: [next],
+    } = await db.query(
+      `SELECT GREATEST(
+         rota_period_end(MAX(a.shift_date)) + 1,
+         rota_period_start((now() AT TIME ZONE 'Africa/Lagos')::date))::text AS start
+       FROM shift_assignments a JOIN nurses n ON n.id=a.nurse_id WHERE n.facility=$1`,
+      [facility.legacy_facility],
+    );
+    if (!next?.start) return { appliesFrom: null, reason: "No rota period found" };
+    let run;
+    try {
+      run = await generateRun(
+        userId,
+        facility.id,
+        version.id,
+        { revision: version.revision, startDate: next.start },
+        true,
+        db,
+        { facility, version },
+      );
+    } catch (error) {
+      // A configuration the engine cannot run yet (for example no active staff)
+      // stays saved and applies the next time it is saved.
+      if (error.status === 422) return { appliesFrom: null, reason: error.message };
+      throw error;
+    }
+    await event(db, userId, facility.id, "active", run.runId, next.start, next.start);
+    return { appliesFrom: next.start };
+  }
+  // Rules in use for one period, by legacy facility name, for the Rota page.
+  async function rotaRules(facilityName, date) {
+    const {
+      rows: [facility],
+    } = await pool.query("SELECT id FROM scheduling_facilities WHERE legacy_facility=$1", [
+      facilityName,
+    ]);
+    const policy = facility ? await policyAt(pool, facility.id, date) : null;
+    return { configured: !!policy, paused: policy?.state === "paused" };
+  }
+  // Rota page generation with the saved rules: a ward, a facility-wide group, or
+  // staff joining an already generated period from their first date.
+  async function generateForRota(userId, body) {
+    assertBody(body, ["facility", "startDate", "ward", "group", "nurseIds", "fromDate"]);
+    const groups = ["head", "matron", "porter", "intern"];
+    if (
+      typeof body.facility !== "string" ||
+      !validDate(body.startDate) ||
+      (body.ward !== undefined && typeof body.ward !== "string") ||
+      (body.group !== undefined && !groups.includes(body.group)) ||
+      (body.nurseIds !== undefined &&
+        (!Array.isArray(body.nurseIds) ||
+          !body.nurseIds.length ||
+          body.nurseIds.some((id) => typeof id !== "string" || !UUID.test(id)))) ||
+      (body.fromDate !== undefined && !validDate(body.fromDate))
+    )
+      fail(400, "Choose a facility, period and ward, group or staff");
+    return transaction(
+      async (db) => {
+        const {
+          rows: [facility],
+        } = await db.query(
+          "SELECT * FROM scheduling_facilities WHERE legacy_facility=$1 FOR UPDATE",
+          [body.facility],
+        );
+        if (!facility) fail(404, "Facility not found");
+        let unit = "all";
+        if (body.ward !== undefined) {
+          const {
+            rows: [ward],
+          } = await db.query("SELECT id FROM wards WHERE facility=$1 AND name=$2", [
+            facility.legacy_facility,
+            body.ward,
+          ]);
+          if (!ward) fail(404, "Ward not found");
+          unit = `ward:${ward.id}`;
+        } else if (body.group !== undefined) unit = `group:${body.group}`;
+        let fromDate = null;
+        if (body.fromDate !== undefined) {
+          const bounds = await periodFor(db, body.startDate);
+          if (!bounds || body.fromDate < body.startDate || body.fromDate > bounds.end)
+            fail(422, "The first date must fall within the rota period");
+          const {
+            rows: [clock],
+          } = await db.query("SELECT (now() AT TIME ZONE 'Africa/Lagos')::date::text AS today");
+          fromDate = body.fromDate < clock.today ? clock.today : body.fromDate;
+          if (fromDate > bounds.end) fail(422, "This rota period has already ended");
+        }
+        const result = await generate(db, {
+          userId,
+          facility,
+          startDate: body.startDate,
+          unit,
+          nurseIds: body.nurseIds,
+          fromDate,
+        });
+        if (!result) fail(409, "No saved scheduling rules apply to this period");
+        if (result.skipped) fail(409, result.reason);
+        return result;
+      },
+      false,
+      true,
+    );
   }
   return {
     activateRun: activate,
+    applyConfiguration,
+    rotaRules,
+    generateForRota,
     async initialAutomaticPeriod(facilityName) {
       const {
         rows: [policy],

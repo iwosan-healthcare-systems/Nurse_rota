@@ -84,7 +84,6 @@ async function forceSubmitUnit({ facility, ward, roleGroup, periodStart, periodE
       filterParams: params,
       updateParams: params,
       body: { status: "submitted" },
-      staffingWindow: { start: periodStart, end: periodEnd },
       updateSql: `UPDATE shift_assignments SET status='submitted',updated_at=NOW(),updated_by_name='System (auto-submitted)' ${where}`,
     });
     return { submitted: true, count: rowCount };

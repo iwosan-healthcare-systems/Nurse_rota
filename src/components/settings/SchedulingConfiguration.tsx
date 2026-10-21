@@ -4,7 +4,7 @@ import { Plus, Trash2, ArrowUp, ArrowDown, Save, CheckCircle2, Loader2 } from "l
 import { toast } from "sonner";
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { SchedulingActivationTab } from "./SchedulingActivationTab";
+import { SchedulingCheckTab } from "./SchedulingCheckTab";
 import { PatternMonthCalendar } from "./PatternMonthCalendar";
 import { SchedulingCoverageRules } from "./SchedulingCoverageRules";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -28,6 +28,14 @@ import {
 
 const inputClass = "w-full rounded-md border bg-background px-3 py-2 text-sm disabled:opacity-60";
 const cardClass = "rounded-xl border bg-card p-4 md:p-5 space-y-4";
+// "December 2026" for a period starting on the 1st, otherwise "16 Nov 2026".
+const periodName = (start: string) =>
+  new Date(start.slice(0, 10) + "T00:00:00").toLocaleDateString(
+    "en-GB",
+    start.slice(8, 10) === "01"
+      ? { month: "long", year: "numeric" }
+      : { day: "numeric", month: "short", year: "numeric" },
+  );
 const newId = (prefix: string) =>
   `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`;
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -187,7 +195,14 @@ export function SchedulingConfigurationEditor({
         : await api.post<ConfigurationVersion>(`${base}/versions`, { configuration: config });
       load(row, row.configuration);
       await qc.invalidateQueries({ queryKey: ["scheduling-versions", facility.id] });
-      toast.success("Scheduling configuration saved");
+      if (row.appliesFrom)
+        toast.success(
+          `Scheduling configuration saved · used for the next rota draft (${periodName(row.appliesFrom)})`,
+        );
+      else
+        toast.warning(
+          `Scheduling configuration saved, but not yet in use${row.reason ? `: ${row.reason}` : ""}`,
+        );
     } catch (error) {
       showError(error);
     } finally {
@@ -248,8 +263,8 @@ export function SchedulingConfigurationEditor({
       <div className="rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm text-amber-950">
         <strong>Scheduling configuration</strong>
         <p className="mt-1">
-          This facility has one scheduling configuration. Saving updates it; current and published
-          rotas only change once an administrator puts the rules into use from the Activation tab.
+          This facility has one scheduling configuration. Saving updates it, and the saved rules are
+          used for the next rota draft. Rotas already generated keep the rules they were made with.
         </p>
       </div>
       {problem && (
@@ -281,6 +296,8 @@ export function SchedulingConfigurationEditor({
                       minute: "2-digit",
                     })}`
                   : "Not saved yet · showing this facility's existing rules"}
+                {version?.appliesFrom &&
+                  ` · Used for rotas from ${periodName(version.appliesFrom)}`}
                 {!canManage && " · read-only access"}
               </p>
             </div>
@@ -314,8 +331,8 @@ export function SchedulingConfigurationEditor({
             {validation &&
               (validation.valid ? (
                 <div className="rounded-lg border border-green-300 bg-green-50 p-4 text-sm text-green-950">
-                  Configuration checks passed. This checks settings and references; staffing is
-                  checked when you check a period in the Activation tab.
+                  Configuration checks passed. This checks settings and references; staffing can be
+                  previewed in the Check a month tab.
                 </div>
               ) : (
                 <Problem>
@@ -338,7 +355,7 @@ export function SchedulingConfigurationEditor({
               <TabsTrigger value="wards">Ward requirements</TabsTrigger>
               <TabsTrigger value="coverage">Coverage rules</TabsTrigger>
               <TabsTrigger value="review">Review</TabsTrigger>
-              <TabsTrigger value="activation">Activation</TabsTrigger>
+              <TabsTrigger value="check">Check a month</TabsTrigger>
             </TabsList>
             {tab === "wards" && wards.length > 0 && (
               <div className={`${cardClass} mt-4 grid gap-4 sm:grid-cols-2`}>
@@ -1186,8 +1203,8 @@ export function SchedulingConfigurationEditor({
                 )}
               </TabsContent>
             </fieldset>
-            <TabsContent value="activation">
-              <SchedulingActivationTab
+            <TabsContent value="check">
+              <SchedulingCheckTab
                 key={`${version?.id ?? "new"}-${version?.revision ?? 0}`}
                 base={base}
                 version={version}
@@ -1217,12 +1234,12 @@ export function SchedulingConfigurationEditor({
                 <p className="text-sm">{config.timezone} · monthly rota periods</p>
               </div>
               <div className={cardClass}>
-                <h3 className="font-semibold">Before activation</h3>
+                <h3 className="font-semibold">When these rules are used</h3>
                 <p className="text-sm text-muted-foreground">
-                  Saving does not assign roles to staff or update the current ward settings. In the
-                  Activation tab, check a future period against current staff and approved leave,
-                  then activate it to use these rules (including custom shifts and role groups) for
-                  rota generation from that period.
+                  Saving does not assign roles to staff or update the current ward settings. Saved
+                  rules (including custom shifts and role groups) are used from the next rota period
+                  without a draft; rotas already generated keep their rules. Staffing shortfalls do
+                  not block a rota: they show in Approvals and on schedule printouts.
                 </p>
                 {config.roles.some((r) => r.requiresReview) && (
                   <p className="text-sm text-amber-800">

@@ -1,6 +1,5 @@
 const { configuredEditOptions } = require("./configured-assignment-edit");
 const { validateTransitionRestContext } = require("./configured-transition-rest");
-const { validateTransitionStaffingContext } = require("./configured-transition-staffing");
 
 // Caller must keep restored rows locked in the leave-reversal transaction.
 async function validateConfiguredLeaveRestoration(db, rows) {
@@ -27,10 +26,8 @@ async function validateConfiguredLeaveRestoration(db, rows) {
       throw error;
     }
   }
+  // Restored duty may leave a ward over or under its saved staffing; that is
+  // reported in Approvals and printouts rather than blocking the reversal.
   await validateTransitionRestContext(db, configured, runs);
-  for (const status of ["submitted", "cno_approved", "published"]) {
-    const restored = configured.filter((row) => row.status === status);
-    if (restored.length) await validateTransitionStaffingContext(db, restored, runs, { status });
-  }
 }
 module.exports = { validateConfiguredLeaveRestoration };

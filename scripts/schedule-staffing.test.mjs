@@ -9,7 +9,7 @@ const compiled = ts.transpileModule(
   readFileSync(new URL("../src/lib/schedule-staffing.ts", import.meta.url), "utf8"),
   { compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 } },
 ).outputText;
-const { assessScheduleStaffing } = await import(
+const { assessScheduleStaffing, assessCoverageGaps } = await import(
   `data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`
 );
 const requirement = {
@@ -88,4 +88,36 @@ test("staffing metadata exposes only the saved ward requirements and role catego
   assert.equal(result.category, "nurse");
   assert.ok(assignmentStaffingDefinition({ ...cell, ward: "Unknown" }, run).error);
   assert.ok(assignmentStaffingDefinition(cell, null).error);
+});
+
+test("printouts list shortfalls once per shift and category with their days", () => {
+  const monday2 = { ...cell, shift_date: "2044-01-11" };
+  const result = assessScheduleStaffing(
+    [cell, monday2, { ...monday2, nurse_id: "n2" }],
+    ["2044-01-04", "2044-01-11"],
+  );
+  assert.equal(result.shortfalls.length, 1);
+  assert.deepEqual(result.shortfalls[0].days, [{ date: "2044-01-04", actual: 1 }]);
+  assert.equal(result.shortfalls[0].required, "2–3");
+  assert.match(result.html, /Staffing shortfalls/);
+  assert.match(result.html, /4 Jan \(1\)/);
+  assert.doesNotMatch(result.html, /2044-01-04/, "No raw ISO dates on printouts");
+  const met = assessScheduleStaffing([monday2, { ...monday2, nurse_id: "n2" }], ["2044-01-11"]);
+  assert.equal(met.shortfalls.length, 0);
+  assert.match(met.html, /Every day met/);
+});
+test("coverage printouts list nights and weekends nobody covered", () => {
+  const dates = ["2044-01-08", "2044-01-09", "2044-01-10"]; // Fri, Sat, Sun
+  const result = assessCoverageGaps(
+    [
+      { shift: "NC", shift_date: "2044-01-08" },
+      { shift: "MWC", shift_date: "2044-01-09" },
+    ],
+    dates,
+  );
+  assert.deepEqual(result.rows, [
+    { Duty: "NC", "Days with nobody on duty": "9 Jan, 10 Jan" },
+    { Duty: "MWC", "Days with nobody on duty": "10 Jan" },
+  ]);
+  assert.equal(assessCoverageGaps([{ shift: "M", shift_date: "2044-01-08" }], dates), null);
 });

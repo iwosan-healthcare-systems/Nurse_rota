@@ -859,10 +859,6 @@ router.patch(
       updateSql: `UPDATE shift_assignments SET ${sets.join(", ")} ${where}`,
       updateParams: params,
       body: req.body,
-      staffingWindow:
-        shift_date_from && shift_date_to
-          ? { start: shift_date_from, end: shift_date_to }
-          : undefined,
       authorize: (cells) => headNurseHasEditGrantForAll(req, cells),
       after:
         shift && nurse_ids && shift_date_from && shift_date_to
@@ -1096,24 +1092,30 @@ router.delete(
     try {
       await client.query("BEGIN");
       const { rows: targets } = await client.query(
-        `SELECT id,nurse_id,shift_date::text,shift_definition_run_id,scheduling_run_id FROM shift_assignments ${where} ORDER BY id FOR UPDATE`,
+        `SELECT id,nurse_id,shift_date::text,status,shift_definition_run_id,scheduling_run_id FROM shift_assignments ${where} ORDER BY id FOR UPDATE`,
         params,
       );
-      if (targets.some((row) => row.shift_definition_run_id ?? row.scheduling_run_id)) {
+      // Clearing drafts is always allowed: they are regenerated with the rules in use.
+      const draftsOnly = targets.every((row) => row.status === "draft");
+      if (
+        !draftsOnly &&
+        targets.some((row) => row.shift_definition_run_id ?? row.scheduling_run_id)
+      ) {
         const error = new Error(
           "Configured assignments require reviewed schedule replacement and cannot be deleted here",
         );
         error.code = "CONFIGURED_EDIT_INVALID";
         throw error;
       }
-      await guardLegacyGeneration(
-        client,
-        [...new Set(targets.map((r) => r.nurse_id))],
-        targets
-          .map((r) => r.shift_date)
-          .sort()
-          .at(-1),
-      );
+      if (!draftsOnly)
+        await guardLegacyGeneration(
+          client,
+          [...new Set(targets.map((r) => r.nurse_id))],
+          targets
+            .map((r) => r.shift_date)
+            .sort()
+            .at(-1),
+        );
       const result = await client.query("DELETE FROM shift_assignments WHERE id=ANY($1::uuid[])", [
         targets.map((row) => row.id),
       ]);

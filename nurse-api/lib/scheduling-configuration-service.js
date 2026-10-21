@@ -235,16 +235,27 @@ function createSchedulingConfigurationService(pool) {
     };
     return dbOverride ? operation(dbOverride) : transaction(operation, !save, save);
   }
+  const policy = createPolicyService({
+    pool,
+    transaction,
+    facilityFor,
+    generateRun,
+    fail,
+    assertId,
+    assertBody,
+  });
+  // First period of the facility's latest saved-rules event (null when none).
+  async function appliesFrom(db, facilityId) {
+    const {
+      rows: [latest],
+    } = await db.query(
+      "SELECT state,effective_from::text FROM scheduling_policy_events WHERE facility_id=$1 ORDER BY sequence DESC LIMIT 1",
+      [facilityId],
+    );
+    return latest?.state === "active" ? latest.effective_from : null;
+  }
   return {
-    ...createPolicyService({
-      pool,
-      transaction,
-      facilityFor,
-      generateRun,
-      fail,
-      assertId,
-      assertBody,
-    }),
+    ...policy,
     async createDraftFromRun(userId, facilityId, runId, body) {
       assertId(runId);
       assertBody(body, []);
@@ -423,7 +434,7 @@ function createSchedulingConfigurationService(pool) {
         [versionId, facilityId],
       );
       if (!rows[0]) fail(404, "Configuration not found");
-      return describe(rows[0]);
+      return { ...describe(rows[0]), appliesFrom: await appliesFrom(pool, facilityId) };
     },
     async defaults(userId, facilityId) {
       const facility = await facilityFor(pool, userId, facilityId);
@@ -459,7 +470,8 @@ function createSchedulingConfigurationService(pool) {
     },
     // With { single: true } (the HTTP API) a facility keeps one current
     // configuration: once it exists, it is updated rather than versioned again.
-    async create(userId, facilityId, body, { single = false } = {}) {
+    // With { apply: true } the saved rules apply from the next rota draft.
+    async create(userId, facilityId, body, { single = false, apply = false } = {}) {
       assertBody(body, ["configuration", "sourceVersionId"]);
       if (body.configuration !== undefined && body.sourceVersionId !== undefined)
         fail(400, "Choose configuration or sourceVersionId, not both");
@@ -504,10 +516,14 @@ function createSchedulingConfigurationService(pool) {
           [facility.organization_id, facilityId, JSON.stringify(configuration), userId],
         );
         await audit(db, userId, "Scheduling configuration draft created", rows[0]);
-        return describe(rows[0]);
+        if (!apply) return describe(rows[0]);
+        return {
+          ...describe(rows[0]),
+          ...(await policy.applyConfiguration(db, userId, facility, rows[0])),
+        };
       });
     },
-    async update(userId, facilityId, versionId, body) {
+    async update(userId, facilityId, versionId, body, { apply = false } = {}) {
       assertId(versionId);
       assertBody(body, ["revision", "configuration"]);
       if (!Number.isInteger(body.revision) || body.revision < 1)
@@ -530,7 +546,11 @@ function createSchedulingConfigurationService(pool) {
           [JSON.stringify(body.configuration), userId, versionId, facilityId],
         );
         await audit(db, userId, "Scheduling configuration draft updated", result.rows[0]);
-        return describe(result.rows[0]);
+        if (!apply) return describe(result.rows[0]);
+        return {
+          ...describe(result.rows[0]),
+          ...(await policy.applyConfiguration(db, userId, facility, result.rows[0])),
+        };
       });
     },
   };
