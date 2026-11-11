@@ -861,6 +861,29 @@ async function scenarios(t) {
           409,
           JSON.stringify(await transitionResponse.json()),
         );
+        // New staff in a reviewed unit: status-only moves are accepted there,
+        // duty changes are not.
+        const newStaff = (rows) =>
+          fetch(`${legacyBase}/new-staff-upsert`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(rows),
+          });
+        const dutyChange = await newStaff([
+          { ...transition[0], shift: transition[0].shift === "OFF" ? "N" : "OFF" },
+        ]);
+        assert.equal(dutyChange.status, 409, JSON.stringify(await dutyChange.json()));
+        const moved = await newStaff(transition);
+        assert.equal(moved.status, 200, JSON.stringify(await moved.json()));
+        assert.deepEqual(
+          (
+            await pool.query(
+              "SELECT DISTINCT status FROM shift_assignments WHERE nurse_id=$1 AND shift_date=$2",
+              [transition[0].nurse_id, transition[0].shift_date],
+            )
+          ).rows,
+          [{ status: "submitted" }],
+        );
         await pool.query(
           "UPDATE shift_assignments SET status='draft' WHERE nurse_id=ANY($1::uuid[]) AND shift_date BETWEEN $2 AND $3",
           [ids, fresh.startDate, fresh.endDate],
@@ -2369,6 +2392,35 @@ async function scenarios(t) {
           rows: [back],
         } = await pool.query("SELECT is_active, left_on FROM nurses WHERE id=$1", [leaver.id]);
         assert.deepEqual(back, { is_active: true, left_on: null });
+
+        // With "end their login", the login stays on until the last shift ends.
+        const {
+          rows: [account],
+        } = await pool.query(
+          "INSERT INTO profiles(email,full_name,password_hash) VALUES ('leaver@example.test','Leaving nurse','x') RETURNING id",
+        );
+        await pool.query("UPDATE nurses SET profile_id=$2 WHERE id=$1", [leaver.id, account.id]);
+        const {
+          rows: [{ end: periodEnd }],
+        } = await pool.query(
+          "SELECT rota_period_end((now() AT TIME ZONE 'Africa/Lagos')::date)::text AS end",
+        );
+        const later = await run((db) =>
+          removeFromRota(db, { nurseId: leaver.id, lastDay: periodEnd, deactivateLogin: true }),
+        );
+        assert.ok(later.loginEndsAt > new Date().toISOString());
+        const login = async () =>
+          (
+            await pool.query("SELECT is_active, login_ends_at FROM profiles WHERE id=$1", [
+              account.id,
+            ])
+          ).rows[0];
+        let state = await login();
+        assert.equal(state.is_active, true);
+        assert.equal(state.login_ends_at.toISOString(), later.loginEndsAt);
+        await run((db) => returnToRota(db, { nurseId: leaver.id }));
+        state = await login();
+        assert.deepEqual(state, { is_active: true, login_ends_at: null });
       },
     );
 

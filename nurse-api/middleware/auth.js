@@ -23,11 +23,12 @@ async function requireAuth(req, res, next) {
       rows: [account],
     } = await runInPlatform(() =>
       pool.query(
-        `SELECT p.is_active, p.is_super_admin,
+        `SELECT p.is_active AND (p.login_ends_at IS NULL OR p.login_ends_at > NOW()) AS is_active,
+           p.is_super_admin,
            (SELECT h.id FROM hospitals h
              WHERE ($2::uuid IS NULL OR h.id = $2::uuid)
-               AND (p.is_super_admin OR EXISTS (
-                 SELECT 1 FROM hospital_memberships m WHERE m.hospital_id = h.id AND m.user_id = p.id))
+               AND (p.is_super_admin OR (h.is_active AND EXISTS (
+                 SELECT 1 FROM hospital_memberships m WHERE m.hospital_id = h.id AND m.user_id = p.id)))
              ORDER BY h.created_at, h.name LIMIT 1) AS hospital_id
          FROM profiles p WHERE p.id = $1`,
         [req.user.userId, requested],

@@ -294,12 +294,21 @@ function ApprovalsPage() {
 
   const canPublish = canPublishRota;
 
+  // Includes staff removed from the rota: their worked days stay in each window
+  // and move through approval with everyone else's.
   const { data: allNurses = [] } = useQuery({
-    queryKey: ["nurses"],
+    queryKey: ["nurses", "with-left"],
     queryFn: () =>
       api.get<
-        { id: string; name: string; role: string; ward: string | null; facility: string | null }[]
-      >("/nurses"),
+        {
+          id: string;
+          name: string;
+          role: string;
+          ward: string | null;
+          facility: string | null;
+          left_on?: string | null;
+        }[]
+      >("/nurses?include_inactive=true"),
   });
 
   const { data: rows = [], isLoading } = useQuery({
@@ -727,8 +736,15 @@ function ApprovalsPage() {
       role: string;
       ward: string | null;
       facility: string | null;
+      is_active?: boolean;
+      left_on?: string | null;
     };
-    const freshNurses = await api.get<NurseRow[]>("/nurses");
+    // Staff who left keep their worked days in the export, marked with their last day.
+    const freshNurses = (await api.get<NurseRow[]>("/nurses?include_inactive=true")).map((n) =>
+      n.is_active === false && n.left_on
+        ? { ...n, name: `${n.name} (left · last day ${fmtDate(n.left_on)})` }
+        : n,
+    );
     // Scope by the assignment's saved ward/role so profile changes do not hide cells.
     const scopedNurses = freshNurses.filter((n) => n.facility === win.facility);
     const nurseRoles = new Map(scopedNurses.map((n) => [n.id, n.role]));

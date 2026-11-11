@@ -340,7 +340,14 @@ async function reapplyApprovedLeave(queryable, nurseIds, minDate, maxDate) {
 // first insert (preserved on conflict); updated_by/updated_by_name are
 // stamped on every conflict, i.e. every re-generate/re-save of an existing
 // cell.
-async function upsertAssignments(rows, actor = { id: null, name: null }) {
+// `statusOnly`: rows built from saved rules may change status (submit/publish
+// new staff) when their shift, ward and leave stay the same; each is checked
+// against its saved role. Plain /upsert never changes those rows.
+async function upsertAssignments(
+  rows,
+  actor = { id: null, name: null },
+  { statusOnly = false } = {},
+) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -363,8 +370,14 @@ async function upsertAssignments(rows, actor = { id: null, name: null }) {
        DO UPDATE SET shift = EXCLUDED.shift, ward = EXCLUDED.ward, status = EXCLUDED.status,
          pre_leave_shift = EXCLUDED.pre_leave_shift, leave_type = EXCLUDED.leave_type, updated_at = NOW(),
          updated_by = $6, updated_by_name = $7
-       WHERE shift_assignments.shift_definition_run_id IS NULL
-         AND shift_assignments.scheduling_run_id IS NULL`,
+       WHERE (shift_assignments.shift_definition_run_id IS NULL
+              AND shift_assignments.scheduling_run_id IS NULL)
+          OR ($10::boolean
+              AND shift_assignments.shift IS NOT DISTINCT FROM EXCLUDED.shift
+              AND shift_assignments.ward IS NOT DISTINCT FROM EXCLUDED.ward
+              AND shift_assignments.pre_leave_shift IS NOT DISTINCT FROM EXCLUDED.pre_leave_shift
+              AND shift_assignments.leave_type IS NOT DISTINCT FROM EXCLUDED.leave_type)
+       RETURNING *, shift_date::text`,
         [
           row.nurse_id,
           row.shift,
@@ -375,8 +388,12 @@ async function upsertAssignments(rows, actor = { id: null, name: null }) {
           actor.name,
           row.pre_leave_shift || null,
           row.leave_type || null,
+          statusOnly,
         ],
       );
+      const cell = written.rows[0];
+      if (cell && (cell.shift_definition_run_id || cell.scheduling_run_id))
+        await validateConfiguredEdit(client, cell, { status: cell.status });
       if (!written.rowCount) {
         const error = new Error(
           "Configured assignments must use reviewed scheduling edits, not legacy upsert",
@@ -461,10 +478,11 @@ router.post(
       });
     }
 
-    await upsertAssignments(rows, {
-      id: req.user?.userId ?? null,
-      name: req.user?.full_name ?? null,
-    });
+    await upsertAssignments(
+      rows,
+      { id: req.user?.userId ?? null, name: req.user?.full_name ?? null },
+      { statusOnly: true },
+    );
     res.json({ success: true, count: rows.length });
   }),
 );

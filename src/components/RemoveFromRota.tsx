@@ -41,15 +41,30 @@ export function RemoveFromRotaDialog({ staff, onClose }: { staff: StaffRef; onCl
   const end = period.data?.end?.slice(0, 10);
   const remove = useMutation({
     mutationFn: () =>
-      api.post<{ shiftsCleared: number; requestsExpired: number; invitesClosed: number }>(
-        `/nurses/${staff.id}/remove-from-rota`,
-        { last_day: lastDay, deactivate_login: deactivateLogin && !!staff.profile_id },
-      ),
+      api.post<{
+        shiftsCleared: number;
+        requestsExpired: number;
+        invitesClosed: number;
+        loginEndsAt: string | null;
+      }>(`/nurses/${staff.id}/remove-from-rota`, {
+        last_day: lastDay,
+        deactivate_login: deactivateLogin && !!staff.profile_id,
+      }),
     onSuccess: (r) => {
       toast.success(
         `${staff.name} is off the rota after ${longDate(lastDay)} · ${r.shiftsCleared} shift${
           r.shiftsCleared === 1 ? "" : "s"
-        } cleared${r.requestsExpired ? ` · ${r.requestsExpired} pending request(s) expired` : ""}`,
+        } cleared${r.requestsExpired ? ` · ${r.requestsExpired} pending request(s) expired` : ""}${
+          r.loginEndsAt
+            ? ` · login ends ${new Date(r.loginEndsAt).toLocaleString("en-GB", {
+                weekday: "short",
+                day: "numeric",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}`
+            : ""
+        }`,
         { duration: 8000 },
       );
       invalidate(qc);
@@ -105,10 +120,11 @@ export function RemoveFromRotaDialog({ staff, onClose }: { staff: StaffRef; onCl
           <div className="rounded-lg bg-muted/50 p-3">
             <p className="font-medium">What happens</p>
             <ul className="mt-1 list-disc space-y-0.5 pl-5 text-muted-foreground">
+              <li>Their shifts up to and including that day stay on the rota.</li>
               <li>Their shifts after that day are cleared, including published ones.</li>
               <li>Their pending leave and switch requests after that day expire.</li>
               <li>They are left out of all future rotas.</li>
-              <li>Shifts they already worked stay on the rota and in their hours.</li>
+              <li>The rota, Approvals and exports show them as “Left” with their last day.</li>
             </ul>
           </div>
           {staff.profile_id && (
@@ -119,7 +135,7 @@ export function RemoveFromRotaDialog({ staff, onClose }: { staff: StaffRef; onCl
                 checked={deactivateLogin}
                 onChange={(e) => setDeactivateLogin(e.target.checked)}
               />
-              Also deactivate their login
+              End their login when their last shift finishes
             </label>
           )}
           <p className="text-xs text-muted-foreground">

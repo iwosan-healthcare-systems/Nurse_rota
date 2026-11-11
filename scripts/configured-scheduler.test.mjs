@@ -369,3 +369,47 @@ test("legacy rules accept configurations whose keys were reordered by jsonb stor
   const result = generate(fixture({ nurses, configuration }));
   assert.ok(result.assignments.some((a) => a.nurseId === "c1"));
 });
+
+test("Ikoyi GOPD falls back to the saved pattern when the Nurse settings change", () => {
+  const ikoyi = {
+    id: "f1",
+    legacy_facility: "Ikoyi",
+    timezone: "Africa/Lagos",
+    organization_id: "00000000-0000-4000-8000-000000000001",
+  };
+  const gopd = {
+    id: "10000000-0000-4000-8000-000000000011",
+    name: "GOPD",
+    facility: "Ikoyi",
+    min_morning_nurses: 2,
+    min_morning_na: 0,
+    min_night_nurses: 1,
+    min_night_na: 0,
+  };
+  const staff = Array.from({ length: 6 }, (_, i) => ({
+    id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+    name: `GOPD ${i + 1}`,
+    role: "Nurse",
+    facility: "Ikoyi",
+    ward: "GOPD",
+  }));
+  const run = (configuration) =>
+    generate({
+      configuration,
+      facility: ikoyi,
+      wards: [gopd],
+      nurses: staff,
+      startDate: "2026-12-01",
+      days: 31,
+    });
+  const skipped = (result) =>
+    result.diagnostics.filter((d) => d.code === "SINGLE_NIGHT_SLOT_SKIPPED");
+  const seeded = seedConfiguration(ikoyi, [gopd], ["Nurse"]);
+  assert.equal(skipped(run(seeded)).length, 0);
+  const edited = structuredClone(seeded);
+  edited.shifts.find((s) => s.code === "M").end = "19:00";
+  const result = run(edited);
+  assert.equal(skipped(result).length, 1);
+  assert.equal(skipped(result)[0].severity, "warning");
+  assert.equal(result.assignments.filter((a) => a.date === "2026-12-01").length, 6);
+});

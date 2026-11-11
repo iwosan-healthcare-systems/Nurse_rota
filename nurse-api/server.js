@@ -118,6 +118,7 @@ const { startLeaveApprovalReminderJob } = require("./jobs/auto-leave-approval-re
 const { startLocumApprovalReminderJob } = require("./jobs/auto-locum-approval-reminder");
 const { startRotaEditApprovalReminderJob } = require("./jobs/auto-rota-edit-approval-reminder");
 const { startRotaApprovalReminderJob } = require("./jobs/auto-rota-approval-reminder");
+const { startAutoEndLoginsJob } = require("./jobs/auto-end-logins");
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
@@ -162,5 +163,6 @@ app.listen(PORT, () => {
     startLocumApprovalReminderJob();
     startRotaEditApprovalReminderJob();
     startRotaApprovalReminderJob();
+    startAutoEndLoginsJob();
   }
 });

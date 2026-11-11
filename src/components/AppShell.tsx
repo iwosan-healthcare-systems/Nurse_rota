@@ -130,6 +130,7 @@ function HospitalSwitcher({
         {hospitals.map((h) => (
           <option key={h.id} value={h.id}>
             {h.name}
+            {h.is_active === false ? " (deactivated)" : ""}
           </option>
         ))}
       </select>

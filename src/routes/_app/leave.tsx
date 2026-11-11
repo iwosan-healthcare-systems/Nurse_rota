@@ -620,6 +620,24 @@ function LeavePage() {
             (assignment) => assignment.shift_definition_run_id || assignment.scheduling_run_id,
           )
         ) {
+          // A duty from a location without saved rules is not rest-checked by the
+          // server, so check it here as the standard switch does.
+          const builtIn = (a: typeof assignA) => !a.shift_definition_run_id && !a.scheduling_run_id;
+          const leaveCover = assignA.shift === "LEAVE";
+          const receiving: [string, string, string, typeof assignA][] = leaveCover
+            ? [[sw.nurseBId, sw.nurseBName, sw.shiftA, assignB]]
+            : [
+                [l.nurse_id ?? "", l.nurse_name ?? "", assignB.shift, assignA],
+                [sw.nurseBId, sw.nurseBName, assignA.shift, assignB],
+              ];
+          for (const [nurseId, name, shift, own] of receiving) {
+            if (!builtIn(own)) continue;
+            const { prevShift, nextShift } = await fetchAdjacentShifts(nurseId, sw.date);
+            if (hasRestConflict(prevShift, shift, nextShift))
+              return toast.error(
+                `Cannot approve — this would leave ${name} with no rest between shifts on ${sw.date} (check the day before/after). Reject this request instead.`,
+              );
+          }
           await api.post("/shift-assignments/configured-switch-approval", {
             requestId: l.id,
             note,

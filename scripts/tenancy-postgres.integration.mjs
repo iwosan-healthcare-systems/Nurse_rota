@@ -214,6 +214,7 @@ test("hospital row-level security isolates tenant data", async (t) => {
         "../db": app,
         "../lib/tenant-context": tenant,
         "../lib/hospital-setup": require("./lib/hospital-setup"),
+        "../lib/hospital-defaults": require("./lib/hospital-defaults"),
         "../lib/mailer": { sendMail: async () => {}, portalUrl: () => "" },
       };
       const { requireAuth } = load("middleware/auth.js", deps);
@@ -464,6 +465,94 @@ test("hospital row-level security isolates tenant data", async (t) => {
           app.query("SELECT logo FROM hospitals WHERE id=$1", [other]),
         );
         assert.equal(cleared.rows[0].logo, null);
+
+        // Editing a hospital's setup after creation.
+        const savedSetup = await (await call(lagoonAdmin, `/${third.id}/setup`)).json();
+        assert.equal(savedSetup.name, "Third");
+        assert.equal(savedSetup.settings.min_password_length, 10);
+        assert.ok(savedSetup.roles.enabled.includes("theatre_lead"));
+        const { admin: _admin, ...withoutAdmin } = setup;
+        const edit = {
+          ...withoutAdmin,
+          security: { ...setup.security, min_password_length: 12 },
+          roles: { enabled: ["nurse", "theatre_lead"], custom: [] },
+        };
+        assert.equal(
+          (await call(otherAdmin, `/${third.id}/setup`, { method: "PUT", body: edit })).status,
+          403,
+          "Only platform administrators edit a hospital's setup",
+        );
+        const edited = await call(lagoonAdmin, `/${third.id}/setup`, { method: "PUT", body: edit });
+        assert.equal(edited.status, 200, JSON.stringify(await edited.clone().json()));
+        const editedSettings = await tenant.runInHospital(third.id, () =>
+          app.query("SELECT value FROM portal_settings WHERE key = 'min_password_length'"),
+        );
+        assert.equal(editedSettings.rows[0].value, 12);
+        const editedRoles = await tenant.runInPlatform(() =>
+          app.query("SELECT role_key FROM hospital_roles WHERE hospital_id=$1 ORDER BY role_key", [
+            third.id,
+          ]),
+        );
+        assert.deepEqual(
+          editedRoles.rows.map((r) => r.role_key),
+          ["admin", "nurse", "theatre_lead"],
+        );
+
+        // Deactivating keeps the data but shuts its staff out; the pilot stays on.
+        const thirdAdminId = (
+          await tenant.runInPlatform(() =>
+            app.query("SELECT id FROM profiles WHERE email='admin@third.test'"),
+          )
+        ).rows[0].id;
+        assert.equal((await call(thirdAdminId, "/mine")).status, 200);
+        assert.equal(
+          (
+            await call(lagoonAdmin, `/${LAGOON}/status`, {
+              method: "PATCH",
+              body: { active: false },
+            })
+          ).status,
+          409,
+        );
+        assert.equal(
+          (
+            await call(lagoonAdmin, `/${third.id}/status`, {
+              method: "PATCH",
+              body: { active: false },
+            })
+          ).status,
+          200,
+        );
+        assert.equal((await call(thirdAdminId, "/mine")).status, 403);
+        const ran = [];
+        await tenant.forEachHospital(app, (h) => ran.push(h.id));
+        assert.ok(!ran.includes(third.id), "Jobs skip deactivated hospitals");
+        await call(lagoonAdmin, `/${third.id}/status`, { method: "PATCH", body: { active: true } });
+        assert.equal((await call(thirdAdminId, "/mine")).status, 200);
+
+        // Deleting: only a hospital with no staff or rota records.
+        assert.equal((await call(lagoonAdmin, `/${other}`, { method: "DELETE" })).status, 409);
+        assert.equal((await call(lagoonAdmin, `/${LAGOON}`, { method: "DELETE" })).status, 409);
+        const fourth = await (
+          await call(lagoonAdmin, "/", {
+            method: "POST",
+            body: {
+              ...again,
+              name: "Fourth",
+              admin: { full_name: "Fourth Admin", email: "admin@fourth.test" },
+            },
+          })
+        ).json();
+        const removed = await call(lagoonAdmin, `/${fourth.id}`, { method: "DELETE" });
+        assert.equal(removed.status, 200, JSON.stringify(await removed.clone().json()));
+        const gone = await tenant.runInPlatform(() =>
+          app.query(
+            `SELECT (SELECT COUNT(*)::int FROM hospitals WHERE id=$1) AS hospitals,
+                    (SELECT COUNT(*)::int FROM profiles WHERE email='admin@fourth.test') AS accounts`,
+            [fourth.id],
+          ),
+        );
+        assert.deepEqual(gone.rows[0], { hospitals: 0, accounts: 0 });
       } finally {
         await new Promise((resolve) => listener.close(resolve));
       }

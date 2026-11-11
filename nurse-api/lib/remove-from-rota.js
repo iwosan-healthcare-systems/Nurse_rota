@@ -1,6 +1,9 @@
 // Removing a staff member from the rota partway through a month, and bringing
 // them back. Callers own authorization; these run in one transaction.
 
+const { withAssignmentShiftDefinitions } = require("./assignment-shift-definition");
+const { zonedInstant, addDays } = require("./configured-scheduler");
+
 class RemovalError extends Error {
   constructor(status, message) {
     super(message);
@@ -20,7 +23,8 @@ const validDate = (d) =>
  *   switches where they are the partner, and their open bank shift invites close;
  * - the record becomes inactive with `left_on`, so new rotas leave them out while
  *   the days they worked stay on the rota and in hours;
- * - optionally their login is deactivated.
+ * - optionally their login ends when their last shift ends (straight away if
+ *   that has passed), so they can still sign in to work it.
  * `lastDay` must fall in the current rota period (Lagos date).
  */
 async function removeFromRota(db, { nurseId, lastDay, deactivateLogin = false, actor }) {
@@ -68,10 +72,21 @@ async function removeFromRota(db, { nurseId, lastDay, deactivateLogin = false, a
     "UPDATE nurses SET is_active = false, left_on = $2, updated_at = NOW() WHERE id = $1",
     [nurseId, lastDay],
   );
-  if (deactivateLogin && nurse.profile_id)
-    await db.query("UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1", [
-      nurse.profile_id,
-    ]);
+  let loginEndsAt = null;
+  if (deactivateLogin && nurse.profile_id) {
+    loginEndsAt = await lastShiftEnd(db, nurseId, lastDay);
+    if (Date.parse(loginEndsAt) <= Date.now()) {
+      loginEndsAt = null;
+      await db.query(
+        "UPDATE profiles SET is_active = false, login_ends_at = NULL, updated_at = NOW() WHERE id = $1",
+        [nurse.profile_id],
+      );
+    } else
+      await db.query("UPDATE profiles SET login_ends_at = $2, updated_at = NOW() WHERE id = $1", [
+        nurse.profile_id,
+        loginEndsAt,
+      ]);
+  }
   await db.query(
     "INSERT INTO audit_logs (action, actor_id, actor_name, target) VALUES ($1, $2, $3, $4)",
     [
@@ -79,11 +94,36 @@ async function removeFromRota(db, { nurseId, lastDay, deactivateLogin = false, a
       actor?.id ?? null,
       actor?.name ?? null,
       `${nurse.name} · last working day ${lastDay} · ${shiftsCleared} shift(s) cleared, ${requestsExpired} request(s) expired${
-        deactivateLogin && nurse.profile_id ? " · login deactivated" : ""
+        !deactivateLogin || !nurse.profile_id
+          ? ""
+          : loginEndsAt
+            ? ` · login ends ${new Date(loginEndsAt).toLocaleString("en-GB", {
+                timeZone: "Africa/Lagos",
+                day: "numeric",
+                month: "short",
+                hour: "2-digit",
+                minute: "2-digit",
+              })}`
+            : " · login deactivated"
       }`,
     ],
   );
-  return { name: nurse.name, shiftsCleared, requestsExpired, invitesClosed };
+  return { name: nurse.name, shiftsCleared, requestsExpired, invitesClosed, loginEndsAt };
+}
+
+// When the staff member's last shift ends: the end of their duty on the last
+// working day (next morning for a night), or midnight after that day when they
+// are off or on leave.
+async function lastShiftEnd(db, nurseId, lastDay) {
+  const endOfDay = zonedInstant(addDays(lastDay, 1), "00:00", "Africa/Lagos");
+  const { rows } = await db.query(
+    "SELECT *, shift_date::text FROM shift_assignments WHERE nurse_id = $1 AND shift_date = $2",
+    [nurseId, lastDay],
+  );
+  if (!rows[0] || ["OFF", "LEAVE"].includes(rows[0].shift)) return endOfDay;
+  const [cell] = await withAssignmentShiftDefinitions(db, rows);
+  const ends = cell.scheduled_shift?.endsAt;
+  return ends && ends > endOfDay ? ends : endOfDay;
 }
 
 let partnerColumn = null;
@@ -108,10 +148,14 @@ async function returnToRota(db, { nurseId, reactivateLogin = false, actor }) {
     [nurseId],
   );
   if (!nurse) throw new RemovalError(404, "Staff member not found or already on the rota");
-  if (reactivateLogin && nurse.profile_id)
-    await db.query("UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1", [
-      nurse.profile_id,
-    ]);
+  // A login waiting to end after their last shift stays on.
+  if (nurse.profile_id)
+    await db.query(
+      `UPDATE profiles SET login_ends_at = NULL,
+              is_active = CASE WHEN $2 THEN true ELSE is_active END, updated_at = NOW()
+        WHERE id = $1`,
+      [nurse.profile_id, reactivateLogin],
+    );
   await db.query(
     "INSERT INTO audit_logs (action, actor_id, actor_name, target) VALUES ($1, $2, $3, $4)",
     ["Returned staff to rota", actor?.id ?? null, actor?.name ?? null, nurse.name],

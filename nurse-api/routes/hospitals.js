@@ -8,6 +8,7 @@ const bcrypt = require("bcryptjs");
 const crypto = require("crypto");
 const { runInPlatform } = require("../lib/tenant-context");
 const { validateHospitalSetup } = require("../lib/hospital-setup");
+const { LAGOON_HOSPITAL_ID } = require("../lib/hospital-defaults");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const escapeHtml = (value) =>
   String(value ?? "").replace(
@@ -30,9 +31,9 @@ router.get(
   wrap(async (req, res) => {
     const { rows } = await platform(req, () =>
       pool.query(
-        `SELECT h.id, h.name, CASE WHEN h.id = $3 THEN h.logo END AS logo FROM hospitals h
-         WHERE $2 OR EXISTS (SELECT 1 FROM hospital_memberships m
-                             WHERE m.hospital_id = h.id AND m.user_id = $1)
+        `SELECT h.id, h.name, h.is_active, CASE WHEN h.id = $3 THEN h.logo END AS logo FROM hospitals h
+         WHERE $2 OR (h.is_active AND EXISTS (SELECT 1 FROM hospital_memberships m
+                             WHERE m.hospital_id = h.id AND m.user_id = $1))
          ORDER BY h.created_at, h.name`,
         [req.user.userId, req.user.isSuperAdmin, req.hospitalId],
       ),
@@ -126,7 +127,7 @@ router.get(
   wrap(async (req, res) => {
     const { rows } = await platform(req, () =>
       pool.query(
-        `SELECT h.id, h.name, h.created_at, h.logo,
+        `SELECT h.id, h.name, h.created_at, h.logo, h.is_active,
            (SELECT COUNT(*)::int FROM hospital_memberships m WHERE m.hospital_id = h.id) AS members,
            (SELECT COUNT(*)::int FROM nurses n WHERE n.hospital_id = h.id AND n.is_active) AS staff
          FROM hospitals h ORDER BY h.created_at, h.name`,
@@ -271,6 +272,286 @@ router.patch(
       return res.status(409).json({ error: "A hospital with this name already exists" });
     if (!rows[0]) return res.status(404).json({ error: "Hospital not found" });
     res.json(rows[0]);
+  }),
+);
+
+// Settings the setup wizard writes, read back so the wizard can edit them.
+const SETUP_KEYS = [
+  "gps_settings",
+  "min_password_length",
+  "password_expiry_days",
+  "idle_timeout_minutes",
+  "sick_emergency_max_days",
+  "shift_switch_min_notice_hours",
+  "grace_leave_types",
+  "leave_entitlement_defaults",
+  "rota_deadlines",
+  "rota_jobs_paused",
+  "shift_reminder_settings",
+  "capabilities",
+  "menu_permissions",
+];
+const parseSetting = (value) => {
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+};
+
+router.get(
+  "/:id/setup",
+  superAdmin,
+  wrap(async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid hospital" });
+    const result = await platform(req, async () => {
+      const {
+        rows: [hospital],
+      } = await pool.query("SELECT id, name, logo, is_active FROM hospitals WHERE id = $1", [
+        req.params.id,
+      ]);
+      if (!hospital) return null;
+      const [{ rows: roles }, { rows: settings }] = await Promise.all([
+        pool.query(
+          "SELECT role_key FROM hospital_roles WHERE hospital_id = $1 AND role_key <> 'admin' ORDER BY role_key",
+          [hospital.id],
+        ),
+        pool.query(
+          "SELECT key, value FROM portal_settings WHERE hospital_id = $1 AND key = ANY($2)",
+          [hospital.id, SETUP_KEYS],
+        ),
+      ]);
+      return {
+        ...hospital,
+        roles: { enabled: roles.map((r) => r.role_key) },
+        settings: Object.fromEntries(settings.map((s) => [s.key, parseSetting(s.value)])),
+      };
+    });
+    if (!result) return res.status(404).json({ error: "Hospital not found" });
+    res.json(result);
+  }),
+);
+
+// Save the wizard's settings for an existing hospital. The first administrator
+// is set only at creation; accounts are managed under Users and Access.
+router.put(
+  "/:id/setup",
+  superAdmin,
+  wrap(async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid hospital" });
+    const { rows: roleRows } = await platform(req, () => pool.query("SELECT key FROM roles"));
+    const setup = validateHospitalSetup(req.body, {
+      roleKeys: new Set(roleRows.map((r) => r.key)),
+      requireAdmin: false,
+    });
+    if (setup.errors.length)
+      return res.status(400).json({ error: "Complete every setup step", errors: setup.errors });
+    const result = await platform(req, async () => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const {
+          rows: [hospital],
+        } = await client.query(
+          `UPDATE hospitals SET name = $2,
+             logo_updated_at = CASE WHEN logo IS DISTINCT FROM $3::text
+               THEN CASE WHEN $3::text IS NULL THEN NULL ELSE now() END ELSE logo_updated_at END,
+             logo = $3
+           WHERE id = $1 RETURNING id, name`,
+          [req.params.id, setup.name, setup.logo],
+        );
+        if (!hospital) {
+          await client.query("ROLLBACK");
+          return { status: 404, error: "Hospital not found" };
+        }
+        for (const role of setup.roles.custom)
+          await client.query(
+            "INSERT INTO roles (key, label, description, is_system, hospital_id) VALUES ($1, $2, $3, false, $4)",
+            [role.key, role.label, role.description, hospital.id],
+          );
+        await client.query(
+          "DELETE FROM hospital_roles WHERE hospital_id = $1 AND role_key <> ALL($2::text[])",
+          [hospital.id, setup.roles.keys],
+        );
+        for (const key of setup.roles.keys)
+          await client.query(
+            "INSERT INTO hospital_roles (hospital_id, role_key) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+            [hospital.id, key],
+          );
+        for (const [key, value] of setup.settings)
+          await client.query(
+            `INSERT INTO portal_settings (hospital_id, key, value) VALUES ($1, $2, $3)
+             ON CONFLICT (hospital_id, key) DO UPDATE SET value = EXCLUDED.value`,
+            [hospital.id, key, JSON.stringify(value)],
+          );
+        await client.query(
+          "INSERT INTO audit_logs (hospital_id, action, actor_id, actor_name, target) VALUES ($1,$2,$3,$4,$5)",
+          [
+            hospital.id,
+            "Hospital setup updated",
+            req.user.userId,
+            req.user.full_name ?? null,
+            hospital.name,
+          ],
+        );
+        await client.query("COMMIT");
+        return { status: 200, hospital };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        if (error.code === "23505")
+          return { status: 409, error: "A hospital with this name already exists" };
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json(result.hospital);
+  }),
+);
+
+// Deactivate or reactivate a hospital. Its data is kept; while inactive its staff
+// cannot sign in to it and scheduled jobs skip it.
+router.patch(
+  "/:id/status",
+  superAdmin,
+  wrap(async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid hospital" });
+    if (typeof req.body?.active !== "boolean")
+      return res.status(400).json({ error: "Choose active or inactive" });
+    if (req.params.id === LAGOON_HOSPITAL_ID && !req.body.active)
+      return res.status(409).json({ error: "The pilot hospital cannot be deactivated" });
+    const { rows } = await platform(req, async () => {
+      const result = await pool.query(
+        "UPDATE hospitals SET is_active = $2 WHERE id = $1 RETURNING id, name, is_active",
+        [req.params.id, req.body.active],
+      );
+      if (result.rows[0])
+        await pool.query(
+          "INSERT INTO audit_logs (hospital_id, action, actor_id, actor_name, target) VALUES ($1,$2,$3,$4,$5)",
+          [
+            req.params.id,
+            req.body.active ? "Hospital reactivated" : "Hospital deactivated",
+            req.user.userId,
+            req.user.full_name ?? null,
+            result.rows[0].name,
+          ],
+        );
+      return result;
+    });
+    if (!rows[0]) return res.status(404).json({ error: "Hospital not found" });
+    res.json(rows[0]);
+  }),
+);
+
+// Delete a hospital that has no staff or rota yet (for example one created by
+// mistake or for testing), with its settings, roles and the accounts that belong
+// to no other hospital. Hospitals with records are deactivated instead.
+router.delete(
+  "/:id",
+  superAdmin,
+  wrap(async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(400).json({ error: "Invalid hospital" });
+    if (req.params.id === LAGOON_HOSPITAL_ID)
+      return res.status(409).json({ error: "The pilot hospital cannot be deleted" });
+    if (req.params.id === req.hospitalId)
+      return res.status(409).json({ error: "Switch to another hospital before deleting this one" });
+    const hasData =
+      "This hospital has staff or rota records, so it cannot be deleted. Deactivate it instead to keep its records.";
+    const result = await platform(req, async () => {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const {
+          rows: [hospital],
+        } = await client.query("SELECT id, name FROM hospitals WHERE id = $1 FOR UPDATE", [
+          req.params.id,
+        ]);
+        if (!hospital) {
+          await client.query("ROLLBACK");
+          return { status: 404, error: "Hospital not found" };
+        }
+        const {
+          rows: [usage],
+        } = await client.query(
+          `SELECT EXISTS (SELECT 1 FROM nurses WHERE hospital_id = $1)
+               OR EXISTS (SELECT 1 FROM shift_assignments WHERE hospital_id = $1)
+               OR EXISTS (SELECT 1 FROM leave_requests WHERE hospital_id = $1)
+               OR EXISTS (SELECT 1 FROM shift_logs WHERE hospital_id = $1) AS used`,
+          [hospital.id],
+        );
+        if (usage.used) {
+          await client.query("ROLLBACK");
+          return { status: 409, error: hasData };
+        }
+        // Accounts that belong only to this hospital go with it.
+        const { rows: accounts } = await client.query(
+          `SELECT p.id FROM profiles p JOIN hospital_memberships m ON m.user_id = p.id
+            WHERE m.hospital_id = $1 AND NOT p.is_super_admin
+              AND NOT EXISTS (SELECT 1 FROM hospital_memberships o
+                              WHERE o.user_id = p.id AND o.hospital_id <> $1)`,
+          [hospital.id],
+        );
+        for (const table of [
+          "notification_state",
+          "user_capability_overrides",
+          "rota_edit_requests",
+          "rota_transitions",
+          "nurse_period_hours",
+          "leave_entitlement_adjustments",
+          "leave_entitlement_overrides",
+          "locum_invites",
+          "locum_requests",
+          "wards",
+          "portal_settings",
+          "audit_logs",
+        ])
+          await client.query(`DELETE FROM ${table} WHERE hospital_id = $1`, [hospital.id]);
+        const facilities = "SELECT id FROM scheduling_facilities WHERE organization_id = $1";
+        for (const sql of [
+          `DELETE FROM scheduling_policy_events WHERE facility_id IN (${facilities})`,
+          `DELETE FROM scheduling_facility_access WHERE facility_id IN (${facilities})`,
+          "DELETE FROM scheduling_runs WHERE organization_id = $1",
+          "DELETE FROM scheduling_config_versions WHERE organization_id = $1",
+          "DELETE FROM scheduling_facilities WHERE organization_id = $1",
+          "DELETE FROM scheduling_organizations WHERE id = $1",
+        ])
+          await client.query(sql, [hospital.id]);
+        await client.query("DELETE FROM hospitals WHERE id = $1", [hospital.id]);
+        // An account still referenced elsewhere (for example as an author) is
+        // switched off instead of deleted.
+        for (const { id } of accounts) {
+          await client.query("SAVEPOINT account");
+          try {
+            await client.query("DELETE FROM profiles WHERE id = $1", [id]);
+          } catch {
+            await client.query("ROLLBACK TO SAVEPOINT account");
+            await client.query("UPDATE profiles SET is_active = false WHERE id = $1", [id]);
+          }
+        }
+        await client.query(
+          "INSERT INTO audit_logs (hospital_id, action, actor_id, actor_name, target) VALUES ($1,$2,$3,$4,$5)",
+          [
+            LAGOON_HOSPITAL_ID,
+            "Hospital deleted",
+            req.user.userId,
+            req.user.full_name ?? null,
+            hospital.name,
+          ],
+        );
+        await client.query("COMMIT");
+        return { status: 200, name: hospital.name };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        if (error.code === "23503") return { status: 409, error: hasData };
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+    if (result.error) return res.status(result.status).json({ error: result.error });
+    res.json({ deleted: true, name: result.name });
   }),
 );
 

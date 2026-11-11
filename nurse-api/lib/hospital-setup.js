@@ -24,7 +24,7 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ROLE_KEY = /^[a-z][a-z0-9_]{1,49}$/;
 const LOGO = /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
 
-function validateHospitalSetup(body, { roleKeys }) {
+function validateHospitalSetup(body, { roleKeys, requireAdmin = true }) {
   const errors = [];
   const add = (path, message) => errors.push({ path, message });
   const obj = (v) => v && typeof v === "object" && !Array.isArray(v);
@@ -162,10 +162,11 @@ function validateHospitalSetup(body, { roleKeys }) {
     menuValue[path] = roles(list, `permissions.menu_permissions.${path}`);
   }
 
+  // The first administrator is set only when the hospital is created.
   const admin = obj(body.admin) ? body.admin : {};
-  const adminName = text(admin.full_name, "admin.full_name", 120);
+  const adminName = requireAdmin ? text(admin.full_name, "admin.full_name", 120) : "";
   const adminEmail = typeof admin.email === "string" ? admin.email.trim().toLowerCase() : "";
-  if (!EMAIL.test(adminEmail) || adminEmail.length > 254)
+  if (requireAdmin && (!EMAIL.test(adminEmail) || adminEmail.length > 254))
     add("admin.email", "Enter a valid email address");
 
   return {

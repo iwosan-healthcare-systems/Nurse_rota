@@ -252,13 +252,24 @@ function generateConfiguredPreview({
             )
           );
         });
-      if (!compatible)
-        issue(
-          "roles",
-          `${role.name}${ward ? ` in ${ward.name}` : ""}: the retained coverage/rotation rule does not support these changes yet. Restore its original pattern, allowed shifts and timing before previewing.`,
-        );
-      else special.push(n);
-      continue;
+      if (compatible) {
+        special.push(n);
+        continue;
+      }
+      if (role.specialRule !== "none") {
+        const message = `${role.name}${ward ? ` in ${ward.name}` : ""}: the retained coverage/rotation rule does not support these changes yet. Restore its original pattern, allowed shifts and timing before previewing.`;
+        if (!issues.some((i) => i.message === message)) issue("roles", message);
+        continue;
+      }
+      // The single night slot only works with the original Nurse settings. With
+      // edited settings this ward's nurses follow the saved pattern instead.
+      if (!diagnostics.some((d) => d.code === "SINGLE_NIGHT_SLOT_SKIPPED" && d.wardId === ward.id))
+        diagnostics.push({
+          code: "SINGLE_NIGHT_SLOT_SKIPPED",
+          severity: "warning",
+          wardId: ward.id,
+          message: `${ward.name}: the one-nurse-at-night rule only works with the original ${role.name} pattern, shifts and times, so ${ward.name} nurses follow the saved pattern this month.`,
+        });
     }
     const key = JSON.stringify([ward?.id ?? null, group, patternId]);
     const entry = groups.get(key) || { pattern, members: [] };

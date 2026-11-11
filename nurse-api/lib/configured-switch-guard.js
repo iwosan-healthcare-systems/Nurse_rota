@@ -41,15 +41,14 @@ async function guardConfiguredSwitchRequest(db, request) {
   if (!rows.some(linked)) return;
   const a = rows.find((row) => row.nurse_id === request.nurse_id);
   const b = rows.find((row) => row.nurse_id === partner);
-  if (!a || !b || !linked(a) || !linked(b))
-    fail("Both duties must use configured schedules for this switch");
+  // One side may come from a location still on the built-in rota (no saved rules).
+  if (!a || !b) fail("Both nurses need a published duty on this date for this switch");
   if (a === b || rows.length !== 2 || request.from_date !== request.to_date)
     fail("Configured switches require two different nurses on one date");
   const interFacility = parts.includes("INTER_FACILITY");
   const interWard = interFacility || parts.includes("INTER_WARD");
   const leaveCover = parts.includes("LEAVE_COVER");
-  if (!a.ward !== !b.ward)
-    fail("Both duties must be ward duties, or both facility-wide duties");
+  if (!a.ward !== !b.ward) fail("Both duties must be ward duties, or both facility-wide duties");
   if (a.facility !== b.facility && !interFacility)
     fail("Choose a switch between locations for duties in different facilities");
   if (a.ward !== b.ward && !interWard && !leaveCover)

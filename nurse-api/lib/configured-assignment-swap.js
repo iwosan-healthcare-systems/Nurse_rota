@@ -71,10 +71,14 @@ async function swapConfiguredAssignments(pool, expected, actor, authorize, appro
       (a.facility !== b.facility && !interFacility)
     )
       fail(409, "Swap requires different nurses in the same ward, facility and date");
+    // At least one duty uses saved rules; the other may come from a location
+    // still on the built-in rota (it has no saved run to match).
+    if (!rows.some((row) => row.shift_definition_run_id ?? row.scheduling_run_id))
+      fail(409, "Neither duty uses saved scheduling rules; use the standard switch");
     for (const row of rows) {
       const wanted = expected.find((e) => e.id === row.id);
-      const runId = row.shift_definition_run_id ?? row.scheduling_run_id;
-      if (!runId || wanted.definitionRunId !== runId || wanted.shift !== row.shift)
+      const runId = row.shift_definition_run_id ?? row.scheduling_run_id ?? null;
+      if ((wanted.definitionRunId ?? null) !== runId || wanted.shift !== row.shift)
         fail(409, "Assignment changed. Reload before swapping");
       const onLeave = row.shift === "LEAVE";
       if (

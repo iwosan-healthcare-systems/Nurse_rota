@@ -40,7 +40,6 @@ test("configured request guard accepts same-ward published duties and leaves leg
 });
 test("configured request guard rejects unsupported or stale combinations before request creation", async () => {
   for (const patch of [
-    { shift_definition_run_id: null },
     { ward: null },
     { ward: "Other" },
     { facility: "Other" },
@@ -65,7 +64,21 @@ test("configured request guard rejects unsupported or stale combinations before 
     );
   await assert.rejects(
     guardConfiguredSwitchRequest({ query: async () => ({ rows: [cells[0]] }) }, datedRequest),
-    /Both duties/,
+    /published duty/,
+  );
+});
+test("configured request guard accepts a partner from a location without saved rules", async () => {
+  const builtIn = { ...cells[1], shift_definition_run_id: null, facility: "Other site" };
+  await guardConfiguredSwitchRequest(
+    { query: async () => ({ rows: [cells[0], builtIn] }) },
+    { ...datedRequest, reason: `${request.reason}|INTER_FACILITY` },
+  );
+  await assert.rejects(
+    guardConfiguredSwitchRequest(
+      { query: async () => ({ rows: [cells[0], builtIn] }) },
+      datedRequest,
+    ),
+    /between locations/,
   );
 });
 test("configured request guard accepts inter-ward exchanges and leave cover", async () => {

@@ -3,7 +3,7 @@ import { api, getToken } from "@/lib/api";
 import appLogo from "@/assets/logo.jpeg";
 
 export type MyHospitals = {
-  hospitals: { id: string; name: string }[];
+  hospitals: { id: string; name: string; is_active?: boolean }[];
   current_hospital_id: string;
   current_logo: string | null;
   is_super_admin: boolean;

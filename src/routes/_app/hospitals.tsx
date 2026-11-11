@@ -2,7 +2,16 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ChevronLeft, ChevronRight, Users, UserRound, Pencil } from "lucide-react";
+import {
+  ChevronLeft,
+  ChevronRight,
+  Users,
+  UserRound,
+  Pencil,
+  Settings2,
+  Power,
+  Trash2,
+} from "lucide-react";
 import { PageHeader } from "@/components/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -24,7 +33,10 @@ type Hospital = {
   members: number;
   staff: number;
   logo: string | null;
+  is_active: boolean;
 };
+// The pilot hospital cannot be deactivated or deleted.
+const PILOT_HOSPITAL_ID = "00000000-0000-4000-8000-000000000001";
 type PlatformUser = {
   id: string;
   full_name: string | null;
@@ -51,6 +63,7 @@ function HospitalsPage() {
   const [created, setCreated] = useState<Created | null>(null);
   const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(null);
   const [logoFor, setLogoFor] = useState<string | null>(null);
+  const [editingSetup, setEditingSetup] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -164,7 +177,18 @@ function HospitalsPage() {
         </TabsList>
 
         <TabsContent value="hospitals" className="mt-4">
-          {hospitals.isPending ? (
+          {editingSetup ? (
+            <HospitalSetupWizard
+              key={editingSetup}
+              editHospitalId={editingSetup}
+              onCancel={() => setEditingSetup(null)}
+              onSaved={() => {
+                setEditingSetup(null);
+                refresh();
+                void client.invalidateQueries({ queryKey: ["hospital-setup"] });
+              }}
+            />
+          ) : hospitals.isPending ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -173,7 +197,7 @@ function HospitalsPage() {
                   key={h.id}
                   className={`flex flex-col gap-4 rounded-xl border bg-card p-4 shadow-soft ${
                     h.id === hospitalId ? "ring-2 ring-primary/40" : ""
-                  }`}
+                  } ${h.is_active ? "" : "opacity-75"}`}
                 >
                   <div className="flex items-start gap-3">
                     <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg border bg-white">
@@ -222,6 +246,11 @@ function HospitalsPage() {
                           {h.id === hospitalId && (
                             <span className="mt-1 inline-block rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
                               You are here
+                            </span>
+                          )}
+                          {!h.is_active && (
+                            <span className="ml-1 mt-1 inline-block rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                              Deactivated · staff cannot sign in
                             </span>
                           )}
                         </>
@@ -279,6 +308,56 @@ function HospitalsPage() {
                     >
                       Logo
                     </Button>
+                    <Button size="sm" variant="outline" onClick={() => setEditingSetup(h.id)}>
+                      <Settings2 className="mr-1 h-3.5 w-3.5" /> Edit setup
+                    </Button>
+                    {h.id !== PILOT_HOSPITAL_ID && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={busy}
+                        onClick={() => {
+                          if (
+                            h.is_active &&
+                            !window.confirm(
+                              `Deactivate ${h.name}? Its records are kept, but its staff cannot sign in and automatic rota jobs stop until you reactivate it.`,
+                            )
+                          )
+                            return;
+                          void run(
+                            () => api.patch(`/hospitals/${h.id}/status`, { active: !h.is_active }),
+                            h.is_active ? `${h.name} deactivated` : `${h.name} reactivated`,
+                          );
+                        }}
+                      >
+                        <Power className="mr-1 h-3.5 w-3.5" />
+                        {h.is_active ? "Deactivate" : "Reactivate"}
+                      </Button>
+                    )}
+                    {h.id !== PILOT_HOSPITAL_ID && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive"
+                        disabled={busy || h.id === hospitalId}
+                        title={
+                          h.id === hospitalId
+                            ? "Switch to another hospital first"
+                            : "Only a hospital with no staff or rota records can be deleted"
+                        }
+                        onClick={() => {
+                          if (
+                            !window.confirm(
+                              `Delete ${h.name}? Its settings, roles and accounts that belong only to it are removed for good. A hospital with staff or rota records cannot be deleted; deactivate it instead.`,
+                            )
+                          )
+                            return;
+                          void run(() => api.del(`/hospitals/${h.id}`), `${h.name} deleted`);
+                        }}
+                      >
+                        <Trash2 className="mr-1 h-3.5 w-3.5" /> Delete
+                      </Button>
+                    )}
                   </div>
                 </article>
               ))}

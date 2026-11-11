@@ -120,7 +120,8 @@ router.post(
     if (!email || !password) return res.status(400).json({ error: "Email and password required" });
 
     const { rows } = await pool.query(
-      `SELECT id, email, full_name, password_hash, is_active, must_change_password, password_changed_at
+      `SELECT id, email, full_name, password_hash, must_change_password, password_changed_at,
+              is_active AND (login_ends_at IS NULL OR login_ends_at > NOW()) AS is_active
        FROM profiles WHERE lower(email) = lower($1)
        ORDER BY created_at DESC LIMIT 1`,
       [email.trim()],
@@ -618,7 +619,7 @@ router.patch(
       await client.query("BEGIN");
       // Deactivate the login account
       const { rows: profileRows } = await client.query(
-        "UPDATE profiles SET is_active = false, updated_at = NOW() WHERE id = $1 RETURNING full_name",
+        "UPDATE profiles SET is_active = false, login_ends_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING full_name",
         [profileId],
       );
 
@@ -666,7 +667,7 @@ router.patch(
   wrap(async (req, res) => {
     const profileId = req.params.id;
     const { rows: profileRows } = await pool.query(
-      "UPDATE profiles SET is_active = true, updated_at = NOW() WHERE id = $1 RETURNING full_name",
+      "UPDATE profiles SET is_active = true, login_ends_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING full_name",
       [profileId],
     );
     // Restore by profile_id first, fall back to name

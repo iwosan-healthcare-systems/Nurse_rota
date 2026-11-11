@@ -62,7 +62,7 @@ function bindTenantPool(pool) {
 // so facility-name grouping and new rows stay within one hospital.
 async function forEachHospital(pool, fn) {
   const { rows } = await runInPlatform(() =>
-    pool.query("SELECT id, name FROM hospitals ORDER BY created_at, name"),
+    pool.query("SELECT id, name FROM hospitals WHERE is_active ORDER BY created_at, name"),
   );
   for (const hospital of rows) await runInHospital(hospital.id, () => fn(hospital));
 }

@@ -486,18 +486,26 @@ function RotaPage() {
   // filter entirely — passing every UUID in the URL can exceed nginx's header-size
   // limit and the server returns [] with no error.  Our Express API has no row cap,
   // so querying by date range alone is safe.
+  // Includes staff who left during this period, so the days they worked show.
   const displayNurseIds = useMemo(
     () =>
       effectiveFacility
-        ? nurses.filter((n) => n.facility === effectiveFacility).map((n) => n.id)
+        ? [...nurses, ...leftStaff].filter((n) => n.facility === effectiveFacility).map((n) => n.id)
         : null, // null = no nurse filter (all facilities)
-    [nurses, effectiveFacility],
+    [nurses, leftStaff, effectiveFacility],
   );
 
   const { data: assignments = [], isLoading: assignmentsLoading } = useQuery({
     // Key on effectiveFacility instead of nurseIds.length so a facility-switch
     // always triggers a fresh fetch even when both facilities have the same nurse count.
-    queryKey: ["assignments", ymd(startDate), ymd(endDate), effectiveFacility, isNurseTier],
+    queryKey: [
+      "assignments",
+      ymd(startDate),
+      ymd(endDate),
+      effectiveFacility,
+      isNurseTier,
+      leftStaff.length,
+    ],
     // Wait until the window start is known so we don't fetch for the wrong date range,
     // flash an empty state, then refetch — causing the visible flicker on page load.
     enabled: nurses.length > 0 && !windowLoading,
@@ -644,7 +652,7 @@ function RotaPage() {
   // Porter and other facility-wide roles have ward=null, so lockedWard stays null for them.
   const lockedWard =
     isNurseTier && nurseId
-      ? (nurses.find((n) => n.id === nurseId)?.ward?.split("|")[0] ?? null)
+      ? ([...nurses, ...leftStaff].find((n) => n.id === nurseId)?.ward?.split("|")[0] ?? null)
       : null;
 
   const filteredNurses = useMemo(() => {
@@ -948,11 +956,25 @@ function RotaPage() {
     return map;
   }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
 
-  // Nurses in the selected ward who have zero assignments in the current period —
-  // i.e. newly added or reactivated staff that need their own schedule generated.
+  // Staff with shifts for the rest of this period (from today, or the start for
+  // a future period). Staff returned to the rota keep the days they worked before
+  // leaving, so "has any shift" would wrongly count them as scheduled.
+  const remainingAssignments = useMemo(() => {
+    const today = todayYmd();
+    const end = ymd(endDate);
+    const from = today > end ? null : today > ymd(startDate) ? today : ymd(startDate);
+    return from ? assignments.filter((a) => a.shift_date.slice(0, 10) >= from) : assignments;
+  }, [assignments, startDate, endDate]);
+  const scheduledIds = useMemo(
+    () => new Set(remainingAssignments.map((a) => a.nurse_id)),
+    [remainingAssignments],
+  );
+
+  // Nurses in the selected ward with no shifts for the rest of the period —
+  // i.e. newly added or returned staff that need their own schedule generated.
   const unscheduledWardNurses = useMemo(() => {
     if (!selectedWard || !canScheduleNewStaff || isLoading) return [];
-    const assignedIds = new Set(assignments.map((a) => a.nurse_id));
+    const assignedIds = scheduledIds;
     return nurses.filter(
       (n) =>
         n.facility === effectiveFacility &&
@@ -963,7 +985,7 @@ function RotaPage() {
         parseWards(n.ward)[0] === selectedWard &&
         !assignedIds.has(n.id),
     );
-  }, [selectedWard, canScheduleNewStaff, isLoading, assignments, nurses, effectiveFacility]);
+  }, [selectedWard, canScheduleNewStaff, isLoading, scheduledIds, nurses, effectiveFacility]);
 
   // Nurses in the selected ward who have draft-only assignments. In published
   // units these can be published directly; in submitted/CNO-approved units they
@@ -971,10 +993,10 @@ function RotaPage() {
   const newStaffWithDraft = useMemo(() => {
     if (!selectedWard) return [];
     const nonDraftNurseIds = new Set(
-      assignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
+      remainingAssignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
     );
     const draftNurseIds = new Set(
-      assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
+      remainingAssignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
     );
     return nurses.filter(
       (n) =>
@@ -987,7 +1009,7 @@ function RotaPage() {
         draftNurseIds.has(n.id) &&
         !nonDraftNurseIds.has(n.id),
     );
-  }, [selectedWard, assignments, nurses, effectiveFacility]);
+  }, [selectedWard, remainingAssignments, nurses, effectiveFacility]);
 
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
@@ -1047,7 +1069,7 @@ function RotaPage() {
   const unscheduledFwMap = useMemo(() => {
     if (!canScheduleNewStaff || !effectiveFacility)
       return new Map<FacilityWideGroup, typeof nurses>();
-    const assignedIds = new Set(assignments.map((a) => a.nurse_id));
+    const assignedIds = scheduledIds;
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
       if (key === "matron") return fac.filter((n) => isMatron(n.role, n.facility));
@@ -1066,7 +1088,7 @@ function RotaPage() {
   }, [
     canScheduleNewStaff,
     effectiveFacility,
-    assignments,
+    scheduledIds,
     nurses,
     facilityWideStatusMap,
     facilityHasCurrentSchedule,
@@ -1079,10 +1101,10 @@ function RotaPage() {
     if (!canScheduleNewStaff || !effectiveFacility)
       return new Map<FacilityWideGroup, typeof nurses>();
     const nonDraftIds = new Set(
-      assignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
+      remainingAssignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
     );
     const draftIds = new Set(
-      assignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
+      remainingAssignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
     );
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
@@ -1099,7 +1121,7 @@ function RotaPage() {
       }
     }
     return result;
-  }, [canScheduleNewStaff, effectiveFacility, assignments, nurses, facilityWideStatusMap]);
+  }, [canScheduleNewStaff, effectiveFacility, remainingAssignments, nurses, facilityWideStatusMap]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {

@@ -71,6 +71,30 @@ type Created = {
   administrator: { email: string };
   temporary_password: string;
 };
+// A hospital's saved setup, as returned by GET /hospitals/:id/setup.
+type SavedSetup = {
+  name: string;
+  logo: string | null;
+  roles: { enabled: string[] };
+  settings: {
+    gps_settings?: {
+      radius_m?: number;
+      facilities?: Record<string, { label: string; lat: number; lng: number }[]>;
+    };
+    min_password_length?: number;
+    password_expiry_days?: number;
+    idle_timeout_minutes?: number;
+    sick_emergency_max_days?: number;
+    shift_switch_min_notice_hours?: number;
+    grace_leave_types?: string[];
+    leave_entitlement_defaults?: Record<string, number>;
+    rota_deadlines?: Record<string, number>;
+    rota_jobs_paused?: Record<string, boolean>;
+    shift_reminder_settings?: { missed_shift_hours?: number; upcoming_shift_minutes?: number };
+    capabilities?: { key: string; roles: string[] }[];
+    menu_permissions?: Record<string, string[]>;
+  };
+};
 
 const input = "h-9 w-full rounded-md border bg-background px-3 text-sm";
 const blankLocation = (): Location => ({ label: "", lat: "", lng: "" });
@@ -171,10 +195,16 @@ function RoleGrid({
 export function HospitalSetupWizard({
   onCreated,
   onCancel,
+  editHospitalId,
+  onSaved,
 }: {
-  onCreated: (hospital: Created) => void;
+  onCreated?: (hospital: Created) => void;
   onCancel: () => void;
+  /** Edit this existing hospital's setup instead of creating one. */
+  editHospitalId?: string;
+  onSaved?: () => void;
 }) {
+  const editing = !!editHospitalId;
   const { roleLabel } = useAuth();
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -198,6 +228,74 @@ export function HospitalSetupWizard({
   const [menu, setMenu] = useState<Record<string, string[]>>({});
   const [permissionsReviewed, setPermissionsReviewed] = useState(false);
 
+  // Edit mode: start from the hospital's saved setup.
+  const saved = useQuery({
+    queryKey: ["hospital-setup", editHospitalId],
+    enabled: editing,
+    queryFn: () => api.get<SavedSetup>(`/hospitals/${editHospitalId}/setup`),
+  });
+  const [loaded, setLoaded] = useState(false);
+  useEffect(() => {
+    if (!saved.data || loaded) return;
+    const text = (v: number | undefined) => (v === undefined || v === null ? "" : String(v));
+    const s = saved.data.settings;
+    setName(saved.data.name);
+    setLogo(saved.data.logo);
+    setRadius(text(s.gps_settings?.radius_m));
+    const facilities = Object.entries(s.gps_settings?.facilities ?? {});
+    if (facilities.length)
+      setSites(
+        facilities.map(([siteName, locations]) => ({
+          name: siteName,
+          locations: locations.length
+            ? locations.map((l) => ({ label: l.label, lat: String(l.lat), lng: String(l.lng) }))
+            : [blankLocation()],
+        })),
+      );
+    setSecurity({
+      min: text(s.min_password_length),
+      expiry: text(s.password_expiry_days),
+      idle: text(s.idle_timeout_minutes),
+    });
+    setLeave({
+      sickMax: text(s.sick_emergency_max_days),
+      notice: text(s.shift_switch_min_notice_hours),
+    });
+    setGrace(s.grace_leave_types ?? []);
+    setCaps(
+      Object.fromEntries(
+        ENTITLEMENTS.map(({ type }) => [type, text(s.leave_entitlement_defaults?.[type])]),
+      ),
+    );
+    setDeadlines(
+      Object.fromEntries(DEADLINES.map((d) => [d.key, text(s.rota_deadlines?.[d.key])])),
+    );
+    setJobs(
+      Object.fromEntries(
+        JOBS.map((j) => [
+          j.key,
+          s.rota_jobs_paused?.[j.key] === undefined ? undefined : !s.rota_jobs_paused[j.key],
+        ]),
+      ),
+    );
+    setReminders({
+      missed: text(s.shift_reminder_settings?.missed_shift_hours),
+      upcoming: text(s.shift_reminder_settings?.upcoming_shift_minutes),
+    });
+    const notAdmin = (list: string[] | undefined) => (list ?? []).filter((r) => r !== "admin");
+    setCapabilities(
+      Object.fromEntries((s.capabilities ?? []).map((c) => [c.key, notAdmin(c.roles)])),
+    );
+    setMenu(
+      Object.fromEntries(
+        Object.entries(s.menu_permissions ?? {}).map(([path, list]) => [path, notAdmin(list)]),
+      ),
+    );
+    setPermissionsReviewed(!!s.capabilities?.length && !!s.menu_permissions);
+    setEnabledRoles(saved.data.roles.enabled);
+    setLoaded(true);
+  }, [saved.data, loaded]);
+
   // Roles this hospital will use: chosen from the catalogue (built-in roles and
   // other hospitals' roles) or created for it. Administrator is always included.
   const catalog = useQuery({
@@ -211,11 +309,11 @@ export function HospitalSetupWizard({
   );
   const [enabledRoles, setEnabledRoles] = useState<string[] | null>(null);
   useEffect(() => {
-    if (enabledRoles === null && catalog.data)
+    if (!editing && enabledRoles === null && catalog.data)
       setEnabledRoles(
         DEFAULT_HOSPITAL_ROLES.filter((key) => catalogRoles.some((r) => r.key === key)),
       );
-  }, [catalog.data, catalogRoles, enabledRoles]);
+  }, [editing, catalog.data, catalogRoles, enabledRoles]);
   const [newRoles, setNewRoles] = useState<NewRole[]>([]);
   const [draftRole, setDraftRole] = useState<NewRole>({ key: "", label: "", description: "" });
   const roles = useMemo(
@@ -276,7 +374,7 @@ export function HospitalSetupWizard({
     );
     setPermissionsReviewed(false);
   }
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState(editing);
   // Copy once the roles are chosen, on first reaching the Permissions step.
   useEffect(() => {
     if (!copied && step === 7 && source.data) {
@@ -302,8 +400,8 @@ export function HospitalSetupWizard({
     const errors: string[] = [];
     if (index === 0) {
       if (!name.trim()) errors.push("Enter the hospital name");
-      if (!adminName.trim()) errors.push("Enter the administrator's full name");
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail.trim()))
+      if (!editing && !adminName.trim()) errors.push("Enter the administrator's full name");
+      if (!editing && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail.trim()))
         errors.push("Enter the administrator's email address");
     }
     if (index === 1) {
@@ -369,7 +467,7 @@ export function HospitalSetupWizard({
       name: name.trim(),
       logo,
       roles: { enabled: enabledRoles ?? [], custom: newRoles },
-      admin: { full_name: adminName.trim(), email: adminEmail.trim() },
+      ...(editing ? {} : { admin: { full_name: adminName.trim(), email: adminEmail.trim() } }),
       gps: {
         radius_m: whole(radius),
         sites: sites.map((s) => ({
@@ -414,17 +512,36 @@ export function HospitalSetupWizard({
     setBusy(true);
     setServerErrors([]);
     try {
-      const created = await api.post<Created>("/hospitals", payload());
-      toast.success(`${created.name} created`);
-      onCreated(created);
+      if (editing) {
+        await api.put(`/hospitals/${editHospitalId}/setup`, payload());
+        toast.success(`${name.trim()} saved`);
+        onSaved?.();
+      } else {
+        const created = await api.post<Created>("/hospitals", payload());
+        toast.success(`${created.name} created`);
+        onCreated?.(created);
+      }
     } catch (e) {
       if (e instanceof ApiError && Array.isArray(e.data.errors))
         setServerErrors(e.data.errors as { path: string; message: string }[]);
-      toast.error(e instanceof Error ? e.message : "Could not create the hospital");
+      toast.error(
+        e instanceof Error
+          ? e.message
+          : editing
+            ? "Could not save the hospital"
+            : "Could not create the hospital",
+      );
     } finally {
       setBusy(false);
     }
   }
+
+  if (editing && !loaded)
+    return (
+      <section className="rounded-xl border bg-card p-4 text-sm text-muted-foreground">
+        {saved.isError ? "Could not load this hospital's setup." : "Loading setup…"}
+      </section>
+    );
 
   const updateSite = (i: number, next: Site) =>
     setSites((prev) => prev.map((s, j) => (j === i ? next : s)));
@@ -432,7 +549,9 @@ export function HospitalSetupWizard({
   return (
     <section className="space-y-4 rounded-xl border bg-card p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">Set up a new hospital</h2>
+        <h2 className="font-semibold">
+          {editing ? `Edit ${saved.data?.name ?? "hospital"} setup` : "Set up a new hospital"}
+        </h2>
         <Button variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
           Cancel
         </Button>
@@ -449,7 +568,15 @@ export function HospitalSetupWizard({
                   : "bg-muted text-muted-foreground"
             }`}
           >
-            {i + 1}. {label}
+            {editing ? (
+              <button type="button" onClick={() => setStep(i)} disabled={busy}>
+                {i + 1}. {label}
+              </button>
+            ) : (
+              <>
+                {i + 1}. {label}
+              </>
+            )}
           </li>
         ))}
       </ol>
@@ -468,28 +595,36 @@ export function HospitalSetupWizard({
           <div className="sm:col-span-2">
             <HospitalLogoField value={logo} onChange={setLogo} label="Hospital logo (optional)" />
           </div>
-          <p className="text-sm text-muted-foreground sm:col-span-2">
-            The hospital's first administrator receives an account with a temporary password and
-            sets up its wards, staff and scheduling.
-          </p>
-          <label className="grid gap-1 text-sm">
-            Administrator full name
-            <input
-              className={input}
-              value={adminName}
-              maxLength={120}
-              onChange={(e) => setAdminName(e.target.value)}
-            />
-          </label>
-          <label className="grid gap-1 text-sm">
-            Administrator email
-            <input
-              className={input}
-              type="email"
-              value={adminEmail}
-              onChange={(e) => setAdminEmail(e.target.value)}
-            />
-          </label>
+          {editing ? (
+            <p className="text-sm text-muted-foreground sm:col-span-2">
+              Administrator accounts are managed on the Access tab and the hospital's Users page.
+            </p>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground sm:col-span-2">
+                The hospital's first administrator receives an account with a temporary password and
+                sets up its wards, staff and scheduling.
+              </p>
+              <label className="grid gap-1 text-sm">
+                Administrator full name
+                <input
+                  className={input}
+                  value={adminName}
+                  maxLength={120}
+                  onChange={(e) => setAdminName(e.target.value)}
+                />
+              </label>
+              <label className="grid gap-1 text-sm">
+                Administrator email
+                <input
+                  className={input}
+                  type="email"
+                  value={adminEmail}
+                  onChange={(e) => setAdminEmail(e.target.value)}
+                />
+              </label>
+            </>
+          )}
         </div>
       )}
 
@@ -906,7 +1041,7 @@ export function HospitalSetupWizard({
             ["Hospital", name],
             ["Logo", logo ? "Uploaded" : "None (application logo is used)"],
             ["Roles", ["Administrator", ...roles.map((r) => r.label)].join(", ")],
-            ["Administrator", `${adminName} (${adminEmail})`],
+            ...(editing ? [] : [["Administrator", `${adminName} (${adminEmail})`]]),
             [
               "Sites",
               sites
@@ -975,7 +1110,7 @@ export function HospitalSetupWizard({
             disabled={busy || STEPS.slice(0, -1).some((_, i) => stepErrors(i).length > 0)}
             onClick={() => void create()}
           >
-            Create hospital
+            {editing ? "Save changes" : "Create hospital"}
           </Button>
         )}
       </div>
