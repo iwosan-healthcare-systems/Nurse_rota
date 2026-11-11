@@ -1,5 +1,6 @@
 const { claimLocum } = require("../lib/claim-locum");
 const { locumShiftOptions } = require("../lib/locum-shift-options");
+const { readAssessment } = require("../lib/ward-assessment");
 const router = require("express").Router();
 const pool = require("../db");
 const { requireCapability } = require("../middleware/capability");
@@ -120,20 +121,15 @@ router.post(
   "/requests",
   requireCapability("request_locum", ["admin", "chief_matron"]),
   wrap(async (req, res) => {
-    const {
-      shift_date,
-      shift,
-      facility,
-      ward,
-      nurses_in_ward,
-      ventilated_patients,
-      hdu_nurses,
-      requested_by,
-      requested_by_name,
-      role_needed,
-    } = req.body;
+    const { shift_date, shift, facility, ward, requested_by, requested_by_name, role_needed } =
+      req.body;
     if (!shift_date || !shift || !facility || !ward || !requested_by || !requested_by_name)
       return res.status(400).json({ error: "Missing required fields" });
+    const assessment = readAssessment(ward, req.body);
+    if (assessment.missing.length)
+      return res
+        .status(400)
+        .json({ error: "Answer every ward assessment question with a whole number" });
 
     const options = await locumShiftOptions(pool, facility, String(shift_date).slice(0, 10));
     const option = options.shifts.find((s) => s.code === shift);
@@ -145,16 +141,24 @@ router.post(
     const nursesNeeded = parseInt(req.body.nurses_needed, 10) || 1;
     const { rows } = await pool.query(
       `INSERT INTO locum_requests
-     (shift_date, shift, facility, ward, nurses_in_ward, ventilated_patients, hdu_nurses, requested_by, requested_by_name, nurses_needed, role_needed, shift_name, shift_starts_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+     (shift_date, shift, facility, ward, nurses_in_ward, unit_kind, icu_patients, hdu_patients,
+      nicu_patients, scbu_patients, ward_patients, nurse_interns, ews_over_3,
+      requested_by, requested_by_name, nurses_needed, role_needed, shift_name, shift_starts_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING *`,
       [
         shift_date,
         shift,
         facility,
         ward,
-        nurses_in_ward || 0,
-        ventilated_patients || 0,
-        hdu_nurses || 0,
+        assessment.values.nurses_in_ward,
+        assessment.unitKind,
+        assessment.values.icu_patients,
+        assessment.values.hdu_patients,
+        assessment.values.nicu_patients,
+        assessment.values.scbu_patients,
+        assessment.values.ward_patients,
+        assessment.values.nurse_interns,
+        assessment.values.ews_over_3,
         requested_by,
         requested_by_name,
         nursesNeeded,

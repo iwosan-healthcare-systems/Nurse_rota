@@ -29,7 +29,9 @@ import {
   Copy,
   ShieldAlert,
   AlertTriangle,
+  UserMinus,
 } from "lucide-react";
+import { RemoveFromRotaDialog, StaffWhoHaveLeft } from "@/components/RemoveFromRota";
 import { useAuth } from "@/lib/auth-context";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
@@ -184,6 +186,7 @@ type Nurse = {
   email: string | null;
   hours_this_month: number;
   target_hours: number;
+  profile_id?: string | null;
 };
 
 function StaffPage() {
@@ -211,6 +214,7 @@ function StaffPage() {
   const [showUpload, setShowUpload] = useState(false);
   const [showSetHours, setShowSetHours] = useState(false);
   const [editingNurse, setEditingNurse] = useState<Nurse | null>(null);
+  const [removingNurse, setRemovingNurse] = useState<Nurse | null>(null);
   const [createLoginNurse, setCreateLoginNurse] = useState<Nurse | null>(null);
   const [resetPasswordTarget, setResetPasswordTarget] = useState<{
     name: string;
@@ -785,12 +789,29 @@ function StaffPage() {
                           >
                             <Pencil className="h-4 w-4" />
                           </button>
+                          <button
+                            type="button"
+                            aria-label={`Remove ${n.name} from the rota`}
+                            title="Remove from rota (leaving)"
+                            onClick={() => setRemovingNurse(n)}
+                            className="h-8 w-8 grid place-items-center rounded-md hover:bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                          >
+                            <UserMinus className="h-4 w-4" />
+                          </button>
                           {canDelete ? (
                             <button
                               type="button"
-                              aria-label={`Remove ${n.name}`}
+                              aria-label={`Delete ${n.name} permanently`}
+                              title="Delete record permanently (only for records added by mistake)"
                               onClick={() => {
-                                if (confirm(`Remove ${n.name}?`)) delMut.mutate(n.id);
+                                if (
+                                  confirm(
+                                    `Delete ${n.name} permanently?
+
+This also deletes all their past shifts, attendance and leave. For staff who are leaving, use “Remove from rota” instead.`,
+                                  )
+                                )
+                                  delMut.mutate(n.id);
                               }}
                               className="h-8 w-8 grid place-items-center rounded-md hover:bg-destructive/10 text-destructive"
                             >
@@ -855,6 +876,10 @@ function StaffPage() {
       {editingNurse && (
         <EditNurseModal nurse={editingNurse} wards={wards} onClose={() => setEditingNurse(null)} />
       )}
+      {removingNurse && (
+        <RemoveFromRotaDialog staff={removingNurse} onClose={() => setRemovingNurse(null)} />
+      )}
+      {canManageStaff && <StaffWhoHaveLeft facility={lockedFacility ?? (filterFacility || null)} />}
       {showSetHours && (
         <SetTargetHoursModal
           currentHours={nurses[0]?.target_hours ?? 180}

@@ -29,6 +29,23 @@ import { logAudit } from "@/lib/audit";
 import { cn } from "@/lib/utils";
 import { Modal } from "./staff";
 import { FacilityChips } from "@/components/FacilityChips";
+import {
+  ASSESSMENT_QUESTIONS,
+  assessmentAnswers,
+  unitKindOf,
+  type AssessmentField,
+  type UnitKind,
+} from "@/lib/ward-assessment";
+
+// New request form fields; the ward assessment answers depend on the ward.
+type NewLocumRequest = {
+  shift_date: string;
+  shift: string;
+  facility: string;
+  ward: string;
+  nurses_needed: number;
+  role_needed: string;
+} & Partial<Record<AssessmentField, number>>;
 
 export const Route = createFileRoute("/_app/locum")({
   component: LocumPage,
@@ -65,8 +82,16 @@ type LocumRequest = {
   facility: string;
   ward: string;
   nurses_in_ward: number;
-  ventilated_patients: number;
-  hdu_nurses: number;
+  ventilated_patients: number | null;
+  hdu_nurses: number | null;
+  unit_kind?: UnitKind | null;
+  icu_patients?: number | null;
+  hdu_patients?: number | null;
+  nicu_patients?: number | null;
+  scbu_patients?: number | null;
+  ward_patients?: number | null;
+  nurse_interns?: number | null;
+  ews_over_3?: number | null;
   nurses_needed: number;
   role_needed: string | null;
   status: LocumStatus;
@@ -299,17 +324,7 @@ function LocumPage() {
 
   // ── Action handlers ───────────────────────────────────────────────────────────
 
-  async function handleCreate(form: {
-    shift_date: string;
-    shift: string;
-    facility: string;
-    ward: string;
-    nurses_in_ward: number;
-    ventilated_patients: number;
-    hdu_nurses: number;
-    nurses_needed: number;
-    role_needed: string;
-  }) {
+  async function handleCreate(form: NewLocumRequest) {
     const req = await api.post<LocumRequest>("/locum/requests", {
       ...form,
       status: "pending",
@@ -1195,23 +1210,26 @@ function RequestCard({
       {expanded && (
         <div className="border-t px-4 py-4 space-y-4">
           {/* Ward assessment questions */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <StatBox
-              icon={<Users className="h-4 w-4" />}
-              label="Nurses in Ward"
-              value={req.nurses_in_ward}
-            />
-            <StatBox
-              icon={<Activity className="h-4 w-4" />}
-              label="Ventilated Patients"
-              value={req.ventilated_patients}
-            />
-            <StatBox
-              icon={<Stethoscope className="h-4 w-4" />}
-              label="HDU Nurses"
-              value={req.hdu_nurses}
-            />
-          </div>
+          {assessmentAnswers(req).length > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {assessmentAnswers(req).map((a) => (
+                <StatBox
+                  key={a.label}
+                  icon={
+                    /nurse/i.test(a.label) ? (
+                      <Users className="h-4 w-4" />
+                    ) : /EWS/i.test(a.label) ? (
+                      <Activity className="h-4 w-4" />
+                    ) : (
+                      <Stethoscope className="h-4 w-4" />
+                    )
+                  }
+                  label={a.label}
+                  value={a.value}
+                />
+              ))}
+            </div>
+          )}
 
           {showInvites && reqInvites.length > 0 && (
             <div className="space-y-2">
@@ -1384,17 +1402,7 @@ function CreateRequestModal({
   wards: { name: string; facility: string | null }[];
   lockedFacility: string | null;
   onClose: () => void;
-  onSubmit: (form: {
-    shift_date: string;
-    shift: string;
-    facility: string;
-    ward: string;
-    nurses_in_ward: number;
-    ventilated_patients: number;
-    hdu_nurses: number;
-    nurses_needed: number;
-    role_needed: string;
-  }) => Promise<void>;
+  onSubmit: (form: NewLocumRequest) => Promise<void>;
 }) {
   // Derive unique facility list from the filtered wards prop
   const facilities = [...new Set(wards.map((w) => w.facility).filter(Boolean))] as string[];
@@ -1405,9 +1413,8 @@ function CreateRequestModal({
   const [facility, setFacility] = useState(lockedFacility ?? facilities[0] ?? "");
   const [ward, setWard] = useState("");
   const [roleNeeded, setRoleNeeded] = useState("Nurse");
-  const [nursesInWard, setNursesInWard] = useState("");
-  const [ventPatients, setVentPatients] = useState("");
-  const [hduNurses, setHduNurses] = useState("");
+  const [answers, setAnswers] = useState<Partial<Record<AssessmentField, string>>>({});
+  const questions = ward ? ASSESSMENT_QUESTIONS[unitKindOf(ward)] : [];
   const [nursesNeeded, setNursesNeeded] = useState("1");
 
   // Wards available for the selected facility
@@ -1438,7 +1445,7 @@ function CreateRequestModal({
     if (!shiftDate || !facility) return toast.error("Please select a facility.");
     if (!ward) return toast.error("Please select a ward.");
     if (!selectedShift) return toast.error("No shifts are available for this date.");
-    if (!nursesInWard || !ventPatients || !hduNurses)
+    if (questions.some((q) => !answers[q.field]))
       return toast.error("Please answer all assessment questions.");
     if (!nursesNeeded || parseInt(nursesNeeded) < 1)
       return toast.error("Number of nurses needed must be at least 1.");
@@ -1449,9 +1456,7 @@ function CreateRequestModal({
         shift: selectedShift,
         facility,
         ward,
-        nurses_in_ward: parseInt(nursesInWard),
-        ventilated_patients: parseInt(ventPatients),
-        hdu_nurses: parseInt(hduNurses),
+        ...Object.fromEntries(questions.map((q) => [q.field, parseInt(answers[q.field]!)])),
         nurses_needed: parseInt(nursesNeeded),
         role_needed: roleNeeded,
       });
@@ -1576,41 +1581,25 @@ function CreateRequestModal({
           Ward Assessment
         </p>
 
-        <Field label="How many nurses are currently in the ward/unit?">
-          <input
-            type="number"
-            min={0}
-            required
-            className={inp}
-            placeholder="e.g. 4"
-            value={nursesInWard}
-            onChange={(e) => setNursesInWard(e.target.value)}
-          />
-        </Field>
-
-        <Field label="How many patients are ventilated?">
-          <input
-            type="number"
-            min={0}
-            required
-            className={inp}
-            placeholder="e.g. 2"
-            value={ventPatients}
-            onChange={(e) => setVentPatients(e.target.value)}
-          />
-        </Field>
-
-        <Field label="How many HDU nurses are in the unit?">
-          <input
-            type="number"
-            min={0}
-            required
-            className={inp}
-            placeholder="e.g. 1"
-            value={hduNurses}
-            onChange={(e) => setHduNurses(e.target.value)}
-          />
-        </Field>
+        {!ward ? (
+          <p className="text-sm text-muted-foreground">
+            Choose a ward to see its assessment questions.
+          </p>
+        ) : (
+          questions.map((q) => (
+            <Field key={q.field} label={q.question}>
+              <input
+                type="number"
+                min={0}
+                required
+                className={inp}
+                placeholder="e.g. 2"
+                value={answers[q.field] ?? ""}
+                onChange={(e) => setAnswers((a) => ({ ...a, [q.field]: e.target.value }))}
+              />
+            </Field>
+          ))
+        )}
 
         <div className="flex gap-2 pt-2">
           <button
@@ -1759,23 +1748,26 @@ function ReviewModal({
           </p>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <StatBox
-            icon={<Users className="h-4 w-4" />}
-            label="Nurses in Ward"
-            value={request.nurses_in_ward}
-          />
-          <StatBox
-            icon={<Activity className="h-4 w-4" />}
-            label="Ventilated"
-            value={request.ventilated_patients}
-          />
-          <StatBox
-            icon={<Stethoscope className="h-4 w-4" />}
-            label="HDU Nurses"
-            value={request.hdu_nurses}
-          />
-        </div>
+        {assessmentAnswers(request).length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            {assessmentAnswers(request).map((a) => (
+              <StatBox
+                key={a.label}
+                icon={
+                  /nurse/i.test(a.label) ? (
+                    <Users className="h-4 w-4" />
+                  ) : /EWS/i.test(a.label) ? (
+                    <Activity className="h-4 w-4" />
+                  ) : (
+                    <Stethoscope className="h-4 w-4" />
+                  )
+                }
+                label={a.label}
+                value={a.value}
+              />
+            ))}
+          </div>
+        )}
 
         {isDecline && (
           <Field label="Reason for declining *">

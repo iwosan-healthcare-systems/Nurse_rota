@@ -29,6 +29,7 @@ import { scheduleExportDefinitions } from "@/lib/schedule-export";
 import type { AssignmentDefinition } from "@/lib/assignment-shift-definition";
 import { useAuth } from "@/lib/auth-context";
 import { rememberRotaPeriod, rotaPeriodEndFor } from "@/lib/rota-window";
+import { printRowsAoa, printRowsHtml } from "@/lib/rota-teams";
 import { toast } from "sonner";
 import { useState, useMemo } from "react";
 import { cn } from "@/lib/utils";
@@ -759,16 +760,21 @@ function ApprovalsPage() {
         ? assessCoverageGaps(allAssignments, dateRange(win.startDate, endDate))
         : null;
     if (coverage) definitions.html += coverage.html;
+    // Raw cells for on-duty totals (day/night comes from the saved shift times).
+    const rawCells = new Map(
+      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a]),
+    );
+    const cellOf = (id: string, date: string) => rawCells.get(`${id}|${date}`);
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = scopedNurses.filter((n) => activeIds.has(n.id));
-    return { activeNurses, assignMap, definitions, staffing, coverage };
+    return { activeNurses, assignMap, definitions, staffing, coverage, cellOf };
   }
 
   async function handleDownloadExcel(win: RotaWindow) {
     const key = winKey(win);
     setDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap, definitions, staffing, coverage } =
+      const { activeNurses, assignMap, definitions, staffing, coverage, cellOf } =
         await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
@@ -787,7 +793,7 @@ function ApprovalsPage() {
           return `${dt.toLocaleDateString("en-GB", { weekday: "short" })} ${dt.getDate()}/${dt.getMonth() + 1}`;
         }),
       ];
-      const rowData = activeNurses.map((n) => [
+      const rowData = printRowsAoa(activeNurses, dates, cellOf, (n) => [
         n.name,
         n.role,
         n.ward ? n.ward.split("|")[0] : "",
@@ -833,7 +839,7 @@ function ApprovalsPage() {
     const key = winKey(win);
     setDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap, definitions, staffing } = await fetchWindowData(win);
+      const { activeNurses, assignMap, definitions, staffing, cellOf } = await fetchWindowData(win);
       const endDate = scheduleEndDate(win.startDate);
       const dates = dateRange(win.startDate, endDate);
       const dateHeaders = dates
@@ -842,17 +848,15 @@ function ApprovalsPage() {
           return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
         })
         .join("");
-      const bodyRows = activeNurses
-        .map((n) => {
-          const cells = dates
-            .map((d) => {
-              const s = assignMap.get(`${n.id}|${d}`) ?? "";
-              return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
-            })
-            .join("");
-          return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
-        })
-        .join("");
+      const bodyRows = printRowsHtml(activeNurses, dates, cellOf, (n) => {
+        const cells = dates
+          .map((d) => {
+            const s = assignMap.get(`${n.id}|${d}`) ?? "";
+            return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
+          })
+          .join("");
+        return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
+      });
       const pdfFacilityLabel = win.facility ? ` · ${win.facility}` : "";
       const pdfWardLabel =
         win.ward !== null

@@ -12,6 +12,8 @@ function fixture(count = 4) {
   const configuration = seedConfiguration(facility, []);
   const role = configuration.roles.find((r) => r.name === "Coverage Nurse");
   role.specialRule = "none";
+  role.patternId = "standard";
+  role.allowedShifts = ["M", "N", "MWC"];
   configuration.coverageRules = [
     {
       id: "weekend",
@@ -78,23 +80,64 @@ test("fixed coverage is identical across split periods with published history", 
     normalize(whole.assignments),
   );
 });
-test("approved leave preserves the fixed coverage slot and reports an actionable gap", () => {
+test("staff on approved leave are skipped and the next person covers with the rest days", () => {
   const f = fixture();
   f.leave = [
     {
       nurse_id: "n0",
       status: "Approved",
       type: "Annual",
-      from_date: "2026-09-26",
-      to_date: "2026-09-27",
+      from_date: "2026-09-27",
+      to_date: "2026-09-30",
     },
   ];
   const result = generate(f);
-  const a = result.assignments.find((a) => a.nurseId === "n0" && a.date === "2026-09-26");
-  assert.equal(a.shift, "LEAVE");
-  assert.equal(a.plannedShift, "MWC");
-  assert.equal(a.creditedMinutes, 0);
-  assert.ok(result.diagnostics.some((d) => d.code === "CONFIGURED_COVERAGE_GAP" && d.actual === 0));
+  const at = (n, d) => result.assignments.find((a) => a.nurseId === n && a.date === d);
+  // n0's weekend (26-27 Sep) passes to n1, who gets the Friday and Monday off.
+  assert.notEqual(at("n0", "2026-09-26").shift, "MWC");
+  assert.equal(at("n0", "2026-09-27").shift, "LEAVE");
+  assert.equal(at("n1", "2026-09-25").shift, "OFF");
+  assert.equal(at("n1", "2026-09-26").shift, "MWC");
+  assert.equal(at("n1", "2026-09-27").shift, "MWC");
+  assert.equal(at("n1", "2026-09-28").shift, "OFF");
+  assert.ok(!result.diagnostics.some((d) => d.code === "CONFIGURED_COVERAGE_GAP"));
+  // With everyone on leave the weekend is reported as a gap.
+  f.leave = f.nurses.map((n) => ({ ...f.leave[0], nurse_id: n.id }));
+  assert.ok(
+    generate(f).diagnostics.some((d) => d.code === "CONFIGURED_COVERAGE_GAP" && d.actual === 0),
+  );
+});
+test("turns are shared evenly among staff available in the month", () => {
+  const f = fixture();
+  f.leave = ["n0", "n1"].map((nurse_id) => ({
+    nurse_id,
+    status: "Approved",
+    type: "Annual",
+    from_date: "2026-09-26",
+    to_date: "2026-09-27",
+  }));
+  const result = generate(f);
+  const turns = {};
+  // One count per weekend: its Saturday.
+  for (const a of result.assignments)
+    if (a.shift === "MWC" && new Date(`${a.date}T00:00:00Z`).getUTCDay() === 6)
+      turns[a.nurseId] = (turns[a.nurseId] ?? 0) + 1;
+  // Four weekends (26 Sep – 17 Oct) and four nurses: everyone covers exactly once.
+  assert.deepEqual(Object.values(turns).sort(), [1, 1, 1, 1]);
+});
+test("a weekend that began in the previous period keeps its published nurse", () => {
+  const f = fixture();
+  f.startDate = "2026-09-27";
+  f.days = 7;
+  f.previousAssignments = [
+    { nurse_id: "n2", shift_date: "2026-09-26", shift: "MWC" },
+    { nurse_id: "n0", shift_date: "2026-09-26", shift: "OFF" },
+  ];
+  const result = generate(f);
+  const at = (n, d) => result.assignments.find((a) => a.nurseId === n && a.date === d).shift;
+  assert.equal(at("n2", "2026-09-27"), "MWC");
+  assert.equal(at("n2", "2026-09-28"), "OFF");
+  assert.notEqual(at("n0", "2026-09-27"), "MWC");
 });
 test("empty pools and insufficient staffing produce gaps without duplicate assignments", () => {
   assert.ok(generate(fixture(0)).diagnostics.some((d) => d.code === "CONFIGURED_COVERAGE_GAP"));
@@ -139,7 +182,7 @@ test("overlapping duty and rest reservations report blocking conflicts", () => {
   other.configuration.coverageRules.push({
     ...other.configuration.coverageRules[0],
     id: "second",
-    shift: "NC",
+    shift: "N",
   });
   assert.ok(generate(other).diagnostics.some((d) => d.code === "COVERAGE_CONFLICT"));
 });

@@ -36,7 +36,7 @@ function fixture(overrides = {}) {
     wards,
     nurses: [nurse("n1")],
     startDate: "2026-09-21",
-    configuration: seedConfiguration(f, wards),
+    configuration: seedConfiguration(f, wards, [], { legacyCoverage: !!overrides.legacyCoverage }),
     ...overrides,
   };
 }
@@ -75,7 +75,9 @@ test("seeded ordinary and special role assignments match the legacy engine", () 
   const nurses = roles
     .flatMap((role, i) => Array.from({ length: 4 }, (_, j) => nurse(`${i}-${j}`, role)))
     .sort((a, b) => a.id.localeCompare(b.id));
-  const f = fixture({ nurses });
+  // Retained coverage rules still reproduce the legacy engine exactly.
+  const f = fixture({ nurses, legacyCoverage: true });
+  delete f.legacyCoverage;
   for (const offset of [0, 28, 56]) {
     const startDate = new Date(Date.parse("2026-09-21T00:00:00Z") + offset * 86400000)
       .toISOString()
@@ -95,6 +97,66 @@ test("seeded ordinary and special role assignments match the legacy engine", () 
       sorted(expected.assignments.map((a) => [a.nurse_id, a.shift_date, a.shift])),
     );
   }
+});
+test("Lagoon's default coverage settings: 4M/2OFF/4N/4OFF and one day coverage nurse per weekend", () => {
+  const nurses = [
+    ...Array.from({ length: 3 }, (_, i) => ({ ...nurse(`c${i}`, "Coverage Nurse"), ward: null })),
+    ...Array.from({ length: 3 }, (_, i) => ({
+      ...nurse(`d${i}`, "Coverage Nurse - Day"),
+      ward: null,
+    })),
+  ];
+  const result = generate(
+    fixture({
+      nurses,
+      startDate: "2026-12-01",
+      days: 31,
+      configuration: seedConfiguration(
+        facility,
+        [ward],
+        nurses.map((n) => n.role),
+      ),
+    }),
+  );
+  assert.ok(!result.diagnostics.some((d) => d.code === "LEGACY_ADAPTER"));
+  assert.ok(!result.assignments.some((a) => a.shift === "NC"));
+  const cycle = ["M", "M", "M", "M", "OFF", "OFF", "N", "N", "N", "N", "OFF", "OFF", "OFF", "OFF"];
+  const row = (id) => result.assignments.filter((a) => a.nurseId === id).map((a) => a.shift);
+  for (const id of ["c0", "c1", "c2"]) {
+    const shifts = row(id);
+    assert.ok(
+      cycle.some((_, p) => shifts.every((s, d) => s === cycle[(p + d) % 14])),
+      `${id}: ${shifts.join(" ")}`,
+    );
+  }
+  const dates = result.dates;
+  for (const [i, date] of dates.entries()) {
+    const dow = new Date(`${date}T00:00:00Z`).getUTCDay();
+    const mwc = result.assignments.filter((a) => a.date === date && a.shift === "MWC");
+    assert.equal(mwc.length, dow === 0 || dow === 6 ? 1 : 0, date);
+    if (dow !== 6) continue;
+    const who = mwc[0].nurseId;
+    assert.ok(who.startsWith("d"));
+    const at = (k) => result.assignments.find((a) => a.nurseId === who && a.date === dates[k]);
+    if (i > 0) assert.equal(at(i - 1).shift, "OFF", `Friday before ${date}`);
+    if (dates[i + 2]) assert.equal(at(i + 2).shift, "OFF", `Monday after ${date}`);
+    for (let k = i + 3; k <= i + 6 && dates[k]; k++) assert.equal(at(k).shift, "M");
+  }
+});
+test("history with earlier NC nights continues the coverage pattern after its nights", () => {
+  const nurses = [{ ...nurse("c0", "Coverage Nurse"), ward: null }];
+  const previousAssignments = ["N", "NC", "NC", "NC", "NC"].map((shift, i) => ({
+    nurse_id: "c0",
+    shift_date: `2026-11-${26 + i}`,
+    shift: i === 0 ? "OFF" : shift,
+  }));
+  const result = generate(
+    fixture({ nurses, startDate: "2026-12-01", days: 8, previousAssignments }),
+  );
+  assert.deepEqual(
+    result.assignments.map((a) => a.shift),
+    ["OFF", "OFF", "OFF", "OFF", "M", "M", "M", "M"],
+  );
 });
 test("fixed ward calendar preserves Oncology day assistant schedules and can be disabled", () => {
   const wards = [{ ...ward, name: "Oncology" }];
@@ -263,7 +325,8 @@ test("foreign and inactive staff never enter preview or coverage counts", () => 
   assert.equal(result.assignments.length, 28);
 });
 test("unsupported coverage changes, missing role mappings and disallowed overrides fail before output", () => {
-  const f = fixture({ nurses: [nurse("c1", "Coverage Nurse")] });
+  const f = fixture({ nurses: [nurse("c1", "Coverage Nurse")], legacyCoverage: true });
+  delete f.legacyCoverage;
   Object.assign(
     f.configuration.shifts.find((s) => s.code === "N"),
     { start: "18:00", creditedMinutes: 840 },

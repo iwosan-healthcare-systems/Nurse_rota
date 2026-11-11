@@ -66,14 +66,26 @@ function parseSwitch(row: LeaveRow) {
   const shiftA = parts[2] ?? "";
   const shiftB = parts[3] ?? "";
   let interWard = false;
+  let interFacility = false;
   let isDirect = false;
   let note = "";
   for (let i = 4; i < parts.length; i++) {
     if (parts[i] === "INTER_WARD") interWard = true;
+    else if (parts[i] === "INTER_FACILITY") interFacility = interWard = true;
     else if (parts[i] === "DIRECT") isDirect = true;
     else if (parts[i].startsWith("NOTE:")) note = parts.slice(i).join("|").slice(5);
   }
-  return { nurseBId, nurseBName, shiftA, shiftB, date: row.from_date, interWard, isDirect, note };
+  return {
+    nurseBId,
+    nurseBName,
+    shiftA,
+    shiftB,
+    date: row.from_date,
+    interWard,
+    interFacility,
+    isDirect,
+    note,
+  };
 }
 
 function isShiftSwitch(row: LeaveRow) {
@@ -560,6 +572,7 @@ function LeavePage() {
               id: string;
               shift: string;
               ward: string | null;
+              work_facility?: string | null;
               shift_definition_run_id?: string | null;
               scheduling_run_id?: string | null;
             }[]
@@ -571,6 +584,7 @@ function LeavePage() {
               id: string;
               shift: string;
               ward: string | null;
+              work_facility?: string | null;
               shift_definition_run_id?: string | null;
               scheduling_run_id?: string | null;
             }[]
@@ -580,6 +594,20 @@ function LeavePage() {
         ]);
         const assignA = arrA[0] ?? null;
         const assignB = arrB[0] ?? null;
+        // Between locations, a moved duty is worked at its source's location
+        // (null when that is the receiving nurse's own facility, or they are now off).
+        const homeOf = (nurseId: string | null | undefined) =>
+          nurses.find((n) => n.id === nurseId)?.facility ?? null;
+        const workedAt = (
+          receiverId: string | null | undefined,
+          source: { work_facility?: string | null } | null,
+          sourceNurseId: string | null | undefined,
+          shift: string,
+        ) => {
+          if (shift === "OFF" || shift === "LEAVE") return null;
+          const location = source?.work_facility ?? homeOf(sourceNurseId);
+          return location && location !== homeOf(receiverId) ? location : null;
+        };
 
         if (!assignA || !assignB) {
           return toast.error(
@@ -629,6 +657,9 @@ function LeavePage() {
             await api.patch(`/shift-assignments/${assignB.id}`, {
               shift: targetShift,
               ward: assignA.ward,
+              ...(sw.interFacility
+                ? { work_facility: workedAt(sw.nurseBId, assignA, l.nurse_id, targetShift) }
+                : {}),
             });
             qc.invalidateQueries({ queryKey: ["assignments"] });
           }
@@ -658,11 +689,16 @@ function LeavePage() {
           // actually working in the other's ward, not just adopting their shift
           // time while staying put. Same-ward switches leave ward untouched
           // (both sides already match, so it's a no-op either way).
-          const patchA: { shift: string; ward?: string | null } = { shift: assignB.shift };
-          const patchB: { shift: string; ward?: string | null } = { shift: assignA.shift };
+          type SwitchPatch = { shift: string; ward?: string | null; work_facility?: string | null };
+          const patchA: SwitchPatch = { shift: assignB.shift };
+          const patchB: SwitchPatch = { shift: assignA.shift };
           if (sw.interWard) {
             patchA.ward = assignB.ward;
             patchB.ward = assignA.ward;
+          }
+          if (sw.interFacility) {
+            patchA.work_facility = workedAt(l.nurse_id, assignB, sw.nurseBId, patchA.shift);
+            patchB.work_facility = workedAt(sw.nurseBId, assignA, l.nurse_id, patchB.shift);
           }
           // Idempotent: skip if already in the swapped state (retry-safe).
           const alreadySwapped =
@@ -677,7 +713,7 @@ function LeavePage() {
             qc.invalidateQueries({ queryKey: ["assignments"] });
           }
           logAudit(
-            `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}${sw.interWard ? " (inter-ward)" : ""}`,
+            `Applied shift switch on published rota: ${l.nurse_name} ↔ ${sw.nurseBName}${sw.interFacility ? " (between locations)" : sw.interWard ? " (inter-ward)" : ""}`,
             sw.date,
           );
         }
@@ -1516,7 +1552,7 @@ function SwitchTable({
                         <span className="inline-flex items-center gap-1">
                           {sw.interWard && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                              Inter-Ward
+                              {sw.interFacility ? "Other Location" : "Inter-Ward"}
                             </span>
                           )}
                           <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
@@ -2354,7 +2390,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     },
   });
 
-  const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward">("same-ward");
+  const [switchType, setSwitchType] = useState<"same-ward" | "inter-ward" | "inter-location">(
+    "same-ward",
+  );
+  // The other location for a switch between locations.
+  const [facilityB, setFacilityB] = useState("");
   const [exchangeMode, setExchangeMode] = useState<"leave" | "direct">("leave");
   const [facility, setFacility] = useState(lockedFacility ?? "");
   const [nurseAId, setNurseAId] = useState("");
@@ -2374,6 +2414,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
   );
   // Matrons (clinical role) never participate in shift switches.
   const switchableNurses = facilityNurses.filter((n) => !/matron/i.test(n.role ?? ""));
+  const otherLocation = switchType === "inter-location";
+  const facilityBKey = facilityB.trim().toLowerCase();
+  const facilityBNurses = otherLocation
+    ? nurses.filter((n) => (n.facility ?? "").trim().toLowerCase() === facilityBKey)
+    : [];
+  // Nurse B comes from the other location in a switch between locations.
+  const partnerPool = otherLocation
+    ? facilityBNurses.filter((n) => !/matron/i.test(n.role ?? ""))
+    : switchableNurses;
   const nurseA = nurses.find((n) => n.id === nurseAId);
   const nurseAWards = splitWards(nurseA?.ward);
   // Case-insensitive dedup: "ICU & CathLab" and "ICU & Cathlab" collapse to one entry.
@@ -2387,14 +2436,19 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       });
     return [...seen.values()].sort();
   })();
-  const wardBOptions = allFacilityWards.filter((w) => !nurseAWards.includes(w));
+  const wardBOptions = otherLocation
+    ? [...new Set(facilityBNurses.flatMap((n) => splitWards(n.ward)).map((w) => w.trim()))].sort()
+    : allFacilityWards.filter((w) => !nurseAWards.includes(w));
 
-  const facilityNurseIds = useMemo(() => facilityNurses.map((n) => n.id), [facilityNurses]);
+  const facilityNurseIds = useMemo(
+    () => [...facilityNurses, ...facilityBNurses].map((n) => n.id),
+    [facilityNurses, facilityBNurses],
+  );
 
   // Fetch all published shift assignments for facility nurses on the selected date.
   // Both modes (leave and direct) use this to populate Nurse B list and show shifts in dropdown.
   const { data: dateAssignments = [], isLoading: loadingAssignments } = useQuery({
-    queryKey: ["date-assignments", date, facility],
+    queryKey: ["date-assignments", date, facility, facilityB],
     enabled: !!date && facilityNurseIds.length > 0,
     queryFn: () =>
       api.get<
@@ -2444,25 +2498,27 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     const base = (n: (typeof switchableNurses)[number]) =>
       notNurseA(n) && sameRole(n) && notOnLeave(n) && passesDirectOffRule(n);
 
-    if (switchType === "inter-ward") {
-      if (!wardB) return [];
+    if (switchType !== "same-ward") {
+      // Facility-wide staff (no ward) switch with facility-wide staff of the same
+      // role at the other location, without choosing a ward.
+      const noWardA = nurseAWards.length === 0;
+      if (!wardB && !(otherLocation && noWardA)) return [];
+      if (otherLocation && noWardA) return partnerPool.filter((n) => base(n) && isNoWardNurse(n));
       if (exchangeMode === "leave") {
         // Leave cover: any nurse in Ward B can cover (no role restriction),
         // plus same-role no-ward nurses (e.g. other Coverage Nurses).
-        const wardBNurses = switchableNurses.filter(
+        const wardBNurses = partnerPool.filter(
           (n) => notNurseA(n) && notOnLeave(n) && splitWards(n.ward).includes(wardB),
         );
-        const sameRoleNoWard = switchableNurses.filter(
+        const sameRoleNoWard = partnerPool.filter(
           (n) => notNurseA(n) && notOnLeave(n) && sameRole(n) && isNoWardNurse(n),
         );
         const seen = new Set(wardBNurses.map((n) => n.id));
         return [...wardBNurses, ...sameRoleNoWard.filter((n) => !seen.has(n.id))];
       }
       // Direct switch: Nurse B must be same role as Nurse A (equivalent shift swap).
-      const wardNurses = switchableNurses.filter(
-        (n) => base(n) && splitWards(n.ward).includes(wardB),
-      );
-      const noWardSameRole = switchableNurses.filter((n) => base(n) && isNoWardNurse(n));
+      const wardNurses = partnerPool.filter((n) => base(n) && splitWards(n.ward).includes(wardB));
+      const noWardSameRole = partnerPool.filter((n) => base(n) && isNoWardNurse(n));
       const seen = new Set(wardNurses.map((n) => n.id));
       return [...wardNurses, ...noWardSameRole.filter((n) => !seen.has(n.id))];
     }
@@ -2484,6 +2540,8 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
     switchType,
     wardB,
     switchableNurses,
+    partnerPool,
+    otherLocation,
     nurseA,
     nurseAWards,
     assignmentMap,
@@ -2561,9 +2619,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
         !(currentB.shift_definition_run_id || currentB.scheduling_run_id)
       )
         return toast.error("Both duties must use configured schedules for this switch");
-      if (!currentA.ward || !currentB.ward)
-        return toast.error("Facility-wide configured switches are not supported yet");
-      if (shiftA !== "LEAVE" && switchType !== "inter-ward" && currentA.ward !== currentB.ward)
+      if (!currentA.ward !== !currentB.ward)
+        return toast.error("Both duties must be ward duties, or both facility-wide duties");
+      if (shiftA !== "LEAVE" && switchType === "same-ward" && currentA.ward !== currentB.ward)
         return toast.error("Choose an inter-ward switch for duties in different wards");
       if (shiftB === "LEAVE") return toast.error("Nurse B is on leave on this date");
       if (shiftA === "LEAVE" && !currentA.pre_leave_shift)
@@ -2620,7 +2678,8 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       const nurseB = nurses.find((n) => n.id === nurseBId);
       const effectiveShiftA = shiftA === "LEAVE" ? coverShift : shiftA;
       const flagParts: string[] = [];
-      if (switchType === "inter-ward") flagParts.push("INTER_WARD");
+      if (switchType !== "same-ward") flagParts.push("INTER_WARD");
+      if (otherLocation) flagParts.push("INTER_FACILITY");
       if (exchangeMode === "direct") flagParts.push("DIRECT");
       if (exchangeMode === "leave") flagParts.push("LEAVE_COVER");
       const flags = flagParts.length ? `|${flagParts.join("|")}` : "";
@@ -2694,9 +2753,9 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
 
         {/* Switch type */}
         <div>
-          <p className="text-sm font-medium mb-1.5">Ward scope</p>
-          <div className="flex gap-2">
-            {(["same-ward", "inter-ward"] as const).map((t) => (
+          <p className="text-sm font-medium mb-1.5">Switch scope</p>
+          <div className="flex flex-wrap gap-2">
+            {(["same-ward", "inter-ward", "inter-location"] as const).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -2704,6 +2763,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
                   setSwitchType(t);
                   setNurseBId("");
                   setWardB("");
+                  setFacilityB("");
                   setShiftB("");
                 }}
                 className={`h-9 px-4 rounded-md text-sm font-medium border transition-colors ${
@@ -2712,7 +2772,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
                     : "bg-card border-border hover:bg-muted text-muted-foreground"
                 }`}
               >
-                {t === "same-ward" ? "Same Ward" : "Inter Ward"}
+                {t === "same-ward"
+                  ? "Same Ward"
+                  : t === "inter-ward"
+                    ? "Inter Ward"
+                    : "Other Location"}
               </button>
             ))}
           </div>
@@ -2739,6 +2803,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
                 setNurseAId("");
                 setNurseBId("");
                 setWardB("");
+                setFacilityB("");
                 setShiftA("");
                 setShiftB("");
               }}
@@ -2856,8 +2921,37 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
           )}
         </div>
 
-        {/* Ward B selector — inter-ward only */}
-        {switchType === "inter-ward" && (
+        {/* Location B — switches between locations */}
+        {otherLocation && (
+          <div>
+            <label htmlFor="sw-facility-b" className="text-sm font-medium">
+              Location B <span className="text-destructive">*</span>
+            </label>
+            <select
+              id="sw-facility-b"
+              required
+              disabled={!nurseAId}
+              value={facilityB}
+              onChange={(e) => {
+                setFacilityB(e.target.value);
+                setWardB("");
+                setNurseBId("");
+                setShiftB("");
+              }}
+              className={inputCls}
+            >
+              <option value="">{nurseAId ? "Select location…" : "Select Nurse A first…"}</option>
+              {SWITCH_FACILITIES.filter((f) => f.trim().toLowerCase() !== facilityKey).map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Ward B selector — inter-ward, or a ward at the other location */}
+        {switchType !== "same-ward" && !(otherLocation && nurseAWards.length === 0) && (
           <div>
             <label htmlFor="sw-ward-b" className="text-sm font-medium">
               Ward B (destination) <span className="text-destructive">*</span>
@@ -2865,7 +2959,7 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             <select
               id="sw-ward-b"
               required
-              disabled={!nurseAId}
+              disabled={!nurseAId || (otherLocation && !facilityB)}
               value={wardB}
               onChange={(e) => {
                 setWardB(e.target.value);
@@ -2893,7 +2987,11 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             id="sw-nurse-b"
             required
             disabled={
-              loadingAssignments || (switchType === "inter-ward" ? !wardB : !nurseAId) || !date
+              loadingAssignments ||
+              !date ||
+              !nurseAId ||
+              (otherLocation && !facilityB) ||
+              (switchType !== "same-ward" && !wardB && !(otherLocation && nurseAWards.length === 0))
             }
             value={nurseBId}
             onChange={(e) => {
@@ -2906,13 +3004,15 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             <option value="">
               {loadingAssignments
                 ? "Loading available nurses…"
-                : switchType === "inter-ward"
-                  ? wardB
-                    ? "Select nurse…"
-                    : "Select Ward B first…"
-                  : nurseAId
-                    ? "Select nurse…"
-                    : "Select Nurse A first…"}
+                : otherLocation && !facilityB
+                  ? "Select Location B first…"
+                  : switchType !== "same-ward" &&
+                      !wardB &&
+                      !(otherLocation && nurseAWards.length === 0)
+                    ? "Select Ward B first…"
+                    : nurseAId
+                      ? "Select nurse…"
+                      : "Select Nurse A first…"}
             </option>
             {nurseBList.map((n) => {
               const shift = assignmentMap.get(n.id);
@@ -2930,8 +3030,8 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
             nurseBList.length === 0 &&
             (switchType === "same-ward" || wardB) && (
               <p className="mt-1 text-xs text-muted-foreground">
-                {switchType === "inter-ward"
-                  ? `No ${nurseA?.role ?? "matching"} nurses found in the selected ward.`
+                {switchType !== "same-ward"
+                  ? `No ${nurseA?.role ?? "matching"} nurses found in the selected ${otherLocation && nurseAWards.length === 0 ? "location" : "ward"}.`
                   : nurseAWards.length === 0
                     ? `No other ${nurseA?.role ?? "matching"} nurses found in this facility.`
                     : `No ${nurseA?.role ?? "matching"} nurses found in the same ward.`}
@@ -2979,7 +3079,10 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
               !nurseBId ||
               !date ||
               !reason.trim() ||
-              (switchType === "inter-ward" && !wardB) ||
+              (otherLocation && !facilityB) ||
+              (switchType !== "same-ward" &&
+                !wardB &&
+                !(otherLocation && nurseAWards.length === 0)) ||
               (shiftA === "LEAVE" && !coverShift) ||
               // Block if no published shift was found for either nurse on this date.
               // shiftA/shiftB = "" means the fetch returned nothing (not a real shift value).

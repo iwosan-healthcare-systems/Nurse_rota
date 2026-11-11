@@ -58,9 +58,19 @@ function zonedInstant(date, time, timezone) {
   return new Date(candidates[0]).toISOString();
 }
 
+// Earlier coverage rotas used NC and MWC, which are night and morning duties.
+// A pattern without them continues from those shifts as N and M.
+const DUTY_FAMILY = { NC: "N", MWC: "M" };
 function historyPhase(rows, cycle, startDate) {
+  const family = (code) =>
+    DUTY_FAMILY[code] && !cycle.includes(code) && cycle.includes(DUTY_FAMILY[code])
+      ? DUTY_FAMILY[code]
+      : code;
   const byDate = new Map(
-    rows.map((row) => [row.shift_date, row.shift === "LEAVE" ? row.pre_leave_shift : row.shift]),
+    rows.map((row) => [
+      row.shift_date,
+      family(row.shift === "LEAVE" ? row.pre_leave_shift : row.shift),
+    ]),
   );
   const tail = [];
   for (let back = 1; back <= cycle.length; back++) {
@@ -123,10 +133,12 @@ function generateConfiguredPreview({
     throw new PreviewError([
       { path: "staff", message: "Preview supports up to 1,000 active staff per facility" },
     ]);
+  // Retained (legacy) rules are checked against the defaults they came from.
   const baseline = seedConfiguration(
     facility,
     wards,
     scoped.map((n) => n.role),
+    { legacyCoverage: true },
   );
   const patterns = new Map(config.patterns.map((p) => [p.id, p]));
   const shifts = new Map(config.shifts.map((s) => [s.code, s]));
@@ -355,15 +367,17 @@ function generateConfiguredPreview({
     const coverage = special.filter(
       (n) => staff.get(n.id).roleDefinition.specialRule === "legacy_coverage_v1",
     );
-    if (coverage.length)
+    // Day coverage nurses rotate one Sat+Sun MWC per weekend; night coverage
+    // is ordinary N within the shift pattern, so there is no NC to check.
+    const dayCoverage = coverage.filter((n) => legacy.isCoverageNurseDayType(n.role));
+    if (dayCoverage.length)
       for (const date of dates) {
         const codes = [];
-        if (coverage.some((n) => staff.get(n.id).roleDefinition.allowedShifts.includes("NC")))
-          codes.push("NC");
         if ([0, 6].includes(new Date(`${date}T00:00:00Z`).getUTCDay())) codes.push("MWC");
         for (const code of codes) {
           const actual = assignments.filter(
-            (a) => a.date === date && a.shift === code && coverage.some((n) => n.id === a.nurseId),
+            (a) =>
+              a.date === date && a.shift === code && dayCoverage.some((n) => n.id === a.nurseId),
           ).length;
           if (actual !== 1)
             diagnostics.push({
@@ -385,6 +399,7 @@ function generateConfiguredPreview({
     startDate,
     endDate: dates.at(-1),
     previousAssignments,
+    leave,
   });
   if (previousAssignments.length)
     diagnostics.push({

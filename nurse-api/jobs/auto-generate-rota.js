@@ -12,6 +12,7 @@ const cron = require("node-cron");
 const pool = require("../db");
 const { forEachHospital } = require("../lib/tenant-context");
 const { persistRotaDraft } = require("../lib/persist-rota-draft");
+const { usesLagoonDefaults } = require("../lib/hospital-defaults");
 const { activeRoleGroups, roleGroupResolver } = require("../lib/role-groups");
 const { createSchedulingConfigurationService } = require("../lib/scheduling-configuration-service");
 const configuredScheduling = createSchedulingConfigurationService(pool);
@@ -211,6 +212,17 @@ async function generateUnit({
     console.error(
       `[auto-generate-rota] Configured generation blocked for ${facility}/${unitLabel}:`,
       error.message,
+    );
+    return;
+  }
+  // Without saved rules, only Lagoon uses the built-in generator. Other
+  // hospitals wait until the facility's scheduling rules are saved.
+  const {
+    rows: [hospital],
+  } = await pool.query("SELECT app_current_hospital() AS id");
+  if (!usesLagoonDefaults(hospital.id)) {
+    console.log(
+      `[auto-generate-rota] ${facility}/${unitLabel}: no saved scheduling rules; not generated`,
     );
     return;
   }

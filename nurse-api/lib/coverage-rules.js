@@ -96,6 +96,7 @@ function applyCoverageRules({
   startDate,
   endDate,
   previousAssignments,
+  leave = [],
 }) {
   const rules = config.coverageRules || [];
   if (!rules.length) return;
@@ -103,6 +104,9 @@ function applyCoverageRules({
     end = day(endDate);
   const cells = new Map(assignments.map((a) => [`${a.nurseId}:${a.date}`, a]));
   const prior = new Map(previousAssignments.map((a) => [`${a.nurse_id}:${a.shift_date}`, a.shift]));
+  const approved = leave.filter((l) => l.status === "Approved");
+  const onLeave = (id, d) =>
+    approved.some((l) => l.nurse_id === id && l.from_date <= date(d) && l.to_date >= date(d));
   const reservations = new Map();
   const reserve = (person, d, shift, rule) => {
     const key = `${person.id}:${date(d)}`;
@@ -131,12 +135,30 @@ function applyCoverageRules({
       Math.ceil((start - rule.blockDays + 1 - rule.restAfter - anchor) / rule.repeatDays),
     );
     const last = Math.floor((end + rule.restBefore - anchor) / rule.repeatDays);
+    // Turns each person has covered in this period, so turns are shared out
+    // evenly among whoever is available this month.
+    const turns = new Map(pool.map((n) => [n.id, 0]));
     for (let occurrence = first; occurrence <= last; occurrence++) {
       const blockStart = anchor + occurrence * rule.repeatDays;
-      const selected = Array.from(
-        { length: Math.min(pool.length, rule.staffPerBlock) },
-        (_, slot) => pool[mod(occurrence * rule.staffPerBlock + slot, pool.length)],
-      );
+      const blockDays = Array.from({ length: rule.blockDays }, (_, k) => blockStart + k);
+      // A block that began in the previous period keeps the staff it was
+      // published with.
+      const selected = pool
+        .filter((n) =>
+          blockDays.some((d) => d < start && prior.get(`${n.id}:${date(d)}`) === rule.shift),
+        )
+        .slice(0, rule.staffPerBlock);
+      // Then whoever is available (no approved leave on a duty day) and has
+      // covered the fewest turns this period; ties follow the rotation order,
+      // which continues from month to month.
+      const candidates = Array.from(
+        { length: pool.length },
+        (_, k) => pool[mod(occurrence * rule.staffPerBlock + k, pool.length)],
+      ).filter((n) => !selected.includes(n) && !blockDays.some((d) => onLeave(n.id, d)));
+      candidates.sort((a, b) => turns.get(a.id) - turns.get(b.id));
+      selected.push(...candidates.slice(0, rule.staffPerBlock - selected.length));
+      if (blockDays.some((d) => d >= start && d <= end))
+        for (const n of selected) turns.set(n.id, turns.get(n.id) + 1);
       for (const n of selected) {
         for (let d = blockStart - rule.restBefore; d < blockStart; d++) reserve(n, d, "OFF", rule);
         for (let d = blockStart; d < blockStart + rule.blockDays; d++)
@@ -168,7 +190,7 @@ function applyCoverageRules({
             date: date(d),
             shift: rule.shift,
             actual,
-            message: `${rule.name}: ${actual} available of ${rule.staffPerBlock} required on ${date(d)}. Rotation is fixed; leave does not automatically reassign the slot.`,
+            message: `${rule.name}: ${actual} available of ${rule.staffPerBlock} required on ${date(d)}. Everyone else in the rotation is on leave or already covering.`,
           });
       }
     }
@@ -212,7 +234,7 @@ function applyCoverageRules({
     code: "FIXED_COVERAGE_ROTATION",
     severity: "info",
     message:
-      "Coverage uses fixed staff-ID order from each rule’s first block date. Pool membership changes can change future allocation; approved leave stays in place and gaps require review. Base patterns continue by calendar position after coverage/rest.",
+      "Coverage turns are shared evenly among eligible staff available each month, in a rotation that continues from month to month. Anyone on approved leave is skipped. Pool membership changes can change future allocation. Base patterns continue by calendar position after coverage/rest.",
   });
 }
 module.exports = { validateCoverageRules, applyCoverageRules };

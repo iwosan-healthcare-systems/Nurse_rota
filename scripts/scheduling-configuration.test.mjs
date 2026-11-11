@@ -31,12 +31,72 @@ test("defaults preserve database minima and identify legacy ward/role exceptions
   assert.equal(c.wardPolicies[0].specialRule, "legacy_single_night_slot_v1");
   assert.equal(c.wardPolicies[0].naPatternId, "day_only");
   assert.equal(c.roles.find((r) => r.name === "Surgical Nurse - Day").patternId, "weekdays");
+  // The weekend rule needs day coverage staff in the facility.
+  assert.equal(c.coverageRules, undefined);
+  const withDay = seedConfiguration(facility, wards, ["Coverage Nurse - Day"]);
+  const day = withDay.roles.find((r) => r.name === "Coverage Nurse - Day");
+  const shift = c.roles.find((r) => r.name === "Coverage Nurse");
+  assert.equal(day.specialRule, "none");
+  assert.equal(day.patternId, "weekdays");
+  assert.equal(shift.specialRule, "none");
+  assert.deepEqual(c.patterns.find((p) => p.id === shift.patternId).steps, [
+    { shift: "M", days: 4 },
+    { shift: "OFF", days: 2 },
+    { shift: "N", days: 4 },
+    { shift: "OFF", days: 4 },
+  ]);
+  assert.deepEqual(withDay.coverageRules, [
+    {
+      id: "weekend_coverage",
+      name: "Weekend coverage",
+      shift: "MWC",
+      roleIds: [day.id],
+      anchorDate: "2026-01-03",
+      blockDays: 2,
+      repeatDays: 7,
+      staffPerBlock: 1,
+      restBefore: 1,
+      restAfter: 1,
+    },
+  ]);
+  assert.ok(!c.roles.some((r) => r.allowedShifts.includes("NC")));
   assert.equal(
-    c.roles.find((r) => r.name === "Coverage Nurse - Day").specialRule,
+    seedConfiguration(facility, wards, [], { legacyCoverage: true }).roles.find(
+      (r) => r.name === "Coverage Nurse - Day",
+    ).specialRule,
     "legacy_coverage_v1",
   );
   assert.equal(c.roles.find((r) => r.name === "Porter").scope, "facility");
   assert.ok(configurationWarnings(c).some((w) => w.code === "DRAFT_ONLY"));
+});
+
+test("a new hospital's defaults set a pattern for every role, without Lagoon's rules", () => {
+  const other = { ...facility, organization_id: "20000000-0000-4000-8000-000000000002" };
+  const c = seedConfiguration(other, [{ ...wards[0], name: "Oncology" }], ["Ward Clerk"]);
+  assert.deepEqual(validateConfiguration(c, wards), { valid: true, errors: [] });
+  assert.deepEqual(
+    c.roles.map((r) => r.name),
+    ["Nurse", "Nursing Assistant", "Matron", "Porter", "Ward Clerk"],
+  );
+  for (const r of c.roles) {
+    assert.equal(r.specialRule, "none");
+    assert.ok(
+      c.patterns.some((p) => p.id === r.patternId),
+      r.name,
+    );
+  }
+  assert.equal(c.roles.find((r) => r.name === "Ward Clerk").requiresReview, true);
+  assert.equal(c.roles.find((r) => r.name === "Nurse").requiresReview, false);
+  assert.deepEqual(
+    c.shifts.map((s) => s.code),
+    ["M", "N"],
+  );
+  assert.equal(c.coverageRules, undefined);
+  assert.equal(c.wardPolicies[0].specialRule, "none");
+  assert.equal(c.wardPolicies[0].fixedWeeklyPatternId, null);
+  // Lagoon is the hospital of facilities without one (before tenancy).
+  const lagoon = { ...facility, organization_id: "00000000-0000-4000-8000-000000000001" };
+  assert.deepEqual(seedConfiguration(lagoon, wards), seedConfiguration(facility, wards));
 });
 
 test("unknown staff roles are retained for review and names map to stable IDs", () => {

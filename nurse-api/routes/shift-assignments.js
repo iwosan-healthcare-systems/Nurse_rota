@@ -212,6 +212,11 @@ router.get(
     if (req.query.ward_null === "true") {
       conditions.push("ward IS NULL");
     }
+    // Duties switched in from other locations (the host location's rota).
+    if (req.query.work_facility) {
+      conditions.push(`work_facility = $${params.length + 1}`);
+      params.push(req.query.work_facility);
+    }
 
     const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
     // include_period adds the rota period each shift falls in, so clients can
@@ -347,6 +352,7 @@ async function upsertAssignments(rows, actor = { id: null, name: null }) {
         .sort()
         .at(-1),
       rows,
+      { generation: true },
     );
     for (const row of rows) {
       const written = await client.query(
@@ -467,9 +473,16 @@ router.patch(
   "/:id",
   requireCapability("manage_shift_assignments", ["admin", "cno", "head_nurse", "hr_admin"]),
   wrap(async (req, res) => {
-    const allowed = ["shift", "ward", "status", "shift_date"];
+    const allowed = ["shift", "ward", "status", "shift_date", "work_facility"];
     const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
     if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
+    // Location a duty is worked at when it differs from the nurse's own (switches).
+    if (
+      fields.includes("work_facility") &&
+      req.body.work_facility !== null &&
+      (typeof req.body.work_facility !== "string" || !req.body.work_facility.trim())
+    )
+      return res.status(400).json({ error: "Use a facility name or null for work_facility" });
 
     const { rows: existingRows } = await pool.query(
       "SELECT *,shift_date::text FROM shift_assignments WHERE id = $1",

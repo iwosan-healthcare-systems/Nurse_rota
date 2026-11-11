@@ -5,6 +5,7 @@ const { validDate, addDays } = require("./configured-scheduler");
 const { persistRotaDraft, DraftConflict } = require("./persist-rota-draft");
 const legacy = require("./auto-schedule.generated");
 const { snapshotRoleGroups, legacyRoleGroup } = require("./role-groups");
+const { usesLagoonDefaults } = require("./hospital-defaults");
 // Shift codes, times, credits and role groups are consumed from saved definitions
 // throughout attendance, leave, approvals and reporting. Dates, rota periods and
 // legacy fallbacks remain anchored to Africa/Lagos, so other timezones stay blocked.
@@ -292,11 +293,22 @@ function createPolicyService({
   async function rotaRules(facilityName, date) {
     const {
       rows: [facility],
-    } = await pool.query("SELECT id FROM scheduling_facilities WHERE legacy_facility=$1", [
-      facilityName,
-    ]);
-    const policy = facility ? await policyAt(pool, facility.id, date) : null;
-    return { configured: !!policy, paused: policy?.state === "paused" };
+    } = await pool.query(
+      `SELECT f.id, f.organization_id, h.id AS current_hospital
+       FROM (SELECT app_current_hospital() AS id) h
+       LEFT JOIN scheduling_facilities f ON f.legacy_facility = $1`,
+      [facilityName],
+    );
+    const policy = facility.id ? await policyAt(pool, facility.id, date) : null;
+    // Only Lagoon falls back to the built-in generator; other hospitals must
+    // generate from saved rules (the server explains when none are saved).
+    return {
+      configured: !!policy,
+      paused: policy?.state === "paused",
+      builtInAllowed:
+        usesLagoonDefaults(facility.current_hospital) &&
+        usesLagoonDefaults(facility.organization_id),
+    };
   }
   // Rota page generation with the saved rules: a ward, a facility-wide group, or
   // staff joining an already generated period from their first date.
@@ -323,7 +335,11 @@ function createPolicyService({
           "SELECT * FROM scheduling_facilities WHERE legacy_facility=$1 FOR UPDATE",
           [body.facility],
         );
-        if (!facility) fail(404, "Facility not found");
+        if (!facility)
+          fail(
+            409,
+            "Save this facility's scheduling rules on the Scheduling page before generating its rota.",
+          );
         let unit = "all";
         if (body.ward !== undefined) {
           const {
@@ -354,7 +370,13 @@ function createPolicyService({
           nurseIds: body.nurseIds,
           fromDate,
         });
-        if (!result) fail(409, "No saved scheduling rules apply to this period");
+        if (!result)
+          fail(
+            409,
+            usesLagoonDefaults(facility.organization_id)
+              ? "No saved scheduling rules apply to this period"
+              : "Save this facility's scheduling rules on the Scheduling page before generating its rota.",
+          );
         if (result.skipped) fail(409, result.reason);
         return result;
       },

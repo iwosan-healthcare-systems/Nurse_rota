@@ -42,13 +42,15 @@ async function swapConfiguredAssignments(pool, expected, actor, authorize, appro
     if (!(await authorize(rows))) fail(403, "No active edit-access grant for both assignments");
     const [a, b] = rows;
     const parts = request?.reason?.split("|") ?? [];
-    const interWard = parts.includes("INTER_WARD");
+    const interFacility = parts.includes("INTER_FACILITY");
+    const interWard = interFacility || parts.includes("INTER_WARD");
     const leaveCover = parts.includes("LEAVE_COVER");
     // Nurse A is the request's subject; Nurse B covers or exchanges with them.
     const first = request ? rows.find((row) => row.nurse_id === request.nurse_id) : a;
     const second = request ? rows.find((row) => row.nurse_id === parts[1]) : b;
-    if (request && (!a.ward || !b.ward))
-      fail(409, "Facility-wide configured switches are not supported yet");
+    // Ward duties switch with ward duties; facility-wide staff with each other.
+    if (request && !a.ward !== !b.ward)
+      fail(409, "Both duties must be ward duties, or both facility-wide duties");
     if (request) {
       if (
         parts[0] !== "SHIFT_SWITCH" ||
@@ -66,7 +68,7 @@ async function swapConfiguredAssignments(pool, expected, actor, authorize, appro
       a.nurse_id === b.nurse_id ||
       a.shift_date !== b.shift_date ||
       (a.ward !== b.ward && !interWard && !leaveCover) ||
-      a.facility !== b.facility
+      (a.facility !== b.facility && !interFacility)
     )
       fail(409, "Swap requires different nurses in the same ward, facility and date");
     for (const row of rows) {
@@ -114,6 +116,14 @@ async function swapConfiguredAssignments(pool, expected, actor, authorize, appro
           [first, second.shift, interWard ? second.ward : first.ward, second],
           [second, first.shift, interWard ? first.ward : second.ward, first],
         ];
+    // Between locations, each moved duty is worked at its source's location
+    // (NULL when that is the nurse's own facility, or the nurse is now off).
+    const workedAt = (row, source, shift) => {
+      if (!interFacility) return row.work_facility ?? null;
+      if (shift === "OFF" || shift === "LEAVE") return null;
+      const location = source.work_facility ?? source.facility;
+      return location === row.facility ? null : location;
+    };
     const proposedRows = changes.map(([row, shift, ward]) => ({ ...row, shift, ward }));
     const original = await withAssignmentShiftDefinitions(
       db,
@@ -137,11 +147,11 @@ async function swapConfiguredAssignments(pool, expected, actor, authorize, appro
       proposed.some((r, i) => identity(r.scheduled_shift) !== identity(original[i].scheduled_shift))
     )
       fail(409, "The saved shift definitions differ; edit these assignments individually");
-    for (const [row, shift, ward] of changes)
+    for (const [row, shift, ward, source] of changes)
       await db.query(
         `UPDATE shift_assignments
-      SET shift=$2,ward=$5,updated_by=$3,updated_by_name=$4,updated_at=NOW() WHERE id=$1`,
-        [row.id, shift, actor.userId, actor.name, ward],
+      SET shift=$2,ward=$5,work_facility=$6,updated_by=$3,updated_by_name=$4,updated_at=NOW() WHERE id=$1`,
+        [row.id, shift, actor.userId, actor.name, ward, workedAt(row, source, shift)],
       );
     // Check the proposed duties against the persisted change and neighboring days
     // (role choices, rest and published ward staffing) before anything commits.

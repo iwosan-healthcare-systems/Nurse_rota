@@ -549,6 +549,44 @@ test("hospital row-level security isolates tenant data", async (t) => {
       assert.equal(lagoonSees.rowCount, 0);
     });
 
+    await t.test(
+      "only Lagoon generates without saved rules; new hospitals get their own defaults",
+      async () => {
+        const { guardLegacyGeneration } = require("./lib/legacy-generation-guard");
+        const { seedConfiguration } = require("./lib/scheduling-configuration");
+        const generate = (scope) =>
+          scope(async () => {
+            const { rows } = await app.query("SELECT id FROM nurses ORDER BY name LIMIT 1");
+            const client = await app.connect();
+            try {
+              await client.query("BEGIN");
+              await guardLegacyGeneration(client, [rows[0].id], "2044-01-31", null, {
+                generation: true,
+              });
+              // Individual cell edits are never refused for this reason.
+              await guardLegacyGeneration(client, [rows[0].id], "2044-01-31");
+            } finally {
+              await client.query("ROLLBACK");
+              client.release();
+            }
+          });
+        await generate(inLagoon);
+        await assert.rejects(generate(inOther), /Save this facility's scheduling rules/);
+        const facility = (organization_id) => ({
+          organization_id,
+          legacy_facility: "Annex",
+          timezone: "Africa/Lagos",
+        });
+        const roles = ["Coverage Nurse", "Coverage Nurse - Day", "Nurse Intern"];
+        const otherSeed = seedConfiguration(facility(other), [], roles);
+        assert.ok(otherSeed.roles.every((r) => r.specialRule === "none"));
+        assert.ok(!otherSeed.patterns.some((p) => p.id === "coverage_shift"));
+        const lagoonSeed = seedConfiguration(facility(LAGOON), [], roles);
+        assert.ok(lagoonSeed.patterns.some((p) => p.id === "coverage_shift"));
+        assert.equal(lagoonSeed.coverageRules[0].id, "weekend_coverage");
+      },
+    );
+
     await t.test("background tasks run once per hospital in its context", async () => {
       const seen = [];
       await tenant.forEachHospital(app, async (hospital) => {

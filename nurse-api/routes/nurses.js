@@ -4,6 +4,7 @@ const { requireCapability } = require("../middleware/capability");
 const { resolveUnitNurseIds, roleGroupOf } = require("../lib/force-submit-rota");
 const { getUnitPeriod } = require("../lib/rota-period-dates");
 const { sendMail, portalUrl } = require("../lib/mailer");
+const { removeFromRota, returnToRota } = require("../lib/remove-from-rota");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const ROLE_GROUP_LABELS = {
@@ -92,8 +93,16 @@ router.get(
     const params = [];
     const conditions = [];
 
-    // Exclude deactivated nurses unless the caller explicitly requests them
-    if (req.query.include_inactive !== "true") {
+    // Exclude deactivated nurses unless the caller explicitly requests them.
+    // left_since=YYYY-MM-DD lists only staff removed from the rota whose last
+    // working day is on or after that date (the Rota page shows their worked days).
+    const leftSince = req.query.left_since;
+    if (typeof leftSince === "string" && /^\d{4}-\d{2}-\d{2}$/.test(leftSince)) {
+      conditions.push(`is_active = false AND left_on >= $${params.length + 1}`);
+      params.push(leftSince);
+    } else if (req.query.inactive_only === "true") {
+      conditions.push("is_active = false");
+    } else if (req.query.include_inactive !== "true") {
       conditions.push("is_active = true");
     }
 
@@ -280,6 +289,59 @@ router.patch(
     }
 
     res.json(nurse);
+  }),
+);
+
+// Remove a staff member from the rota after their last working day: clears
+// their later shifts, expires pending requests and leaves them out of new rotas.
+router.post(
+  "/:id/remove-from-rota",
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
+  wrap(async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await removeFromRota(client, {
+        nurseId: req.params.id,
+        lastDay: req.body?.last_day,
+        deactivateLogin: req.body?.deactivate_login === true,
+        actor: { id: req.user?.userId ?? null, name: req.user?.full_name ?? null },
+      });
+      await client.query("COMMIT");
+      res.json(result);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "REMOVAL_INVALID")
+        return res.status(error.status).json({ error: error.message });
+      throw error;
+    } finally {
+      client.release();
+    }
+  }),
+);
+
+router.post(
+  "/:id/return-to-rota",
+  requireCapability("manage_staff", ["admin", "hr_admin"]),
+  wrap(async (req, res) => {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const result = await returnToRota(client, {
+        nurseId: req.params.id,
+        reactivateLogin: req.body?.reactivate_login === true,
+        actor: { id: req.user?.userId ?? null, name: req.user?.full_name ?? null },
+      });
+      await client.query("COMMIT");
+      res.json(result);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "REMOVAL_INVALID")
+        return res.status(error.status).json({ error: error.message });
+      throw error;
+    } finally {
+      client.release();
+    }
   }),
 );
 

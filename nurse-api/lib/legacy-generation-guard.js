@@ -1,8 +1,18 @@
+const { usesLagoonDefaults } = require("./hospital-defaults");
+
 // Called inside legacy bulk generation transactions, not individual cell edits.
-async function guardLegacyGeneration(db, nurseIds, endDate, cells = null) {
+// `generation`: the cells come from the built-in generator, which only Lagoon
+// uses; other hospitals generate from the rules saved for each facility.
+async function guardLegacyGeneration(
+  db,
+  nurseIds,
+  endDate,
+  cells = null,
+  { generation = false } = {},
+) {
   if (!nurseIds.length || !endDate) return;
   const { rows: facilities } = await db.query(
-    `SELECT f.id FROM scheduling_facilities f
+    `SELECT f.id, f.organization_id FROM scheduling_facilities f
      WHERE EXISTS (SELECT 1 FROM nurses n WHERE n.facility=f.legacy_facility AND n.id=ANY($1::uuid[]))
      ORDER BY f.id FOR UPDATE`,
     [nurseIds],
@@ -17,7 +27,16 @@ async function guardLegacyGeneration(db, nurseIds, endDate, cells = null) {
     "UPDATE scheduling_facilities SET policy_revision=policy_revision WHERE id=ANY($1::uuid[])",
     [facilities.map((f) => f.id)],
   );
-  if (policy.rows.length) {
+  let builtInRefused = false;
+  if (generation && !policy.rows.length) {
+    const {
+      rows: [current],
+    } = await db.query("SELECT app_current_hospital() AS id");
+    builtInRefused =
+      !usesLagoonDefaults(current.id) ||
+      facilities.some((f) => !usesLagoonDefaults(f.organization_id));
+  }
+  if (policy.rows.length || builtInRefused) {
     // The legacy upsert also carries status-only approval transitions. Preserve
     // those when every existing cell's scheduling values are unchanged.
     if (cells) {
@@ -40,7 +59,9 @@ async function guardLegacyGeneration(db, nurseIds, endDate, cells = null) {
         return;
     }
     const error = new Error(
-      "This period uses configured scheduling. Open Scheduling to generate with the active configuration; individual shift edits remain available.",
+      builtInRefused
+        ? "Save this facility's scheduling rules on the Scheduling page before generating its rota."
+        : "This period uses configured scheduling. Open Scheduling to generate with the active configuration; individual shift edits remain available.",
     );
     error.code = "CONFIGURED_GENERATION_REQUIRED";
     throw error;

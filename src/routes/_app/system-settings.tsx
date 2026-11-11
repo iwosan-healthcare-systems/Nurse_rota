@@ -173,7 +173,7 @@ export const Route = createFileRoute("/_app/system-settings")({
 // tag-assignable to any role the way ordinary pages are).
 function SystemSettingsPage() {
   const navigate = useNavigate({ from: Route.fullPath });
-  const { isAdmin, loading } = useAuth();
+  const { isAdmin, isSuperAdmin, loading } = useAuth();
   const { tab: tabParam } = Route.useSearch();
   const [tab, setTabState] = useState<SystemSettingsTab>(tabParam ?? "gps");
   function setTab(next: SystemSettingsTab) {
@@ -261,13 +261,15 @@ function SystemSettingsPage() {
     if (!loading && !isAdmin) navigate({ to: "/" });
   }, [loading, isAdmin, navigate]);
 
+  // Backups cover the whole database (every hospital), so only super admins see them.
   useEffect(() => {
+    if (!isSuperAdmin) return;
     api
       .get<BackupLogRow[]>("/backup-log")
       .then(setBackupLog)
       .catch(() => {})
       .finally(() => setBackupLogLoading(false));
-  }, []);
+  }, [isSuperAdmin]);
 
   useEffect(() => {
     api
@@ -684,7 +686,7 @@ function SystemSettingsPage() {
           <TabsTrigger value="rota-deadlines">Rota Deadlines</TabsTrigger>
           <TabsTrigger value="leave-session">Leave &amp; Session Rules</TabsTrigger>
           <TabsTrigger value="shift-reminders">Shift Reminders</TabsTrigger>
-          <TabsTrigger value="backups">Backups</TabsTrigger>
+          {isSuperAdmin && <TabsTrigger value="backups">Backups</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="gps">
@@ -1537,66 +1539,68 @@ function SystemSettingsPage() {
           </section>
         </TabsContent>
 
-        <TabsContent value="backups">
-          <section className="rounded-xl border bg-card overflow-hidden mt-4">
-            <div className="px-5 py-4 border-b">
-              <h2 className="text-sm font-semibold">Database Backups</h2>
-              <p className="text-xs text-muted-foreground mt-0.5">
-                Status reported by the daily pg_dump cron on NRota-DB (runs at 9am UTC, rolling
-                3-day retention). This page only reads what it last reported — it can't trigger a
-                backup itself.
-              </p>
-            </div>
-            {backupLogLoading ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">Loading…</p>
-            ) : backupLog.length === 0 ? (
-              <p className="px-5 py-6 text-sm text-muted-foreground">
-                No backup activity recorded yet.
-              </p>
-            ) : (
-              <div className="divide-y">
-                {backupLog.map((row) => {
-                  const ageHours = (Date.now() - new Date(row.created_at).getTime()) / 3600000;
-                  const isStale = ageHours > 30; // 9am daily run + margin
-                  const failed = row.status !== "success";
-                  return (
-                    <div key={row.database} className="px-5 py-4 flex items-center gap-4">
-                      <span
-                        className={cn(
-                          "h-2 w-2 rounded-full shrink-0",
-                          failed ? "bg-destructive" : isStale ? "bg-amber-500" : "bg-emerald-500",
-                        )}
-                      />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{row.database}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          {failed
-                            ? `Last attempt failed${row.error ? ` — ${row.error}` : ""}`
-                            : isStale
-                              ? "Overdue — expected a fresher backup by now"
-                              : row.filename}
-                        </p>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <p className="text-sm font-semibold tabular-nums">
-                          {new Date(row.created_at).toLocaleString("en-GB", {
-                            dateStyle: "medium",
-                            timeStyle: "short",
-                          })}
-                        </p>
-                        {row.size_bytes != null && (
-                          <p className="text-xs text-muted-foreground tabular-nums">
-                            {formatBytes(row.size_bytes)}
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+        {isSuperAdmin && (
+          <TabsContent value="backups">
+            <section className="rounded-xl border bg-card overflow-hidden mt-4">
+              <div className="px-5 py-4 border-b">
+                <h2 className="text-sm font-semibold">Database Backups</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Status reported by the daily pg_dump cron on NRota-DB (runs at 9am UTC, rolling
+                  3-day retention). This page only reads what it last reported — it can't trigger a
+                  backup itself.
+                </p>
               </div>
-            )}
-          </section>
-        </TabsContent>
+              {backupLogLoading ? (
+                <p className="px-5 py-6 text-sm text-muted-foreground">Loading…</p>
+              ) : backupLog.length === 0 ? (
+                <p className="px-5 py-6 text-sm text-muted-foreground">
+                  No backup activity recorded yet.
+                </p>
+              ) : (
+                <div className="divide-y">
+                  {backupLog.map((row) => {
+                    const ageHours = (Date.now() - new Date(row.created_at).getTime()) / 3600000;
+                    const isStale = ageHours > 30; // 9am daily run + margin
+                    const failed = row.status !== "success";
+                    return (
+                      <div key={row.database} className="px-5 py-4 flex items-center gap-4">
+                        <span
+                          className={cn(
+                            "h-2 w-2 rounded-full shrink-0",
+                            failed ? "bg-destructive" : isStale ? "bg-amber-500" : "bg-emerald-500",
+                          )}
+                        />
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{row.database}</p>
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {failed
+                              ? `Last attempt failed${row.error ? ` — ${row.error}` : ""}`
+                              : isStale
+                                ? "Overdue — expected a fresher backup by now"
+                                : row.filename}
+                          </p>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <p className="text-sm font-semibold tabular-nums">
+                            {new Date(row.created_at).toLocaleString("en-GB", {
+                              dateStyle: "medium",
+                              timeStyle: "short",
+                            })}
+                          </p>
+                          {row.size_bytes != null && (
+                            <p className="text-xs text-muted-foreground tabular-nums">
+                              {formatBytes(row.size_bytes)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );

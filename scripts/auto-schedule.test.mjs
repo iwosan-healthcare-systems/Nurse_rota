@@ -208,8 +208,8 @@ for (const [runtime, engine] of [
     }
     assert.deepEqual(shifts(result).slice(4, 8), ["OFF", "MWC", "MWC", "OFF"]);
   });
-  test(`${runtime}: coverage pool emits NC and honours approved absence`, () => {
-    const nurses = Array.from({ length: 8 }, (_, i) => nurse(`c${i}`, "Coverage Nurse", null));
+  test(`${runtime}: shift coverage nurses work 4 M, 2 OFF, 4 N, 4 OFF and never NC`, () => {
+    const nurses = Array.from({ length: 4 }, (_, i) => nurse(`c${i}`, "Coverage Nurse", null));
     const result = run({
       nurses,
       leave: [
@@ -222,9 +222,133 @@ for (const [runtime, engine] of [
         },
       ],
     });
-    assert.ok(result.assignments.some((a) => a.shift === "NC"));
+    assert.ok(!result.assignments.some((a) => ["NC", "MWC"].includes(a.shift)));
     assert.ok(shifts(result, "c0").every((s) => s === "LEAVE"));
-    assert.equal(result.assignments.length, 8 * 28);
+    assert.equal(result.assignments.length, 4 * 28);
+    for (const id of ["c0", "c1", "c2", "c3"]) {
+      const planned = result.assignments
+        .filter((a) => a.nurse_id === id)
+        .map((a) => a.pre_leave_shift ?? a.shift);
+      const start = engine.COVERAGE_SHIFT_CYCLE.findIndex((_, p) =>
+        planned.every((s, d) => s === engine.COVERAGE_SHIFT_CYCLE[(p + d) % 14]),
+      );
+      assert.ok(start >= 0, `${id} follows the 14-day pattern: ${planned.join(" ")}`);
+    }
+  });
+  test(`${runtime}: shift coverage continues from the previous period's last shifts`, () => {
+    const prior = (shifts) =>
+      shifts.map((shift, i) => ({
+        nurse_id: "c0",
+        shift_date: `2026-09-${String(16 + i).padStart(2, "0")}`,
+        shift,
+      }));
+    const first = (previousAssignments) =>
+      shifts(
+        run({ nurses: [nurse("c0", "Coverage Nurse", null)], previousAssignments }),
+        "c0",
+      ).slice(0, 8);
+    // Old NC nights count as nights: finish the 4 days off, then mornings.
+    assert.deepEqual(first(prior(["OFF", "NC", "NC", "NC", "NC"])), [
+      "OFF",
+      "OFF",
+      "OFF",
+      "OFF",
+      "M",
+      "M",
+      "M",
+      "M",
+    ]);
+    assert.deepEqual(first(prior(["OFF", "OFF", "M", "M", "M"])), [
+      "M",
+      "OFF",
+      "OFF",
+      "N",
+      "N",
+      "N",
+      "N",
+      "OFF",
+    ]);
+    assert.deepEqual(first(prior(["N", "N", "N", "N", "OFF"])), [
+      "OFF",
+      "OFF",
+      "OFF",
+      "M",
+      "M",
+      "M",
+      "M",
+      "OFF",
+    ]);
+  });
+  test(`${runtime}: one day coverage nurse covers each weekend, off the Friday before and Monday after`, () => {
+    const nurses = [
+      nurse("d0", "Coverage Nurse - Day", null),
+      nurse("d1", "Coverage Nurse - Day", null),
+      nurse("d2", "Coverage Nurse - Day", null),
+      nurse("c0", "Coverage Nurse", null),
+    ];
+    const result = run({ nurses });
+    const cell = (id, d) => result.assignments.find((a) => a.nurse_id === id && a.shift_date === d);
+    const dates = [...new Set(result.assignments.map((a) => a.shift_date))].sort();
+    const covering = new Set();
+    for (const date of dates) {
+      const dow = new Date(`${date}T12:00:00`).getDay();
+      const mwc = result.assignments.filter((a) => a.shift_date === date && a.shift === "MWC");
+      if (dow !== 0 && dow !== 6) {
+        assert.equal(mwc.length, 0, date);
+        continue;
+      }
+      assert.equal(mwc.length, 1, date);
+      assert.notEqual(mwc[0].nurse_id, "c0", "Shift coverage nurses do not take MWC");
+      covering.add(mwc[0].nurse_id);
+      if (dow === 6) {
+        const at = dates.indexOf(date);
+        if (at >= 1) assert.equal(cell(mwc[0].nurse_id, dates[at - 1]).shift, "OFF");
+        assert.equal(cell(mwc[0].nurse_id, dates[at + 1]).shift, "MWC");
+        if (dates[at + 2]) assert.equal(cell(mwc[0].nurse_id, dates[at + 2]).shift, "OFF");
+        for (let k = 3; k <= 6 && dates[at + k]; k++)
+          assert.equal(cell(mwc[0].nurse_id, dates[at + k]).shift, "M");
+      }
+    }
+    assert.equal(covering.size, 3, "The weekend rotates through every day coverage nurse");
+    for (const id of ["d0", "d1", "d2"]) {
+      const worked = shifts(result, id).filter((s) => s === "M" || s === "MWC").length;
+      assert.ok(worked >= 19 && worked <= 21, `${id} works about 5 days a week (${worked})`);
+    }
+  });
+  test(`${runtime}: weekend cover is shared evenly in the month when someone is on leave`, () => {
+    const nurses = ["d0", "d1", "d2", "d3"].map((id) => nurse(id, "Coverage Nurse - Day", null));
+    const result = run({
+      nurses,
+      leave: ["d0", "d1"].map((id) => ({
+        nurse_id: id,
+        from_date: "2026-09-26",
+        to_date: "2026-09-27",
+        status: "Approved",
+        type: "Annual",
+      })),
+    });
+    const weekends = {};
+    for (const a of result.assignments)
+      if (a.shift === "MWC" && new Date(`${a.shift_date}T12:00:00`).getDay() === 6)
+        weekends[a.nurse_id] = (weekends[a.nurse_id] ?? 0) + 1;
+    // Four weekends, four nurses: everyone covers once, nobody twice.
+    assert.deepEqual(Object.values(weekends).sort(), [1, 1, 1, 1]);
+  });
+  test(`${runtime}: a weekend covered before the period still gives its Monday off`, () => {
+    const result = run({
+      nurses: [
+        nurse("d0", "Coverage Nurse - Day", null),
+        nurse("d1", "Coverage Nurse - Day", null),
+      ],
+      previousAssignments: [
+        { nurse_id: "d1", shift_date: "2026-09-19", shift: "MWC" },
+        { nurse_id: "d1", shift_date: "2026-09-20", shift: "MWC" },
+        { nurse_id: "d0", shift_date: "2026-09-19", shift: "OFF" },
+        { nurse_id: "d0", shift_date: "2026-09-20", shift: "OFF" },
+      ],
+    });
+    assert.equal(shifts(result, "d1")[0], "OFF", "Monday 21 Sep after covering the weekend");
+    assert.equal(shifts(result, "d0")[0], "M");
   });
 }
 

@@ -18,6 +18,8 @@ import {
   type AttendanceDefinition,
 } from "@/lib/attendance-report";
 import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
+import { printRowsAoa, printRowsHtml } from "@/lib/rota-teams";
+import { ASSESSMENT_EXPORT_WIDTHS, assessmentExportColumns } from "@/lib/ward-assessment";
 import { rememberRotaPeriod, rotaPeriodEndFor } from "@/lib/rota-window";
 import { useState, useMemo, useEffect } from "react";
 import {
@@ -197,7 +199,7 @@ type LocumRequestFull = {
   accepted_by_nurse_name: string | null;
   accepted_at: string | null;
   created_at: string;
-};
+} & Parameters<typeof assessmentExportColumns>[0];
 type PeriodHours = {
   nurse_id: string;
   period_start: string;
@@ -288,6 +290,7 @@ function parseSwitchReason(reason: string | null): {
   shiftA: string;
   shiftB: string;
   interWard: boolean;
+  interFacility: boolean;
   note: string;
 } | null {
   if (!reason?.startsWith(SWITCH_PREFIX)) return null;
@@ -296,12 +299,14 @@ function parseSwitchReason(reason: string | null): {
   const shiftA = parts[2] ?? "";
   const shiftB = parts[3] ?? "";
   let interWard = false;
+  let interFacility = false;
   let note = "";
   for (let i = 4; i < parts.length; i++) {
     if (parts[i] === "INTER_WARD") interWard = true;
+    else if (parts[i] === "INTER_FACILITY") interFacility = interWard = true;
     else if (parts[i].startsWith("NOTE:")) note = parts.slice(i).join("|").slice(5);
   }
-  return { nurseBName, shiftA, shiftB, interWard, note };
+  return { nurseBName, shiftA, shiftB, interWard, interFacility, note };
 }
 
 function fmtDate(d: string) {
@@ -1239,6 +1244,7 @@ function ReportsContent() {
         Ward: r.ward,
         "Nurses Needed": r.nurses_needed,
         "Role Needed": r.role_needed ?? "",
+        ...assessmentExportColumns(r),
         Status: statusLabel[r.status] ?? r.status,
         "Requested By": r.requested_by_name,
         "Reviewed By": r.reviewed_by_name ?? "",
@@ -1248,12 +1254,22 @@ function ReportsContent() {
         "Requested At": new Date(r.created_at).toLocaleString("en-GB"),
       }));
       const wb = xlsWorkbook();
-      xlsAddJsonSheet(
-        wb,
-        rows,
-        "Locum Requests",
-        [12, 10, 10, 16, 12, 16, 20, 20, 20, 26, 20, 20, 20],
-      );
+      xlsAddJsonSheet(wb, rows, "Locum Requests", [
+        12,
+        10,
+        10,
+        16,
+        12,
+        16,
+        ...ASSESSMENT_EXPORT_WIDTHS,
+        20,
+        20,
+        20,
+        26,
+        20,
+        20,
+        20,
+      ]);
       await xlsDownload(wb, `locum-requests-${todayYmd()}.xlsx`);
       toast.success("Exported");
     } catch {
@@ -1492,6 +1508,11 @@ ${staffToPrint
         : null;
     if (coverage) definitions.html += coverage.html;
     const assignMap = definitions.cells;
+    // Raw cells for on-duty totals (day/night comes from the saved shift times).
+    const rawCells = new Map(
+      allAssignments.map((a) => [`${a.nurse_id}|${a.shift_date.slice(0, 10)}`, a]),
+    );
+    const cellOf = (id: string, date: string) => rawCells.get(`${id}|${date}`);
     const activeIds = new Set(allAssignments.map((a) => a.nurse_id));
     const activeNurses = nurses.filter((n) => activeIds.has(n.id));
 
@@ -1519,14 +1540,15 @@ ${staffToPrint
       }
     }
 
-    return { activeNurses, assignMap, violations, definitions, staffing, coverage };
+    return { activeNurses, assignMap, violations, definitions, staffing, coverage, cellOf };
   }
 
   async function downloadSchedulePdf(win: ArchiveWindow) {
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-pdf");
     try {
-      const { activeNurses, assignMap, violations, definitions } = await fetchScheduleData(win);
+      const { activeNurses, assignMap, violations, definitions, cellOf } =
+        await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward
         ? ` — ${win.ward}`
@@ -1549,17 +1571,15 @@ ${staffToPrint
           return `<th>${dt.toLocaleDateString("en-GB", { weekday: "short" })}<br/>${dt.getDate()}/${dt.getMonth() + 1}</th>`;
         })
         .join("");
-      const bodyRows = activeNurses
-        .map((n) => {
-          const cells = dates
-            .map((d) => {
-              const s = assignMap.get(`${n.id}|${d}`) ?? "";
-              return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
-            })
-            .join("");
-          return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
-        })
-        .join("");
+      const bodyRows = printRowsHtml(activeNurses, dates, cellOf, (n) => {
+        const cells = dates
+          .map((d) => {
+            const s = assignMap.get(`${n.id}|${d}`) ?? "";
+            return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
+          })
+          .join("");
+        return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
+      });
       const html = `<!DOCTYPE html>
 <html><head>
 <meta charset="UTF-8">
@@ -1600,7 +1620,7 @@ ${violationsHtml}
     const key = `${win.startDate}|${win.facility ?? ""}|${win.ward ?? win.roleGroup ?? ""}`;
     setArchiveDownloading(key + "-xlsx");
     try {
-      const { activeNurses, assignMap, violations, definitions, staffing, coverage } =
+      const { activeNurses, assignMap, violations, definitions, staffing, coverage, cellOf } =
         await fetchScheduleData(win);
       const dates = dateRange(win.startDate, win.endDate);
       const wardLabel = win.ward
@@ -1617,7 +1637,7 @@ ${violationsHtml}
           return `${dt.toLocaleDateString("en-GB", { weekday: "short" })} ${dt.getDate()}/${dt.getMonth() + 1}`;
         }),
       ];
-      const rowData = activeNurses.map((n) => [
+      const rowData = printRowsAoa(activeNurses, dates, cellOf, (n) => [
         n.name,
         n.role,
         n.ward ? n.ward.split("|")[0] : "",
@@ -1682,12 +1702,13 @@ ${violationsHtml}
       const isMultiFacility = distinctFacilities.length > 1;
       const allData = await Promise.all(
         periodWins.map(async (win) => {
-          const { activeNurses, assignMap, violations, definitions } = await fetchScheduleData(win);
+          const { activeNurses, assignMap, violations, definitions, cellOf } =
+            await fetchScheduleData(win);
           const baseLabel =
             win.ward ?? (win.roleGroup ? FW_LABELS[win.roleGroup] : "Facility-Wide Staff");
           const label =
             isMultiFacility && win.facility ? `${baseLabel} — ${win.facility}` : baseLabel;
-          return { label, activeNurses, assignMap, violations, definitions };
+          return { label, activeNurses, assignMap, violations, definitions, cellOf };
         }),
       );
       const endDate = scheduleEndDate(periodStart);
@@ -1703,18 +1724,16 @@ ${violationsHtml}
         : (distinctFacilities[0] ?? periodWins[0]?.facility ?? "");
       const sections = allData
         .filter(({ activeNurses }) => activeNurses.length > 0)
-        .map(({ label, activeNurses, assignMap, violations, definitions }) => {
-          const bodyRows = activeNurses
-            .map((n) => {
-              const cells = dates
-                .map((d) => {
-                  const s = assignMap.get(`${n.id}|${d}`) ?? "";
-                  return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
-                })
-                .join("");
-              return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
-            })
-            .join("");
+        .map(({ label, activeNurses, assignMap, violations, definitions, cellOf }) => {
+          const bodyRows = printRowsHtml(activeNurses, dates, cellOf, (n) => {
+            const cells = dates
+              .map((d) => {
+                const s = assignMap.get(`${n.id}|${d}`) ?? "";
+                return `<td style="background:${definitions.colors.get(s) ?? "#fff"}">${escHtml(s) || "—"}</td>`;
+              })
+              .join("");
+            return `<tr><td class="nm">${escHtml(n.name)}</td><td class="sm">${escHtml(n.role)}</td><td class="sm">${n.ward ? escHtml(n.ward.split("|")[0]) : "—"}</td>${cells}</tr>`;
+          });
           const violationRows =
             violations.length > 0
               ? `<table style="margin-bottom:10px;"><thead><tr><th style="color:#b91c1c;" colspan="4">Safety Violations — ${escHtml(label)}</th></tr><tr><th>Shift</th><th>Role</th><th>Required</th><th style="text-align:left;">Days Not Met (Actual/Required)</th></tr></thead>
@@ -2826,7 +2845,7 @@ ${sections}
                             <span className="inline-flex items-center gap-1">
                               {sw.interWard && (
                                 <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-100 text-purple-800 border border-purple-200">
-                                  Inter-Ward
+                                  {sw.interFacility ? "Other Location" : "Inter-Ward"}
                                 </span>
                               )}
                               <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">

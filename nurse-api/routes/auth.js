@@ -635,10 +635,16 @@ router.patch(
         ));
       }
 
-      // Clear all future and current shift assignments for the deactivated nurse
+      // Clear all future and current shift assignments for the deactivated nurse.
+      // Yesterday becomes their last working day, so the days they already worked
+      // this month stay on the rota.
       if (nurseRows[0]) {
         await client.query(
           "DELETE FROM shift_assignments WHERE nurse_id = $1 AND shift_date >= CURRENT_DATE",
+          [nurseRows[0].id],
+        );
+        await client.query(
+          "UPDATE nurses SET left_on = CURRENT_DATE - 1 WHERE id = $1 AND left_on IS NULL",
           [nurseRows[0].id],
         );
       }
@@ -665,12 +671,12 @@ router.patch(
     );
     // Restore by profile_id first, fall back to name
     const { rowCount } = await pool.query(
-      "UPDATE nurses SET is_active = true WHERE profile_id = $1",
+      "UPDATE nurses SET is_active = true, left_on = NULL WHERE profile_id = $1",
       [profileId],
     );
     if (!rowCount && profileRows[0]?.full_name) {
       await pool.query(
-        "UPDATE nurses SET is_active = true, profile_id = $1 WHERE LOWER(name) = LOWER($2)",
+        "UPDATE nurses SET is_active = true, left_on = NULL, profile_id = $1 WHERE LOWER(name) = LOWER($2)",
         [profileId, profileRows[0].full_name],
       );
     }

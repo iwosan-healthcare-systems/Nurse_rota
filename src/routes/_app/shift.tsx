@@ -74,6 +74,8 @@ type Assignment = AssignmentDefinition & {
   shift_date: string;
   ward: string | null;
   status: string;
+  // Set when a switch moved this duty to another location.
+  work_facility?: string | null;
 };
 
 type PeriodHours = {
@@ -572,8 +574,9 @@ function ShiftPage() {
   async function handleStartClick() {
     setGeoError(null);
     setGeoChecking(true);
-    // Locum shifts must be geo-verified against the locum facility, not the nurse's home facility.
-    const facilityToCheck = todayLocum?.facility ?? nurseFacility;
+    // Locum shifts, and duties switched to another location, are geo-verified
+    // against where they are worked, not the nurse's home facility.
+    const facilityToCheck = todayLocum?.facility ?? queryAssignment?.work_facility ?? nurseFacility;
     try {
       const geo = await verifyLocationAndCaptureIp(facilityToCheck, gpsSettings);
       pendingGeoRef.current = geo;

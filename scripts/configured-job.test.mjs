@@ -14,6 +14,7 @@ function fixture({
   dryRun = false,
   nurses = [{ id: "n1", name: "Demo nurse", role: "Nurse", ward: "ER" }],
   roleGroups = {},
+  hospital = "00000000-0000-4000-8000-000000000001",
 }) {
   const calls = [],
     logs = [];
@@ -24,6 +25,7 @@ function fixture({
       if (sql.includes("SELECT DISTINCT facility")) return { rows: [{ facility: "Demo" }] };
       if (sql.includes("FROM nurses WHERE facility")) return { rows: nurses };
       if (sql.includes("FROM wards WHERE facility")) return { rows: [{ name: "ER" }] };
+      if (sql.includes("app_current_hospital()")) return { rows: [{ id: hospital }] };
       throw new Error("legacy generation reached");
     },
   };
@@ -32,6 +34,7 @@ function fixture({
     "../lib/tenant-context": require("../nurse-api/lib/tenant-context.js"),
     "../db": pool,
     "../lib/persist-rota-draft": {},
+    "../lib/hospital-defaults": require("../nurse-api/lib/hospital-defaults.js"),
     "../lib/role-groups": {
       ...require("../nurse-api/lib/role-groups.js"),
       activeRoleGroups: async () => roleGroups,
@@ -99,6 +102,11 @@ test("recurring generation retains the existing due-date gate", async () => {
 test("facilities without an effective policy still reach legacy generation", async () => {
   const f = fixture({ result: null });
   await assert.rejects(f.run(), /legacy generation reached/);
+});
+test("other hospitals without saved rules are not generated with Lagoon's built-in rules", async () => {
+  const f = fixture({ result: null, hospital: "20000000-0000-4000-8000-000000000002" });
+  await f.run();
+  assert.ok(f.logs.some((line) => /no saved scheduling rules; not generated/.test(line.join(" "))));
 });
 test("configured role groups partition custom facility-wide roles into their units", async () => {
   const f = fixture({

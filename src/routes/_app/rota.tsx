@@ -45,6 +45,14 @@ import {
   type ExtraShift,
 } from "@/lib/auto-schedule";
 import { isGlobalHead, isInternType, isMatron, isPorterType } from "@/lib/role-groups";
+import {
+  CATEGORY_LABELS,
+  LOCATION_SWITCH_LABELS,
+  LOCATION_SWITCH_SHORT,
+  dutyTotals,
+  locationSwitchKind,
+  splitByCategory,
+} from "@/lib/rota-teams";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -131,6 +139,8 @@ type Assignment = AssignmentDefinition & {
   status: string;
   pre_leave_shift?: ShiftCode | null;
   leave_type?: string | null;
+  // Set when a switch moved this duty to another location.
+  work_facility?: string | null;
 };
 
 type GenForm = {
@@ -450,6 +460,16 @@ function RotaPage() {
     queryKey: ["nurses"],
     queryFn: () => api.get<NurseInput[]>("/nurses"),
   });
+  // Staff removed from the rota during this period: shown (read-only) for the
+  // days they worked, never used for generation.
+  const { data: leftStaff = [] } = useQuery<(NurseInput & { left_on: string | null })[]>({
+    queryKey: ["nurses", "left", ymd(startDate)],
+    queryFn: () => api.get(`/nurses?left_since=${ymd(startDate)}`),
+  });
+  const leftOn = useMemo(
+    () => new Map(leftStaff.map((n) => [n.id, (n.left_on ?? "").slice(0, 10)])),
+    [leftStaff],
+  );
 
   const { data: leave = [] } = useQuery<LeaveInput[]>({
     queryKey: ["leave"],
@@ -493,6 +513,16 @@ function RotaPage() {
     },
   });
 
+  // Duties other locations' staff work here after a switch between locations.
+  const { data: visitingAssignments = [] } = useQuery({
+    queryKey: ["visiting-assignments", ymd(startDate), ymd(endDate), effectiveFacility],
+    enabled: !!effectiveFacility && !windowLoading,
+    queryFn: () =>
+      api.get<Assignment[]>(
+        `/shift-assignments?from=${ymd(startDate)}&to=${ymd(endDate)}&work_facility=${encodeURIComponent(effectiveFacility)}&status=published&include_shift_definition=true`,
+      ),
+  });
+
   // Combined: true while the window start OR the assignments are still loading.
   const isLoading = windowLoading || assignmentsLoading;
   const facilityHasCurrentSchedule = useMemo(
@@ -529,10 +559,30 @@ function RotaPage() {
   const { data: switchFilled = [] } = useQuery({
     queryKey: ["switch-filled-rota", ymd(startDate), ymd(endDate)],
     queryFn: () =>
-      api.get<{ nurse_id: string | null; switch_nurse_b: string | null; from_date: string }[]>(
-        `/leave-requests?type=Swap&status=Approved&from=${ymd(startDate)}&to=${ymd(endDate)}`,
-      ),
+      api.get<
+        {
+          nurse_id: string | null;
+          switch_nurse_b: string | null;
+          from_date: string;
+          reason: string | null;
+        }[]
+      >(`/leave-requests?type=Swap&status=Approved&from=${ymd(startDate)}&to=${ymd(endDate)}`),
   });
+
+  // "nurseId|date" → kind of switch between locations, for both nurses involved.
+  const locationSwitchByCell = useMemo(() => {
+    const m = new Map<string, keyof typeof LOCATION_SWITCH_LABELS>();
+    switchFilled.forEach((sw) => {
+      const kind = locationSwitchKind(sw.reason);
+      if (!kind) return;
+      const date = sw.from_date.slice(0, 10);
+      if (sw.nurse_id) m.set(`${sw.nurse_id}|${date}`, kind);
+      // Nurse B is also recorded in the request text (SHIFT_SWITCH|nurseBId|…).
+      const nurseB = sw.switch_nurse_b ?? sw.reason?.split("|")[1];
+      if (nurseB) m.set(`${nurseB}|${date}`, kind);
+    });
+    return m;
+  }, [switchFilled]);
 
   // "nurseId|date" keys for every nurse on either side of an approved shift
   // switch in this window — both the original nurse and the covering one,
@@ -598,7 +648,7 @@ function RotaPage() {
       : null;
 
   const filteredNurses = useMemo(() => {
-    let list = nurses;
+    let list = [...nurses, ...leftStaff];
     if (effectiveFacility) list = list.filter((n) => n.facility === effectiveFacility);
 
     if (lockedWard) {
@@ -642,6 +692,56 @@ function RotaPage() {
     if (myOnly && nurseId) list = list.filter((n) => n.id === nurseId);
     return list;
   }, [
+    nurses,
+    effectiveFacility,
+    lockedWard,
+    selectedWard,
+    selectedFacilityWide,
+    selectedRole,
+    searchQuery,
+    myOnly,
+    nurseId,
+    leftStaff,
+  ]);
+
+  // Staff from other locations working here after a switch between locations,
+  // with the duties they work here. Shown with the ward (or facility-wide group)
+  // they cover, using the same view filters as this location's own staff.
+  const visitingStaff = useMemo(() => {
+    if (!effectiveFacility) return [];
+    const byNurse = new Map<string, Map<string, Assignment>>();
+    for (const a of visitingAssignments) {
+      const cells = byNurse.get(a.nurse_id) ?? new Map<string, Assignment>();
+      cells.set(a.shift_date.slice(0, 10), a);
+      byNurse.set(a.nurse_id, cells);
+    }
+    const facilityWide = (role: string) =>
+      isGlobalHead(role) || isMatron(role) || isPorterType(role) || isInternType(role);
+    const q = searchQuery.toLowerCase().trim();
+    return [...byNurse].flatMap(([id, cells]) => {
+      const nurse = nurses.find((n) => n.id === id);
+      if (!nurse || nurse.facility === effectiveFacility) return [];
+      const ward = [...cells.values()][0]?.ward ?? null;
+      if (lockedWard && ward !== lockedWard && (ward || !facilityWide(nurse.role))) return [];
+      if (selectedWard && (ward !== selectedWard || facilityWide(nurse.role))) return [];
+      if (selectedFacilityWide) {
+        const inGroup =
+          selectedFacilityWide === "matron"
+            ? isMatron(nurse.role)
+            : selectedFacilityWide === "head"
+              ? isGlobalHead(nurse.role)
+              : selectedFacilityWide === "porter"
+                ? isPorterType(nurse.role)
+                : selectedFacilityWide === "intern" && isInternType(nurse.role);
+        if (!inGroup) return [];
+      }
+      if (selectedRole && nurse.role !== selectedRole) return [];
+      if (q && !nurse.name.toLowerCase().includes(q)) return [];
+      if (myOnly && nurse.id !== nurseId) return [];
+      return [{ nurse, ward, cells }];
+    });
+  }, [
+    visitingAssignments,
     nurses,
     effectiveFacility,
     lockedWard,
@@ -1021,13 +1121,16 @@ function RotaPage() {
 
   // Saved scheduling rules (Scheduling page) replace the built-in generator from
   // the first rota period after they were saved; the server builds those drafts.
+  // Only Lagoon has the built-in generator: other hospitals always generate on
+  // the server, which asks for the facility's rules when none are saved.
   async function usesSavedRules(facility: string) {
     const rules = await api
       .get<{
         configured: boolean;
+        builtInAllowed?: boolean;
       }>(`/scheduling/rota-rules?facility=${encodeURIComponent(facility)}&date=${ymd(startDate)}`)
-      .catch(() => ({ configured: false }));
-    return rules.configured;
+      .catch(() => ({ configured: false, builtInAllowed: true }));
+    return rules.configured || rules.builtInAllowed === false;
   }
 
   async function generateWithSavedRules(
@@ -3003,7 +3106,7 @@ function RotaPage() {
                           ...filteredNurses.filter((n) => isFacilityWide(n.role)),
                         ]
                       : filteredNurses;
-                  return displayList.flatMap((n, idx) => {
+                  const renderStaffRow = (n: (typeof displayList)[number]) => {
                     // Hard guard: never render facility-wide roles in a ward-specific view.
                     if (selectedWard && isFacilityWide(n.role)) {
                       return [];
@@ -3014,6 +3117,15 @@ function RotaPage() {
                         <td className="px-3 py-2 sticky left-0 bg-card z-10">
                           <div className="font-medium">{n.name}</div>
                           <div className="text-[11px] text-muted-foreground">{n.role}</div>
+                          {leftOn.get(n.id) && (
+                            <div className="mt-0.5 inline-flex rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                              Left · last day{" "}
+                              {new Date(`${leftOn.get(n.id)}T00:00:00`).toLocaleDateString(
+                                "en-GB",
+                                { day: "numeric", month: "short" },
+                              )}
+                            </div>
+                          )}
                         </td>
                         <td className="px-2 py-2 text-muted-foreground text-xs">
                           {(() => {
@@ -3208,6 +3320,17 @@ function RotaPage() {
                                 {cell && isSwitch && !isLocum && (
                                   <span className="ml-0.5 text-sky-600 dark:text-sky-300">⇄</span>
                                 )}
+                                {cell?.work_facility && cell.work_facility !== n.facility && (
+                                  <span
+                                    className="ml-0.5 text-violet-600 dark:text-violet-300"
+                                    title={`${(() => {
+                                      const kind = locationSwitchByCell.get(`${n.id}|${dateStr}`);
+                                      return kind ? `${LOCATION_SWITCH_LABELS[kind]} — ` : "";
+                                    })()}Worked at ${cell.work_facility}`}
+                                  >
+                                    ↗
+                                  </span>
+                                )}
                               </button>
                             </td>
                           );
@@ -3215,6 +3338,177 @@ function RotaPage() {
                       </tr>,
                     );
                     return rows;
+                  };
+
+                  // Visiting staff: read-only rows showing only the duties they work
+                  // here, marked with where they are from and the kind of switch.
+                  const visitorsById = new Map(visitingStaff.map((v) => [v.nurse.id, v]));
+                  const renderVisitorRow = (n: (typeof displayList)[number]) => {
+                    const visit = visitorsById.get(n.id)!;
+                    return [
+                      <tr
+                        key={`visiting-${n.id}`}
+                        className="border-t bg-violet-50/50 dark:bg-violet-950/20"
+                      >
+                        <td className="px-3 py-2 sticky left-0 bg-violet-50 dark:bg-violet-950 z-10">
+                          <div className="font-medium">{n.name}</div>
+                          <div className="text-[11px] text-muted-foreground">{n.role}</div>
+                          <div className="mt-0.5 inline-flex items-center rounded bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-900 dark:text-violet-200">
+                            ↙ Visiting from {n.facility ?? "another location"}
+                          </div>
+                          {[
+                            ...new Set(
+                              [...visit.cells.keys()].flatMap((date) => {
+                                const kind = locationSwitchByCell.get(`${n.id}|${date}`);
+                                return kind ? [LOCATION_SWITCH_SHORT[kind]] : [];
+                              }),
+                            ),
+                          ].map((label) => (
+                            <div
+                              key={label}
+                              className="mt-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300"
+                            >
+                              Inter-facility swap · {label}
+                            </div>
+                          ))}
+                        </td>
+                        <td className="px-2 py-2 text-muted-foreground text-xs">
+                          {visit.ward ?? "—"}
+                        </td>
+                        <td className="px-2 py-2 text-center text-xs text-muted-foreground">—</td>
+                        {days.map((dt) => {
+                          const dateStr = ymd(dt);
+                          const cell = visit.cells.get(dateStr);
+                          const kind = locationSwitchByCell.get(`${n.id}|${dateStr}`);
+                          const isWeekend = dt.getDay() === 0 || dt.getDay() === 6;
+                          return (
+                            <td
+                              key={dateStr}
+                              className={cn(
+                                "px-0.5 py-1 text-center",
+                                isWeekend && "bg-red-50/60 dark:bg-red-950/10",
+                              )}
+                            >
+                              {cell ? (
+                                <div
+                                  className={cn(
+                                    "block w-full min-h-8 text-[10px] font-bold py-2 rounded border ring-2 ring-inset ring-violet-500 dark:ring-violet-400",
+                                    shiftClass(cell.shift),
+                                  )}
+                                  title={[
+                                    assignmentDescription(cell),
+                                    kind ? LOCATION_SWITCH_LABELS[kind] : "Swap between locations",
+                                    `From ${n.facility ?? "another location"}`,
+                                  ]
+                                    .filter(Boolean)
+                                    .join(" · ")}
+                                >
+                                  {cell.shift}
+                                  <span className="ml-0.5 text-violet-600 dark:text-violet-300">
+                                    {kind === "shift-for-shift" ? "⇄" : "↙"}
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-[10px] text-muted-foreground/40">·</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>,
+                    ];
+                  };
+
+                  // Teams: each ward (and the facility-wide staff) lists nurses, then
+                  // nursing assistants, followed by how many of each are on duty
+                  // every day and night. Visiting staff join the team they cover,
+                  // listed after the team's own staff.
+                  const teams = new Map<string, typeof displayList>();
+                  for (const n of displayList) {
+                    if (selectedWard && isFacilityWide(n.role)) continue;
+                    const team =
+                      selectedWard || selectedFacilityWide || lockedWard
+                        ? ""
+                        : isFacilityWide(n.role)
+                          ? "Facility-wide staff"
+                          : (parseWards(n.ward)[0] ?? "No ward");
+                    teams.set(team, [...(teams.get(team) ?? []), n]);
+                  }
+                  for (const v of visitingStaff) {
+                    const team =
+                      selectedWard || selectedFacilityWide || lockedWard
+                        ? ""
+                        : (v.ward ?? "Facility-wide staff");
+                    teams.set(team, [...(teams.get(team) ?? []), v.nurse]);
+                  }
+                  const dates = days.map(ymd);
+                  const sectionRow = (key: string, label: string, count: number) => (
+                    <tr key={key} className="border-t bg-muted/40">
+                      <td
+                        colSpan={3 + days.length}
+                        className="px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground"
+                      >
+                        <span className="sticky left-3">
+                          {label} · {count}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                  const lastTeams = ["No ward", "Facility-wide staff"];
+                  const orderedTeams = [...teams].sort(
+                    ([a], [b]) => lastTeams.indexOf(a) - lastTeams.indexOf(b) || a.localeCompare(b),
+                  );
+                  return orderedTeams.flatMap(([team, members]) => {
+                    const groups = splitByCategory(members);
+                    // Duties switched to another location count there, not here.
+                    const totals = dutyTotals(members, dates, (id, date) => {
+                      const visit = visitorsById.get(id);
+                      if (visit) return visit.cells.get(date);
+                      const cell = cellMap.get(`${id}|${date}`);
+                      return cell?.work_facility &&
+                        effectiveFacility &&
+                        cell.work_facility !== effectiveFacility
+                        ? undefined
+                        : cell;
+                    });
+                    return [
+                      ...groups.flatMap((group) => [
+                        sectionRow(
+                          `${team}|${group.category}`,
+                          `${team ? `${team} · ` : ""}${CATEGORY_LABELS[group.category]}`,
+                          group.staff.length,
+                        ),
+                        ...group.staff.flatMap((n) =>
+                          visitorsById.has(n.id) ? renderVisitorRow(n) : renderStaffRow(n),
+                        ),
+                      ]),
+                      ...groups.flatMap((group) =>
+                        (["day", "night"] as const).map((period) => (
+                          <tr
+                            key={`${team}|${group.category}|${period}`}
+                            className="border-t bg-muted/20 text-xs"
+                          >
+                            <td
+                              colSpan={3}
+                              className="px-3 py-1.5 sticky left-0 bg-muted/20 z-10 font-medium text-muted-foreground"
+                            >
+                              {CATEGORY_LABELS[group.category]} on duty ·{" "}
+                              {period === "day" ? "Day" : "Night"}
+                            </td>
+                            {totals[group.category][period].map((count, i) => (
+                              <td
+                                key={dates[i]}
+                                className={cn(
+                                  "text-center tabular-nums",
+                                  count === 0 ? "text-muted-foreground/60" : "font-semibold",
+                                )}
+                              >
+                                {count}
+                              </td>
+                            ))}
+                          </tr>
+                        )),
+                      ),
+                    ];
                   });
                 })()}
               </tbody>

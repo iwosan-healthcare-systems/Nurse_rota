@@ -236,6 +236,7 @@ async function scenarios(t) {
         "../middleware/capability": capability,
         "../lib/claim-locum": require("./lib/claim-locum"),
         "../lib/locum-shift-options": require("./lib/locum-shift-options"),
+        "../lib/ward-assessment": require("./lib/ward-assessment"),
         "../lib/mailer": { sendMail: async () => {}, portalUrl: () => "" },
       }),
     );
@@ -1372,6 +1373,15 @@ async function scenarios(t) {
         assert.deepEqual(await period("2026-10-19"), { start: "2026-10-19", end: "2026-10-31" });
         assert.deepEqual(await period("2026-10-31"), { start: "2026-10-19", end: "2026-10-31" });
         assert.deepEqual(await period("2026-11-01"), { start: "2026-11-01", end: "2026-11-30" });
+        // Migration 054 pins Lagoon's last 28-day period to the one ending 15 Nov,
+        // even with drafts to 13 Dec: 16–30 Nov is the transition, months from 1 Dec.
+        await db.query(
+          "UPDATE hospitals SET legacy_period_anchor='2026-10-19', legacy_period_until='2026-12-13' WHERE id=app_current_hospital()",
+        );
+        await db.query(read("nurse-api/migrations/054_lagoon_monthly_cutover.sql"));
+        assert.deepEqual(await period("2026-11-15"), { start: "2026-10-19", end: "2026-11-15" });
+        assert.deepEqual(await period("2026-11-16"), { start: "2026-11-16", end: "2026-11-30" });
+        assert.deepEqual(await period("2026-12-01"), { start: "2026-12-01", end: "2026-12-31" });
         await assert.rejects(
           db.query("UPDATE hospitals SET legacy_period_until=NULL WHERE id=app_current_hospital()"),
           /hospitals_legacy_periods/,
@@ -1755,62 +1765,59 @@ async function scenarios(t) {
         assert.equal(result.count, 2);
       },
     );
-    await t.test(
-      "saved ward minima shortfalls do not block publication",
-      async () => {
-        const { rows: cells } = await pool.query(
-          "SELECT * FROM shift_assignments WHERE shift_date='2090-01-01' ORDER BY id",
-        );
-        const {
-          rows: [source],
-        } = await pool.query("SELECT * FROM scheduling_runs WHERE id=$1", [
-          cells[0].shift_definition_run_id,
-        ]);
-        const config = structuredClone(source.configuration_snapshot);
-        const ward = source.input_snapshot.wards.find((w) => w.name === cells[0].ward);
-        const role = config.roles.find((r) => r.name === cells[0].nurse_role);
-        config.requirements = Array.from({ length: 7 }, (_, i) => ({
-          wardId: ward.id,
-          weekday: i + 1,
-          shift: "M",
-          category: role.category,
-          minimum: 1,
-          maximum: 1,
-        }));
-        const {
-          rows: [saved],
-        } = await pool.query(
-          `INSERT INTO scheduling_runs
+    await t.test("saved ward minima shortfalls do not block publication", async () => {
+      const { rows: cells } = await pool.query(
+        "SELECT * FROM shift_assignments WHERE shift_date='2090-01-01' ORDER BY id",
+      );
+      const {
+        rows: [source],
+      } = await pool.query("SELECT * FROM scheduling_runs WHERE id=$1", [
+        cells[0].shift_definition_run_id,
+      ]);
+      const config = structuredClone(source.configuration_snapshot);
+      const ward = source.input_snapshot.wards.find((w) => w.name === cells[0].ward);
+      const role = config.roles.find((r) => r.name === cells[0].nurse_role);
+      config.requirements = Array.from({ length: 7 }, (_, i) => ({
+        wardId: ward.id,
+        weekday: i + 1,
+        shift: "M",
+        category: role.category,
+        minimum: 1,
+        maximum: 1,
+      }));
+      const {
+        rows: [saved],
+      } = await pool.query(
+        `INSERT INTO scheduling_runs
         (organization_id,facility_id,configuration_id,configuration_version,configuration_revision,
          start_date,end_date,engine_version,input_fingerprint,configuration_snapshot,input_snapshot,result_snapshot,created_by)
         SELECT organization_id,facility_id,configuration_id,configuration_version,configuration_revision,
          start_date,end_date,engine_version,input_fingerprint,$2::jsonb,input_snapshot,result_snapshot,created_by
         FROM scheduling_runs WHERE id=$1 RETURNING id`,
-          [source.id, JSON.stringify(config)],
-        );
-        const ids = cells.map((c) => c.id);
-        await pool.query(
-          "UPDATE shift_assignments SET shift_definition_run_id=$2,shift='OFF',status='submitted' WHERE id=ANY($1::uuid[])",
-          [ids, saved.id],
-        );
-        const { applyValidatedAssignmentBatch } = require("./lib/configured-assignment-batch");
-        const publish = () =>
-          applyValidatedAssignmentBatch(pool, {
-            where: "WHERE id=ANY($1::uuid[])",
-            filterParams: [ids],
-            updateSql: "UPDATE shift_assignments SET status='published' WHERE id=ANY($1::uuid[])",
-            updateParams: [ids],
-            body: { status: "published" },
-          });
-        // Nobody is on M against a minimum of 1: reported, not blocking.
-        await publish();
-        assert.ok(
-          (
-            await pool.query("SELECT status FROM shift_assignments WHERE id=ANY($1::uuid[])", [ids])
-          ).rows.every((r) => r.status === "published"),
-        );
-      },
-    );
+        [source.id, JSON.stringify(config)],
+      );
+      const ids = cells.map((c) => c.id);
+      await pool.query(
+        "UPDATE shift_assignments SET shift_definition_run_id=$2,shift='OFF',status='submitted' WHERE id=ANY($1::uuid[])",
+        [ids, saved.id],
+      );
+      const { applyValidatedAssignmentBatch } = require("./lib/configured-assignment-batch");
+      const publish = () =>
+        applyValidatedAssignmentBatch(pool, {
+          where: "WHERE id=ANY($1::uuid[])",
+          filterParams: [ids],
+          updateSql: "UPDATE shift_assignments SET status='published' WHERE id=ANY($1::uuid[])",
+          updateParams: [ids],
+          body: { status: "published" },
+        });
+      // Nobody is on M against a minimum of 1: reported, not blocking.
+      await publish();
+      assert.ok(
+        (
+          await pool.query("SELECT status FROM shift_assignments WHERE id=ANY($1::uuid[])", [ids])
+        ).rows.every((r) => r.status === "published"),
+      );
+    });
     await t.test(
       "single configured approval enforces rest and transition rules but not staffing",
       async () => {
@@ -2263,6 +2270,108 @@ async function scenarios(t) {
         }
       },
     );
+    await t.test(
+      "removing staff partway through the month clears later shifts and requests",
+      async () => {
+        const { removeFromRota, returnToRota } = require("./lib/remove-from-rota");
+        const {
+          rows: [period],
+        } = await pool.query(
+          `SELECT rota_period_start(d)::text AS start FROM
+         (SELECT (now() AT TIME ZONE 'Africa/Lagos')::date AS d) t`,
+        );
+        const day = (n) =>
+          new Date(Date.parse(`${period.start}T00:00:00Z`) + n * 86400000)
+            .toISOString()
+            .slice(0, 10);
+        const {
+          rows: [leaver],
+        } = await pool.query(
+          "INSERT INTO nurses(name,role,facility,ward) VALUES ('Leaving nurse','Nurse','Removal','ER') RETURNING id",
+        );
+        const {
+          rows: [partner],
+        } = await pool.query(
+          "INSERT INTO nurses(name,role,facility,ward) VALUES ('Switch partner','Nurse','Removal','ER') RETURNING id",
+        );
+        for (let n = 0; n < 4; n++)
+          await pool.query(
+            "INSERT INTO shift_assignments(nurse_id,shift_date,shift,status,ward) VALUES ($1,$2,'M','published','ER')",
+            [leaver.id, day(n)],
+          );
+        const request = (nurseId, name, type, from, to, reason = null) =>
+          pool.query(
+            `INSERT INTO leave_requests(nurse_id,nurse_name,type,status,from_date,to_date,reason)
+           VALUES ($1,$2,$3,'Pending',$4,$5,$6) RETURNING id`,
+            [nurseId, name, type, from, to, reason],
+          );
+        const own = (await request(leaver.id, "Leaving nurse", "Annual", day(2), day(3))).rows[0];
+        const earlier = (await request(leaver.id, "Leaving nurse", "Annual", day(0), day(1)))
+          .rows[0];
+        const asPartner = (
+          await request(
+            partner.id,
+            "Switch partner",
+            "Swap",
+            day(3),
+            day(3),
+            `SHIFT_SWITCH|${leaver.id}|Leaving nurse|M|OFF|INTER_WARD`,
+          )
+        ).rows[0];
+        const run = async (fn) => {
+          const db = await pool.connect();
+          try {
+            await db.query("BEGIN");
+            const result = await fn(db);
+            await db.query("COMMIT");
+            return result;
+          } catch (error) {
+            await db.query("ROLLBACK");
+            throw error;
+          } finally {
+            db.release();
+          }
+        };
+        await assert.rejects(
+          run((db) => removeFromRota(db, { nurseId: leaver.id, lastDay: day(-1) })),
+          /current rota month/,
+        );
+        const result = await run((db) =>
+          removeFromRota(db, { nurseId: leaver.id, lastDay: day(1), actor: { name: "Test" } }),
+        );
+        assert.equal(result.shiftsCleared, 2);
+        assert.equal(result.requestsExpired, 2);
+        const { rows: cells } = await pool.query(
+          "SELECT shift_date::text FROM shift_assignments WHERE nurse_id=$1 ORDER BY shift_date",
+          [leaver.id],
+        );
+        assert.deepEqual(
+          cells.map((c) => c.shift_date),
+          [day(0), day(1)],
+        );
+        const status = async (id) =>
+          (await pool.query("SELECT status FROM leave_requests WHERE id=$1", [id])).rows[0].status;
+        assert.equal(await status(own.id), "Expired");
+        assert.equal(await status(asPartner.id), "Expired");
+        assert.equal(await status(earlier.id), "Pending");
+        const {
+          rows: [after],
+        } = await pool.query("SELECT is_active, left_on::text FROM nurses WHERE id=$1", [
+          leaver.id,
+        ]);
+        assert.deepEqual(after, { is_active: false, left_on: day(1) });
+        await assert.rejects(
+          run((db) => removeFromRota(db, { nurseId: leaver.id, lastDay: day(1) })),
+          /already off the rota/,
+        );
+        await run((db) => returnToRota(db, { nurseId: leaver.id }));
+        const {
+          rows: [back],
+        } = await pool.query("SELECT is_active, left_on FROM nurses WHERE id=$1", [leaver.id]);
+        assert.deepEqual(back, { is_active: true, left_on: null });
+      },
+    );
+
     await t.test("leave restoration is not blocked by saved ward staffing", async () => {
       const { validateConfiguredLeaveRestoration } = require("./lib/configured-leave-restoration");
       const {
@@ -3159,6 +3268,55 @@ async function scenarios(t) {
         "filled",
       );
     });
+    await t.test("locum requests ask unit or ward census questions by ward", async () => {
+      const locumRoot = base.slice(0, base.indexOf("/api/")) + "/api/locum";
+      const request = (ward, answers) =>
+        fetch(`${locumRoot}/requests`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            shift_date: "2099-06-01",
+            shift: "M",
+            facility: "No such facility",
+            ward,
+            requested_by: admin,
+            requested_by_name: "Admin",
+            nurses_needed: 1,
+            ...answers,
+          }),
+        });
+      const unit = {
+        icu_patients: 2,
+        hdu_patients: 1,
+        nicu_patients: 0,
+        scbu_patients: 3,
+        nurses_in_ward: 4,
+        nurse_interns: 1,
+      };
+      const nicu = await request("NICU", unit);
+      const saved = await nicu.json();
+      assert.equal(nicu.status, 201, JSON.stringify(saved));
+      assert.equal(saved.unit_kind, "critical");
+      assert.equal(saved.scbu_patients, 3);
+      assert.equal(saved.ews_over_3, null);
+      assert.equal(saved.ventilated_patients, null);
+      // A general ward must answer the ward questions, including EWS > 3.
+      assert.equal((await request("GOPD", unit)).status, 400);
+      const ward = await request("GOPD", {
+        ward_patients: 18,
+        nurses_in_ward: 3,
+        nurse_interns: 0,
+        ews_over_3: 2,
+      });
+      const general = await ward.json();
+      assert.equal(ward.status, 201, JSON.stringify(general));
+      assert.equal(general.unit_kind, "general");
+      assert.equal(general.ews_over_3, 2);
+      assert.equal(general.icu_patients, null);
+      await pool.query("DELETE FROM locum_requests WHERE id=ANY($1::uuid[])", [
+        [saved.id, general.id],
+      ]);
+    });
     await t.test("locum requests use the governing configuration's shift definitions", async () => {
       await migrate("008_locum_role_needed.sql");
       await migrate("048_locum_shift_definitions.sql");
@@ -3205,6 +3363,12 @@ async function scenarios(t) {
             ward: "ICU",
             requested_by: admin,
             requested_by_name: "Admin",
+            icu_patients: 1,
+            hdu_patients: 0,
+            nicu_patients: 0,
+            scbu_patients: 0,
+            nurses_in_ward: 2,
+            nurse_interns: 0,
           }),
         });
       assert.equal((await create("EVENING")).status, 422, "Unknown codes are rejected");
@@ -3262,18 +3426,21 @@ async function scenarios(t) {
       const { configuration } = await service.defaults(admin, site.id);
       assert.equal(configuration.wardPolicies.length, 1, "New site wards seed its defaults");
     });
-    await t.test("hospital admins and super admins see every facility of their hospital", async () => {
-      const { rows } = await pool.query(
-        "INSERT INTO profiles (email, full_name) VALUES ('later-admin@test.local','Later admin') RETURNING id",
-      );
-      const lateAdmin = rows[0].id;
-      assert.deepEqual((await service.listFacilities(lateAdmin)).facilities, []);
-      const sites = (await service.listFacilities(lateAdmin, { administrator: true })).facilities;
-      assert.deepEqual(
-        sites.map((f) => f.name),
-        (await service.listFacilities(admin)).facilities.map((f) => f.name),
-      );
-    });
+    await t.test(
+      "hospital admins and super admins see every facility of their hospital",
+      async () => {
+        const { rows } = await pool.query(
+          "INSERT INTO profiles (email, full_name) VALUES ('later-admin@test.local','Later admin') RETURNING id",
+        );
+        const lateAdmin = rows[0].id;
+        assert.deepEqual((await service.listFacilities(lateAdmin)).facilities, []);
+        const sites = (await service.listFacilities(lateAdmin, { administrator: true })).facilities;
+        assert.deepEqual(
+          sites.map((f) => f.name),
+          (await service.listFacilities(admin)).facilities.map((f) => f.name),
+        );
+      },
+    );
     await t.test("custom shift codes and role groups activate end to end", async () => {
       const policyBase = base.replace(a, b);
       const apiRoot = base.slice(0, base.indexOf("/facilities"));
@@ -3512,6 +3679,104 @@ async function scenarios(t) {
         (await pool.query("SELECT status FROM leave_requests WHERE id=$1", [cover])).rows[0].status,
         "Approved",
       );
+
+      // Switches between locations: each duty moves to the other location and
+      // records where it is worked; without the flag the facilities must match.
+      const awayDate = day(20);
+      for (const offset of [19, 21]) {
+        await setCell(icuNurse.id, day(offset), "OFF");
+        await setCell(erNurse.id, day(offset), "OFF");
+      }
+      await pool.query("UPDATE nurses SET facility='Other annex' WHERE id=$1", [erNurse.id]);
+      try {
+        const icuAway = await setCell(icuNurse.id, awayDate, "EVE");
+        const erAway = await setCell(erNurse.id, awayDate, "OFF");
+        const sameSite = await switchRequest(
+          awayDate,
+          `SHIFT_SWITCH|${erNurse.id}|ER switcher|EVE|OFF|INTER_WARD`,
+        );
+        await assert.rejects(
+          swapConfiguredAssignments(pool, expectedOf([icuAway, erAway]), actor, async () => true, {
+            requestId: sameSite,
+          }),
+          /same ward, facility/,
+        );
+        await pool.query("DELETE FROM leave_requests WHERE id=$1", [sameSite]);
+        const between = await switchRequest(
+          awayDate,
+          `SHIFT_SWITCH|${erNurse.id}|ER switcher|EVE|OFF|INTER_WARD|INTER_FACILITY`,
+        );
+        await swapConfiguredAssignments(
+          pool,
+          expectedOf([icuAway, erAway]),
+          actor,
+          async () => true,
+          {
+            requestId: between,
+          },
+        );
+        const placed = async (nurseId) =>
+          (
+            await pool.query(
+              "SELECT shift,ward,work_facility FROM shift_assignments WHERE nurse_id=$1 AND shift_date=$2",
+              [nurseId, awayDate],
+            )
+          ).rows[0];
+        // Shift to off: only the nurse now on duty is worked at another location.
+        assert.deepEqual(await placed(icuNurse.id), {
+          shift: "OFF",
+          ward: "ER",
+          work_facility: null,
+        });
+        assert.deepEqual(await placed(erNurse.id), {
+          shift: "EVE",
+          ward: "ICU",
+          work_facility: "Other",
+        });
+
+        // Shift for shift: both nurses work at the other's location.
+        const directDate = day(23);
+        for (const offset of [22, 24]) {
+          await setCell(icuNurse.id, day(offset), "OFF");
+          await setCell(erNurse.id, day(offset), "OFF");
+        }
+        await pool.query(
+          "UPDATE shift_assignments SET ward=$3 WHERE nurse_id=$1 AND shift_date=$2",
+          [erNurse.id, directDate, "ER"],
+        );
+        const icuDirect = await setCell(icuNurse.id, directDate, "EVE");
+        const erDirect = await setCell(erNurse.id, directDate, "EVE");
+        const direct = await switchRequest(
+          directDate,
+          `SHIFT_SWITCH|${erNurse.id}|ER switcher|EVE|EVE|INTER_WARD|DIRECT|INTER_FACILITY`,
+        );
+        await swapConfiguredAssignments(
+          pool,
+          expectedOf([icuDirect, erDirect]),
+          actor,
+          async () => true,
+          { requestId: direct },
+        );
+        const placedOn = async (nurseId) =>
+          (
+            await pool.query(
+              "SELECT shift,ward,work_facility FROM shift_assignments WHERE nurse_id=$1 AND shift_date=$2",
+              [nurseId, directDate],
+            )
+          ).rows[0];
+        assert.deepEqual(await placedOn(icuNurse.id), {
+          shift: "EVE",
+          ward: "ER",
+          work_facility: "Other annex",
+        });
+        assert.deepEqual(await placedOn(erNurse.id), {
+          shift: "EVE",
+          ward: "ICU",
+          work_facility: "Other",
+        });
+      } finally {
+        await pool.query("UPDATE nurses SET facility='Other' WHERE id=$1", [erNurse.id]);
+      }
     });
     await t.test(
       "saving applies rules from the next rota draft and Rota generation reports shortfalls",

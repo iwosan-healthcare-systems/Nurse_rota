@@ -1,11 +1,13 @@
 const { createHash } = require("node:crypto");
 const legacy = require("./auto-schedule.generated");
 const { validateCoverageRules } = require("./coverage-rules");
+const { usesLagoonDefaults } = require("./hospital-defaults");
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const KEY = /^[a-z][a-z0-9_]{0,63}$/;
 const CODE = /^[A-Z][A-Z0-9_]{0,15}$/;
 const TIME = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+// Lagoon's staff roles, always offered in its configurations.
 const BASE_ROLES = [
   "Nurse",
   "Surgical Nurse",
@@ -19,6 +21,8 @@ const BASE_ROLES = [
   "Porter",
   "Porter - Day",
 ];
+// Roles a new hospital starts with (see hospital_roles, migration 051).
+const NEW_HOSPITAL_ROLES = ["Nurse", "Nursing Assistant", "Matron", "Porter"];
 
 function validateConfiguration(config, wards = []) {
   const errors = [];
@@ -245,61 +249,180 @@ function validateConfiguration(config, wards = []) {
   return { valid: errors.length === 0, errors };
 }
 
-function seedConfiguration(facility, wards, staffRoles = []) {
-  const step = (shift, days) => ({ shift, days });
-  const roleNames = [...new Set([...BASE_ROLES, ...staffRoles])];
+const roleId = (name) =>
+  `role_${createHash("sha256").update(name.toLowerCase()).digest("hex").slice(0, 16)}`;
+const step = (shift, days) => ({ shift, days });
+const uniqueNames = (names) => {
   const seen = new Set();
-  const roles = roleNames
-    .filter((name) => {
-      const key = name.toLowerCase();
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .map((name) => {
-      const coverage = legacy.isGlobalHead(name),
-        matron = legacy.isMatron(name);
-      const intern = legacy.isInternType(name),
-        porter = legacy.isPorterType(name);
-      const day = legacy.isNADayType(name) || legacy.isPorterDayType(name);
-      const weekday =
-        matron || legacy.isSurgicalNurseDayType(name) || legacy.isCoverageNurseDayType(name);
-      return {
-        id: `role_${createHash("sha256").update(name.toLowerCase()).digest("hex").slice(0, 16)}`,
-        name,
-        patternId: weekday ? "weekdays" : day ? "day_only" : "standard",
-        allowedShifts: coverage
-          ? weekday
-            ? ["M", "MWC"]
-            : ["M", "N", "MWC", "NC"]
-          : weekday || day
-            ? ["M"]
-            : ["M", "N"],
-        category: legacy.isNAType(name)
-          ? "na"
-          : coverage || matron || porter || intern || legacy.isWardSupervisor(name)
-            ? "none"
-            : "nurse",
-        scope: coverage || matron || porter || intern ? "facility" : "ward",
-        approvalGroup: coverage
-          ? "head"
-          : matron
-            ? "matron"
-            : porter
-              ? "porter"
-              : intern
-                ? "intern"
-                : "ward",
-        specialRule: coverage
+  return names.filter((name) => {
+    const key = name.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+function seedRequirements(wards) {
+  const requirements = [];
+  for (const w of wards)
+    for (let weekday = 1; weekday <= 7; weekday++)
+      for (const [shift, category, field] of [
+        ["M", "nurse", "min_morning_nurses"],
+        ["M", "na", "min_morning_na"],
+        ["N", "nurse", "min_night_nurses"],
+        ["N", "na", "min_night_na"],
+      ])
+        requirements.push({
+          wardId: w.id,
+          shift,
+          category,
+          weekday,
+          minimum: w[field],
+          maximum: null,
+        });
+  return requirements;
+}
+const shiftDefinition = (code) => {
+  const s = legacy.SHIFT_TIMES[code];
+  return {
+    code,
+    name: s.label,
+    start: s.start,
+    end: s.end,
+    endDayOffset: ["N", "NC"].includes(code) ? 1 : 0,
+    breakMinutes: 0,
+    creditedMinutes: s.hours * 60,
+    color: { M: "#fbbf24", N: "#818cf8", MWC: "#22d3ee", NC: "#c084fc" }[code],
+  };
+};
+const STANDARD_PATTERNS = [
+  {
+    id: "standard",
+    name: "4 Morning / 4 OFF / 4 Night / 4 OFF",
+    kind: "repeating",
+    steps: [step("M", 4), step("OFF", 4), step("N", 4), step("OFF", 4)],
+  },
+  {
+    id: "day_only",
+    name: "4 Morning / 4 OFF",
+    kind: "repeating",
+    steps: [step("M", 4), step("OFF", 4)],
+  },
+  {
+    id: "weekdays",
+    name: "Weekday mornings",
+    kind: "weekly",
+    steps: ["M", "M", "M", "M", "M", "OFF", "OFF"].map((s) => step(s, 1)),
+  },
+];
+// Shift coverage nurses: 4 mornings, 2 off, 4 nights, 4 off.
+const COVERAGE_SHIFT_PATTERN = {
+  id: "coverage_shift",
+  name: "4 Morning / 2 OFF / 4 Night / 4 OFF",
+  kind: "repeating",
+  steps: [step("M", 4), step("OFF", 2), step("N", 4), step("OFF", 4)],
+};
+// Day coverage nurses work weekday mornings; one covers each weekend with MWC
+// on Saturday and Sunday, OFF the Friday before and the Monday after.
+// 3 January 2026 is a Saturday.
+const weekendCoverageRule = (roleIds) => ({
+  id: "weekend_coverage",
+  name: "Weekend coverage",
+  shift: "MWC",
+  roleIds,
+  anchorDate: "2026-01-03",
+  blockDays: 2,
+  repeatDays: 7,
+  staffPerBlock: 1,
+  restBefore: 1,
+  restAfter: 1,
+});
+
+/**
+ * Default scheduling configuration for a facility, shown on the Scheduling page
+ * until the facility saves its own.
+ *
+ * Lagoon's facilities get Lagoon's rules. Coverage nurses use editable settings:
+ * the coverage_shift pattern for shift coverage nurses, and weekday mornings
+ * with the weekend coverage rule for day coverage nurses. Interns, porters, the
+ * Ikoyi GOPD single night slot and the Oncology/Dialysis weekday wards keep
+ * their retained rules.
+ *
+ * Other hospitals get a plain starting point with no Lagoon rules: their own
+ * staff roles (plus the default Nurse, Nursing Assistant, Matron and Porter),
+ * each with a pattern, and roles they added marked for review.
+ *
+ * `legacyCoverage` reproduces the earlier Lagoon seed, in which coverage nurses
+ * kept the retained coverage rule. The scheduler uses it to check saved
+ * configurations that still use that rule.
+ */
+function seedConfiguration(facility, wards, staffRoles = [], { legacyCoverage = false } = {}) {
+  // A fresh copy: callers edit the result, which must not touch shared patterns.
+  return structuredClone(
+    usesLagoonDefaults(facility.organization_id)
+      ? lagoonConfiguration(facility, wards, staffRoles, legacyCoverage)
+      : newHospitalConfiguration(facility, wards, staffRoles),
+  );
+}
+
+function lagoonConfiguration(facility, wards, staffRoles, legacyCoverage) {
+  const roles = uniqueNames([...BASE_ROLES, ...staffRoles]).map((name) => {
+    const coverage = legacy.isGlobalHead(name),
+      matron = legacy.isMatron(name);
+    const intern = legacy.isInternType(name),
+      porter = legacy.isPorterType(name);
+    const coverageDay = legacy.isCoverageNurseDayType(name);
+    const day = legacy.isNADayType(name) || legacy.isPorterDayType(name);
+    const weekday = matron || legacy.isSurgicalNurseDayType(name) || coverageDay;
+    const configuredCoverage = coverage && !legacyCoverage;
+    return {
+      id: roleId(name),
+      name,
+      patternId: weekday
+        ? "weekdays"
+        : configuredCoverage
+          ? "coverage_shift"
+          : day
+            ? "day_only"
+            : "standard",
+      allowedShifts: coverage
+        ? weekday
+          ? ["M", "MWC"]
+          : configuredCoverage
+            ? ["M", "N"]
+            : ["M", "N", "MWC"]
+        : weekday || day
+          ? ["M"]
+          : ["M", "N"],
+      category: legacy.isNAType(name)
+        ? "na"
+        : coverage || matron || porter || intern || legacy.isWardSupervisor(name)
+          ? "none"
+          : "nurse",
+      scope: coverage || matron || porter || intern ? "facility" : "ward",
+      approvalGroup: coverage
+        ? "head"
+        : matron
+          ? "matron"
+          : porter
+            ? "porter"
+            : intern
+              ? "intern"
+              : "ward",
+      specialRule:
+        coverage && legacyCoverage
           ? "legacy_coverage_v1"
           : intern
             ? "legacy_intern_v1"
             : porter
               ? "legacy_porter_v1"
               : "none",
-        requiresReview: !BASE_ROLES.some((r) => r.toLowerCase() === name.toLowerCase()),
-        useWardPattern: !(coverage || matron || porter || intern || day || weekday),
-        staggerGroup: legacy.isWardSupervisor(name)
+      requiresReview: !BASE_ROLES.some((r) => r.toLowerCase() === name.toLowerCase()),
+      useWardPattern: !(coverage || matron || porter || intern || day || weekday),
+      staggerGroup: configuredCoverage
+        ? coverageDay
+          ? "coverage_day"
+          : "coverage"
+        : legacy.isWardSupervisor(name)
           ? "supervisors"
           : legacy.isSurgicalNurseDayType(name)
             ? "surgical_day"
@@ -308,8 +431,8 @@ function seedConfiguration(facility, wards, staffRoles = []) {
                 ? "na_day"
                 : "na_regular"
               : "regular",
-      };
-    });
+    };
+  });
   const wardPolicies = wards.map((w) => {
     const weekdays = ["oncology", "dialysis"].includes(w.name.trim().toLowerCase());
     const dayOnly = w.min_night_nurses === 0 && w.min_night_na === 0;
@@ -330,62 +453,70 @@ function seedConfiguration(facility, wards, staffRoles = []) {
           : "none",
     };
   });
-  const requirements = [];
-  for (const w of wards)
-    for (let weekday = 1; weekday <= 7; weekday++) {
-      for (const [shift, category, field] of [
-        ["M", "nurse", "min_morning_nurses"],
-        ["M", "na", "min_morning_na"],
-        ["N", "nurse", "min_night_nurses"],
-        ["N", "na", "min_night_na"],
-      ]) {
-        requirements.push({
-          wardId: w.id,
-          shift,
-          category,
-          weekday,
-          minimum: w[field],
-          maximum: null,
-        });
-      }
-    }
+  // The weekend rule is added for facilities with day coverage staff; with
+  // nobody to rotate it would report a gap every weekend.
+  const dayCoverageRoles = legacyCoverage
+    ? []
+    : roles
+        .filter(
+          (r) =>
+            legacy.isCoverageNurseDayType(r.name) &&
+            staffRoles.some((name) => name.toLowerCase() === r.name.toLowerCase()),
+        )
+        .map((r) => r.id);
   return {
     schemaVersion: 1,
     timezone: facility.timezone,
     periodDays: 28,
-    shifts: Object.entries(legacy.SHIFT_TIMES).map(([code, s]) => ({
-      code,
-      name: s.label,
-      start: s.start,
-      end: s.end,
-      endDayOffset: ["N", "NC"].includes(code) ? 1 : 0,
-      breakMinutes: 0,
-      creditedMinutes: s.hours * 60,
-      color: { M: "#fbbf24", N: "#818cf8", MWC: "#22d3ee", NC: "#c084fc" }[code],
-    })),
-    patterns: [
-      {
-        id: "standard",
-        name: "4 Morning / 4 OFF / 4 Night / 4 OFF",
-        kind: "repeating",
-        steps: [step("M", 4), step("OFF", 4), step("N", 4), step("OFF", 4)],
-      },
-      {
-        id: "day_only",
-        name: "4 Morning / 4 OFF",
-        kind: "repeating",
-        steps: [step("M", 4), step("OFF", 4)],
-      },
-      {
-        id: "weekdays",
-        name: "Weekday mornings",
-        kind: "weekly",
-        steps: ["M", "M", "M", "M", "M", "OFF", "OFF"].map((s) => step(s, 1)),
-      },
-    ],
+    // NC stays defined so earlier rotas keep their times and hours; no role
+    // is scheduled on it.
+    shifts: Object.keys(legacy.SHIFT_TIMES).map(shiftDefinition),
+    patterns: legacyCoverage ? STANDARD_PATTERNS : [...STANDARD_PATTERNS, COVERAGE_SHIFT_PATTERN],
     roles,
     wardPolicies,
-    requirements,
+    requirements: seedRequirements(wards),
+    ...(dayCoverageRoles.length ? { coverageRules: [weekendCoverageRule(dayCoverageRoles)] } : {}),
+  };
+}
+
+function newHospitalConfiguration(facility, wards, staffRoles) {
+  const roles = uniqueNames([...NEW_HOSPITAL_ROLES, ...staffRoles]).map((name) => {
+    const matron = legacy.isMatron(name),
+      porter = legacy.isPorterType(name),
+      na = legacy.isNAType(name);
+    const facilityWide = matron || porter;
+    return {
+      id: roleId(name),
+      name,
+      patternId: matron ? "weekdays" : "standard",
+      allowedShifts: matron ? ["M"] : ["M", "N"],
+      category: facilityWide ? "none" : na ? "na" : "nurse",
+      scope: facilityWide ? "facility" : "ward",
+      approvalGroup: matron ? "matron" : porter ? "porter" : "ward",
+      specialRule: "none",
+      requiresReview: !NEW_HOSPITAL_ROLES.some((r) => r.toLowerCase() === name.toLowerCase()),
+      useWardPattern: !facilityWide,
+      staggerGroup: na ? "na_regular" : "regular",
+    };
+  });
+  return {
+    schemaVersion: 1,
+    timezone: facility.timezone,
+    periodDays: 28,
+    shifts: ["M", "N"].map(shiftDefinition),
+    patterns: STANDARD_PATTERNS,
+    roles,
+    wardPolicies: wards.map((w) => {
+      const dayOnly = w.min_night_nurses === 0 && w.min_night_na === 0;
+      return {
+        wardId: w.id,
+        fixedWeeklyPatternId: null,
+        patternId: dayOnly ? "day_only" : "standard",
+        naPatternId: w.min_night_na === 0 || dayOnly ? "day_only" : "standard",
+        specialRule: "none",
+      };
+    }),
+    requirements: seedRequirements(wards),
   };
 }
 

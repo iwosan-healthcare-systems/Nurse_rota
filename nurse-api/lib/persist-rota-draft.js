@@ -6,7 +6,7 @@ async function persistRotaDraft(
   { nurseIds, startDate, endDate, assignments, actorName, runId = null, onlyIfEmpty = false },
 ) {
   const ids = [...new Set(nurseIds)].sort();
-  if (!runId) await guardLegacyGeneration(db, ids, endDate);
+  if (!runId) await guardLegacyGeneration(db, ids, endDate, null, { generation: true });
   else
     await db.query(
       `UPDATE scheduling_facilities f SET policy_revision=policy_revision
