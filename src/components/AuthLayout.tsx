@@ -95,7 +95,7 @@ function VisionVideo({ className = "" }: { className?: string }) {
         autoPlay={!reduced}
         preload="auto"
         aria-label="Iwosan Healthcare Systems: our vision and values"
-        className="block aspect-[800/368] w-full object-cover"
+        className="block aspect-800/368 w-full object-cover"
       />
     </figure>
   );
