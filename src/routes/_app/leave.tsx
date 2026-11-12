@@ -2630,16 +2630,18 @@ function ShiftSwitchModal({ onClose }: { onClose: () => void }) {
       (a) => a?.shift_definition_run_id || a?.scheduling_run_id,
     );
     if (configured) {
+      // One side may come from a location still on the built-in rota; the
+      // API attaches built-in shift times, so the rest check below covers both.
       if (!currentA || !currentB)
-        return toast.error("Reload both published duties before requesting this switch");
-      if (
-        !(currentA.shift_definition_run_id || currentA.scheduling_run_id) ||
-        !(currentB.shift_definition_run_id || currentB.scheduling_run_id)
-      )
-        return toast.error("Both duties must use configured schedules for this switch");
+        return toast.error("Both nurses need a published duty on this date for this switch");
       if (!currentA.ward !== !currentB.ward)
         return toast.error("Both duties must be ward duties, or both facility-wide duties");
-      if (shiftA !== "LEAVE" && switchType === "same-ward" && currentA.ward !== currentB.ward)
+      if (
+        shiftA !== "LEAVE" &&
+        !otherLocation &&
+        switchType === "same-ward" &&
+        currentA.ward !== currentB.ward
+      )
         return toast.error("Choose an inter-ward switch for duties in different wards");
       if (shiftB === "LEAVE") return toast.error("Nurse B is on leave on this date");
       if (shiftA === "LEAVE" && !currentA.pre_leave_shift)

@@ -956,19 +956,64 @@ function RotaPage() {
     return map;
   }, [facilityFilteredWards, assignments, nurses, effectiveFacility]);
 
-  // Staff with shifts for the rest of this period (from today, or the start for
-  // a future period). Staff returned to the rota keep the days they worked before
-  // leaving, so "has any shift" would wrongly count them as scheduled.
-  const remainingAssignments = useMemo(() => {
-    const today = todayYmd();
+  // First date each active staff member still needs shifts from this period:
+  // the day after their last shift (never before today), or today / the period
+  // start when they have none. Staff returned to the rota keep their shifts up
+  // to the exit date, which may be later this month, so "has a shift from today"
+  // would wrongly count them as scheduled. Absent = scheduled to the period end.
+  const gapStartById = useMemo(() => {
+    const result = new Map<string, string>();
     const end = ymd(endDate);
-    const from = today > end ? null : today > ymd(startDate) ? today : ymd(startDate);
-    return from ? assignments.filter((a) => a.shift_date.slice(0, 10) >= from) : assignments;
-  }, [assignments, startDate, endDate]);
+    const today = todayYmd();
+    const from = today > ymd(startDate) ? today : ymd(startDate);
+    if (from > end) return result;
+    const last = new Map<string, string>();
+    for (const a of assignments) {
+      const d = a.shift_date.slice(0, 10);
+      if (d > (last.get(a.nurse_id) ?? "")) last.set(a.nurse_id, d);
+    }
+    for (const n of nurses) {
+      const l = last.get(n.id);
+      if (l && l >= end) continue;
+      if (!l) {
+        result.set(n.id, from);
+        continue;
+      }
+      const next = new Date(`${l}T00:00:00Z`);
+      next.setUTCDate(next.getUTCDate() + 1);
+      const nextYmd = next.toISOString().slice(0, 10);
+      result.set(n.id, nextYmd > from ? nextYmd : from);
+    }
+    return result;
+  }, [assignments, nurses, startDate, endDate]);
   const scheduledIds = useMemo(
-    () => new Set(remainingAssignments.map((a) => a.nurse_id)),
-    [remainingAssignments],
+    () => new Set(nurses.filter((n) => !gapStartById.has(n.id)).map((n) => n.id)),
+    [nurses, gapStartById],
   );
+  // Staff whose drafts all come after their reviewed shifts: new staff, or
+  // returned staff whose new days follow the shifts kept up to their exit date.
+  const draftTailIds = useMemo(() => {
+    const lastReviewed = new Map<string, string>();
+    const firstDraft = new Map<string, string>();
+    for (const a of assignments) {
+      const d = a.shift_date.slice(0, 10);
+      if (a.status === "draft") {
+        if (d < (firstDraft.get(a.nurse_id) ?? "9999")) firstDraft.set(a.nurse_id, d);
+      } else if (d > (lastReviewed.get(a.nurse_id) ?? "")) lastReviewed.set(a.nurse_id, d);
+    }
+    return new Set(
+      [...firstDraft].filter(([id, d]) => d > (lastReviewed.get(id) ?? "")).map(([id]) => id),
+    );
+  }, [assignments]);
+  // Groups staff by the first date they need shifts from (one generation call each).
+  const groupByGapStart = (ids: string[]) => {
+    const groups = new Map<string, string[]>();
+    for (const id of ids) {
+      const from = gapStartById.get(id);
+      if (from) groups.set(from, [...(groups.get(from) ?? []), id]);
+    }
+    return groups;
+  };
 
   // Nurses in the selected ward with no shifts for the rest of the period —
   // i.e. newly added or returned staff that need their own schedule generated.
@@ -992,12 +1037,6 @@ function RotaPage() {
   // are submitted into the normal review path.
   const newStaffWithDraft = useMemo(() => {
     if (!selectedWard) return [];
-    const nonDraftNurseIds = new Set(
-      remainingAssignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
-    );
-    const draftNurseIds = new Set(
-      remainingAssignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
-    );
     return nurses.filter(
       (n) =>
         n.facility === effectiveFacility &&
@@ -1006,10 +1045,9 @@ function RotaPage() {
         !isPorterType(n.role, n.facility) &&
         !isInternType(n.role, n.facility) &&
         parseWards(n.ward)[0] === selectedWard &&
-        draftNurseIds.has(n.id) &&
-        !nonDraftNurseIds.has(n.id),
+        draftTailIds.has(n.id),
     );
-  }, [selectedWard, remainingAssignments, nurses, effectiveFacility]);
+  }, [selectedWard, draftTailIds, nurses, effectiveFacility]);
 
   // Facility-wide role cards: Matron, Coverage Nurse, Porter, Nurse Intern.
   // Each card has a stable key and a count of staff in that group.
@@ -1100,12 +1138,6 @@ function RotaPage() {
   const draftOnlyFwMap = useMemo(() => {
     if (!canScheduleNewStaff || !effectiveFacility)
       return new Map<FacilityWideGroup, typeof nurses>();
-    const nonDraftIds = new Set(
-      remainingAssignments.filter((a) => a.status !== "draft").map((a) => a.nurse_id),
-    );
-    const draftIds = new Set(
-      remainingAssignments.filter((a) => a.status === "draft").map((a) => a.nurse_id),
-    );
     const fac = nurses.filter((n) => n.facility === effectiveFacility);
     const getGroup = (key: FacilityWideGroup) => {
       if (key === "matron") return fac.filter((n) => isMatron(n.role, n.facility));
@@ -1116,12 +1148,12 @@ function RotaPage() {
     const result = new Map<FacilityWideGroup, typeof nurses>();
     for (const key of ["matron", "head", "porter", "intern"] as FacilityWideGroup[]) {
       if (facilityWideStatusMap[key] !== "none") {
-        const draftOnly = getGroup(key).filter((n) => draftIds.has(n.id) && !nonDraftIds.has(n.id));
+        const draftOnly = getGroup(key).filter((n) => draftTailIds.has(n.id));
         if (draftOnly.length) result.set(key, draftOnly);
       }
     }
     return result;
-  }, [canScheduleNewStaff, effectiveFacility, remainingAssignments, nurses, facilityWideStatusMap]);
+  }, [canScheduleNewStaff, effectiveFacility, draftTailIds, nurses, facilityWideStatusMap]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
   function openGenDialog() {
@@ -1517,14 +1549,14 @@ function RotaPage() {
     if (!allWardNurses.length) return;
 
     if (await usesSavedRules(effectiveFacility)) {
-      await generateWithSavedRules(
-        {
-          facility: effectiveFacility,
-          nurseIds: unscheduledWardNurses.map((n) => n.id),
-          fromDate: today > ymd(startDate) ? today : ymd(startDate),
-        },
-        unscheduledWardNurses.map((n) => n.name).join(", "),
-      );
+      for (const [fromDate, nurseIds] of groupByGapStart(unscheduledWardNurses.map((n) => n.id)))
+        await generateWithSavedRules(
+          { facility: effectiveFacility, nurseIds, fromDate },
+          unscheduledWardNurses
+            .filter((n) => nurseIds.includes(n.id))
+            .map((n) => n.name)
+            .join(", "),
+        );
       return;
     }
 
@@ -1582,17 +1614,24 @@ function RotaPage() {
       // Only keep generated assignments for the target nurses, from today onward
       // and never beyond the period end (hard cap prevents off-by-one overshoot).
       const targetDraft = draft.filter(
-        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today && d.shift_date <= periodEnd,
+        (d) =>
+          targetIds.has(d.nurse_id) &&
+          d.shift_date >= (gapStartById.get(d.nurse_id) ?? "9999-12-31") &&
+          d.shift_date <= periodEnd,
       );
 
       // Clear any stale draft assignments for target nurses in the remaining window
       const targetIdList = Array.from(targetIds);
-      for (let i = 0; i < targetIdList.length; i += 100) {
-        await api
-          .del(
-            `/shift-assignments?nurse_ids=${targetIdList.slice(i, i + 100).join(",")}&from=${today}&to=${periodEnd}&neq_status=published`,
-          )
-          .catch(() => {});
+      // Clear stale drafts only from each nurse's first open date, keeping the
+      // shifts a returned nurse still has up to their exit date.
+      for (const [from, ids] of groupByGapStart(targetIdList)) {
+        for (let i = 0; i < ids.length; i += 100) {
+          await api
+            .del(
+              `/shift-assignments?nurse_ids=${ids.slice(i, i + 100).join(",")}&from=${from}&to=${periodEnd}&neq_status=published`,
+            )
+            .catch(() => {});
+        }
       }
 
       // Skip any published slots
@@ -1664,15 +1703,14 @@ function RotaPage() {
   ) {
     if (!effectiveFacility || !canScheduleNewStaff || !targetNurses.length) return;
     if (await usesSavedRules(effectiveFacility)) {
-      const today = todayYmd();
-      await generateWithSavedRules(
-        {
-          facility: effectiveFacility,
-          nurseIds: targetNurses.map((n) => n.id),
-          fromDate: today > ymd(startDate) ? today : ymd(startDate),
-        },
-        targetNurses.map((n) => n.name).join(", "),
-      );
+      for (const [fromDate, nurseIds] of groupByGapStart(targetNurses.map((n) => n.id)))
+        await generateWithSavedRules(
+          { facility: effectiveFacility, nurseIds, fromDate },
+          targetNurses
+            .filter((n) => nurseIds.includes(n.id))
+            .map((n) => n.name)
+            .join(", "),
+        );
       return;
     }
     setBusy(true);
@@ -1738,16 +1776,23 @@ function RotaPage() {
       const targetIds = new Set(targetNurses.map((n) => n.id));
       // Cap at periodEnd — never generate beyond the current schedule window.
       const targetDraft = draft.filter(
-        (d) => targetIds.has(d.nurse_id) && d.shift_date >= today && d.shift_date <= periodEnd,
+        (d) =>
+          targetIds.has(d.nurse_id) &&
+          d.shift_date >= (gapStartById.get(d.nurse_id) ?? "9999-12-31") &&
+          d.shift_date <= periodEnd,
       );
 
       const targetIdList = Array.from(targetIds);
-      for (let i = 0; i < targetIdList.length; i += 100) {
-        await api
-          .del(
-            `/shift-assignments?nurse_ids=${targetIdList.slice(i, i + 100).join(",")}&from=${today}&to=${periodEnd}&neq_status=published`,
-          )
-          .catch(() => {});
+      // Clear stale drafts only from each nurse's first open date, keeping the
+      // shifts a returned nurse still has up to their exit date.
+      for (const [from, ids] of groupByGapStart(targetIdList)) {
+        for (let i = 0; i < ids.length; i += 100) {
+          await api
+            .del(
+              `/shift-assignments?nurse_ids=${ids.slice(i, i + 100).join(",")}&from=${from}&to=${periodEnd}&neq_status=published`,
+            )
+            .catch(() => {});
+        }
       }
 
       const pubRows = await api
