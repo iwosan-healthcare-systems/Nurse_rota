@@ -2,7 +2,7 @@ import { createFileRoute, useNavigate, Link, redirect } from "@tanstack/react-ro
 import { useEffect, useState, type FormEvent } from "react";
 import { api, getToken } from "@/lib/api";
 import { Loader2, Eye, EyeOff, ArrowLeft } from "lucide-react";
-import logo from "@/assets/logo.jpeg";
+import { AuthLayout } from "@/components/AuthLayout";
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/forgot-password")({
@@ -76,177 +76,132 @@ function ForgotPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen grid lg:grid-cols-2 bg-background">
-      <div className="hidden lg:flex flex-col justify-between p-12 bg-sidebar text-sidebar-foreground">
-        <div className="flex items-center gap-3">
-          <div className="h-12 w-12 rounded-lg bg-white grid place-items-center overflow-hidden">
-            <img
-              src={logo}
-              alt="Iwosan Lagoon Hospitals"
-              className="h-full w-full object-contain"
-            />
-          </div>
-          <div>
-            <p className="font-bold">Nurses Rota</p>
-            <p className="text-xs text-sidebar-foreground/60">Iwosan Lagoon Hospitals</p>
-          </div>
-        </div>
-        <div>
-          <h1 className="text-4xl font-bold leading-tight">Safer staffing, automated.</h1>
-          <p className="mt-4 text-sidebar-foreground/70 max-w-md">
-            Automated rota generation, ward safety rules, leave management and a layered approval
-            workflow — built for the nursing department.
-          </p>
-        </div>
-        <p className="text-xs text-sidebar-foreground/50">
-          Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights
-          reserved.
-        </p>
-      </div>
+    <AuthLayout>
+      <div className="rounded-2xl border bg-card/90 p-6 shadow-soft backdrop-blur sm:p-8">
+        <Link
+          to="/login"
+          className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-4"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
+        </Link>
 
-      <div className="flex items-center justify-center p-6">
-        <div className="w-full max-w-sm">
-          <div className="lg:hidden flex items-center gap-2.5 mb-8">
-            <div className="h-12 w-12 rounded-lg bg-white grid place-items-center overflow-hidden border">
-              <img
-                src={logo}
-                alt="Iwosan Lagoon Hospitals"
-                className="h-full w-full object-contain"
-              />
-            </div>
-            <p className="font-bold text-lg">Nurses Rota</p>
-          </div>
+        {step === "email" ? (
+          <>
+            <h2 className="text-2xl font-bold">Reset your password</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              Enter the email on your account and we'll send you a code to reset your password.
+            </p>
 
-          <Link
-            to="/login"
-            className="inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground mb-4"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" /> Back to sign in
-          </Link>
+            <form onSubmit={submitEmail} className="space-y-4 mt-6">
+              <div>
+                <label htmlFor="fp-email" className="text-sm font-medium">
+                  Email
+                </label>
+                <input
+                  id="fp-email"
+                  required
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <button
+                disabled={busy}
+                type="submit"
+                className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                Send reset code
+              </button>
+            </form>
+          </>
+        ) : (
+          <>
+            <h2 className="text-2xl font-bold">Enter your code</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              If an account exists for <span className="font-medium">{email}</span>, a 6-digit code
+              was sent to it. It expires in 5 minutes.
+            </p>
 
-          {step === "email" ? (
-            <>
-              <h2 className="text-2xl font-bold">Reset your password</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                Enter the email on your account and we'll send you a code to reset your password.
-              </p>
-
-              <form onSubmit={submitEmail} className="space-y-4 mt-6">
-                <div>
-                  <label htmlFor="fp-email" className="text-sm font-medium">
-                    Email
-                  </label>
+            <form onSubmit={submitReset} className="space-y-4 mt-6">
+              <div>
+                <label htmlFor="fp-otp" className="text-sm font-medium">
+                  Reset code
+                </label>
+                <input
+                  id="fp-otp"
+                  required
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  placeholder="123456"
+                  value={otp}
+                  onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                  className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm tracking-[0.3em] outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <div>
+                <label htmlFor="fp-new-password" className="text-sm font-medium">
+                  New password
+                </label>
+                <div className="relative mt-1">
                   <input
-                    id="fp-email"
-                    required
-                    type="email"
-                    autoComplete="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <button
-                  disabled={busy}
-                  type="submit"
-                  className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                >
-                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Send reset code
-                </button>
-              </form>
-            </>
-          ) : (
-            <>
-              <h2 className="text-2xl font-bold">Enter your code</h2>
-              <p className="text-sm text-muted-foreground mt-1">
-                If an account exists for <span className="font-medium">{email}</span>, a 6-digit
-                code was sent to it. It expires in 5 minutes.
-              </p>
-
-              <form onSubmit={submitReset} className="space-y-4 mt-6">
-                <div>
-                  <label htmlFor="fp-otp" className="text-sm font-medium">
-                    Reset code
-                  </label>
-                  <input
-                    id="fp-otp"
-                    required
-                    type="text"
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    maxLength={6}
-                    placeholder="123456"
-                    value={otp}
-                    onChange={(e) => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                    className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm tracking-[0.3em] outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <div>
-                  <label htmlFor="fp-new-password" className="text-sm font-medium">
-                    New password
-                  </label>
-                  <div className="relative mt-1">
-                    <input
-                      id="fp-new-password"
-                      type={showPassword ? "text" : "password"}
-                      required
-                      minLength={minPasswordLength}
-                      autoComplete="new-password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      className="w-full h-10 px-3 pr-9 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPassword((v) => !v)}
-                      aria-label={showPassword ? "Hide password" : "Show password"}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                    >
-                      {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label htmlFor="fp-confirm-password" className="text-sm font-medium">
-                    Confirm new password
-                  </label>
-                  <input
-                    id="fp-confirm-password"
+                    id="fp-new-password"
                     type={showPassword ? "text" : "password"}
                     required
                     minLength={minPasswordLength}
                     autoComplete="new-password"
-                    value={confirmPassword}
-                    onChange={(e) => setConfirmPassword(e.target.value)}
-                    className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full h-10 px-3 pr-9 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
                   />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
                 </div>
-                <button
-                  disabled={busy}
-                  type="submit"
-                  className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-2"
-                >
-                  {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Reset password
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setStep("email")}
-                  className="w-full text-xs text-muted-foreground hover:text-foreground"
-                >
-                  Use a different email or resend code
-                </button>
-              </form>
-            </>
-          )}
-
-          <p className="lg:hidden text-xs text-muted-foreground text-center mt-8">
-            Powered by Iwosan Healthcare Systems. <br />© {new Date().getFullYear()}. All rights
-            reserved.
-          </p>
-        </div>
+              </div>
+              <div>
+                <label htmlFor="fp-confirm-password" className="text-sm font-medium">
+                  Confirm new password
+                </label>
+                <input
+                  id="fp-confirm-password"
+                  type={showPassword ? "text" : "password"}
+                  required
+                  minLength={minPasswordLength}
+                  autoComplete="new-password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="mt-1 w-full h-10 px-3 rounded-md border bg-card text-sm outline-none focus:ring-2 focus:ring-ring"
+                />
+              </div>
+              <button
+                disabled={busy}
+                type="submit"
+                className="w-full h-10 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary/90 disabled:opacity-60 inline-flex items-center justify-center gap-2"
+              >
+                {busy && <Loader2 className="h-4 w-4 animate-spin" />}
+                Reset password
+              </button>
+              <button
+                type="button"
+                onClick={() => setStep("email")}
+                className="w-full text-xs text-muted-foreground hover:text-foreground"
+              >
+                Use a different email or resend code
+              </button>
+            </form>
+          </>
+        )}
       </div>
-    </div>
+    </AuthLayout>
   );
 }

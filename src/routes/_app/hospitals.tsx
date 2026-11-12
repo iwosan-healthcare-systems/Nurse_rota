@@ -19,7 +19,7 @@ import { useAuth } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { HospitalSetupWizard } from "@/components/hospitals/HospitalSetupWizard";
 import { HospitalLogoField } from "@/components/hospitals/HospitalLogoField";
-import appLogo from "@/assets/logo.jpeg";
+import { defaultHospitalLogo } from "@/lib/brand-assets";
 
 export const Route = createFileRoute("/_app/hospitals")({
   head: () => ({ meta: [{ title: "Hospitals — Nurses Rota" }] }),
@@ -202,7 +202,7 @@ function HospitalsPage() {
                   <div className="flex items-start gap-3">
                     <div className="grid h-14 w-14 shrink-0 place-items-center overflow-hidden rounded-lg border bg-white">
                       <img
-                        src={h.logo || appLogo}
+                        src={h.logo || defaultHospitalLogo(h.id)}
                         alt={`${h.name} logo`}
                         className="h-full w-full object-contain"
                       />
@@ -275,6 +275,7 @@ function HospitalsPage() {
                     <div className="rounded-lg border p-3">
                       <HospitalLogoField
                         value={h.logo}
+                        hospitalId={h.id}
                         disabled={busy}
                         onChange={(logo) =>
                           run(

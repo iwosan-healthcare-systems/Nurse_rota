@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, getToken } from "@/lib/api";
-import appLogo from "@/assets/logo.jpeg";
+import { defaultHospitalLogo } from "@/lib/brand-assets";
 
 export type MyHospitals = {
   hospitals: { id: string; name: string; is_active?: boolean }[];
@@ -19,12 +19,13 @@ export function useMyHospitals(enabled = true) {
   });
 }
 
-// The current hospital's logo and name; the application's logo when it has none.
+// The current hospital's logo and name. Without its own logo, Lagoon shows the
+// Lagoon logo and every other hospital the Iwosan mark.
 export function useHospitalBranding() {
   const { data } = useMyHospitals();
   const current = data?.hospitals.find((h) => h.id === data.current_hospital_id);
   return {
-    logo: data?.current_logo || appLogo,
+    logo: data?.current_logo || defaultHospitalLogo(data?.current_hospital_id),
     name: current?.name ?? "Nurses Rota",
     hasOwnLogo: !!data?.current_logo,
   };

@@ -2,21 +2,24 @@ import { useRef, useState } from "react";
 import { ImagePlus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { readLogoFile } from "@/lib/hospital-branding";
-import appLogo from "@/assets/logo.jpeg";
+import { defaultHospitalLogo } from "@/lib/brand-assets";
 
 // Preview plus upload/remove for a hospital logo. Without one, staff see the
-// application's general logo.
+// default: the Lagoon logo for Lagoon, the Iwosan mark for everyone else.
 export function HospitalLogoField({
   value,
   onChange,
   disabled = false,
   label = "Hospital logo",
+  hospitalId = null,
 }: {
   value: string | null;
   onChange: (logo: string | null) => void | Promise<void>;
   disabled?: boolean;
   label?: string;
+  hospitalId?: string | null;
 }) {
+  const appLogo = defaultHospitalLogo(hospitalId);
   const input = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   return (

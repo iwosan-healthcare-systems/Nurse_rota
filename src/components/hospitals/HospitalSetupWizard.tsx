@@ -593,7 +593,12 @@ export function HospitalSetupWizard({
             />
           </label>
           <div className="sm:col-span-2">
-            <HospitalLogoField value={logo} onChange={setLogo} label="Hospital logo (optional)" />
+            <HospitalLogoField
+              value={logo}
+              onChange={setLogo}
+              hospitalId={editHospitalId}
+              label="Hospital logo (optional)"
+            />
           </div>
           {editing ? (
             <p className="text-sm text-muted-foreground sm:col-span-2">

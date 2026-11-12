@@ -1631,7 +1631,12 @@ function HospitalBrandingSettings() {
       {isPending ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
       ) : (
-        <HospitalLogoField value={data?.current_logo ?? null} disabled={saving} onChange={save} />
+        <HospitalLogoField
+          value={data?.current_logo ?? null}
+          hospitalId={data?.current_hospital_id}
+          disabled={saving}
+          onChange={save}
+        />
       )}
     </div>
   );

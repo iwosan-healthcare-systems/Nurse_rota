@@ -176,3 +176,38 @@
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
 }
+
+/* Landing page: vision icons drifting gently around the page. Each element sets
+   its own --dur, --delay, --dx, --dy and rotation so they never move in step. */
+@keyframes brand-float {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) rotate(var(--r0, -4deg));
+  }
+  50% {
+    transform: translate3d(var(--dx, 10px), var(--dy, -22px), 0) rotate(var(--r1, 5deg));
+  }
+}
+.brand-float {
+  animation: brand-float var(--dur, 9s) ease-in-out var(--delay, 0s) infinite;
+  will-change: transform;
+}
+@keyframes brand-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.brand-rise {
+  animation: brand-rise 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) var(--delay, 0s) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-float,
+  .brand-rise {
+    animation: none;
+  }
+}
