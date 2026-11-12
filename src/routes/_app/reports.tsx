@@ -61,7 +61,7 @@ import { isGlobalHead, isInternType, isMatron, isPorterType } from "@/lib/role-g
 import { Pagination, usePagination } from "@/components/Pagination";
 import { FacilityChips } from "@/components/FacilityChips";
 import { CategoryChartCard, type CategoryDatum } from "@/components/CategoryChartCard";
-import { colorForLeaveType, colorForKey } from "@/lib/chart-colors";
+import { colorForLeaveType, colorForKey, CHART_SERIES_VARS } from "@/lib/chart-colors";
 import { DateRangeFilter, type DateRangeFilterValue } from "@/components/DateRangeFilter";
 
 type ReportsTab =
@@ -878,55 +878,60 @@ function ReportsContent() {
   );
 
   // ── Overview charts ──────────────────────────────────────────────────────
-  // Hours by category (current period, non-overlapping): worked hours already
-  // include leave-credited hours (see nurseHoursMap above), so leave is
-  // subtracted back out to keep the four slices additive.
-  const hoursByCategoryData: CategoryDatum[] = useMemo(() => {
-    const leaveTotal = [...leaveHoursMap.values()].reduce((s, h) => s + h, 0);
-    const regularTotal = Math.max(totalLoggedHours - leaveTotal, 0);
-    const swapTotal = [...swapHoursMap.values()].reduce((s, h) => s + h, 0);
-    if (!livePeriod) return [];
-    const locumPeriodTotal = locumShiftLogs
-      .filter(
-        (l) =>
-          scopedNurseIds.has(l.nurse_id) &&
-          l.shift_date.slice(0, 10) >= livePeriod.start &&
-          l.shift_date.slice(0, 10) <= livePeriod.end,
-      )
-      .reduce((s, l) => s + (l.hours_logged != null ? Number(l.hours_logged) : 0), 0);
-    const order = ["Regular", "Locum", "Additional (Swap)", "Leave Credited"];
-    return [
-      { key: "Regular", label: "Regular", value: regularTotal },
-      { key: "Locum", label: "Locum", value: locumPeriodTotal },
-      { key: "Additional (Swap)", label: "Additional (Swap)", value: swapTotal },
-      { key: "Leave Credited", label: "Leave Credited", value: leaveTotal },
-    ]
-      .filter((d) => d.value > 0)
-      .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
-  }, [totalLoggedHours, leaveHoursMap, swapHoursMap, locumShiftLogs, scopedNurseIds, livePeriod]);
-
-  // Missed shifts by type (current period), Roster vs Locum
-  const missedByTypeData: CategoryDatum[] = useMemo(() => {
-    if (!livePeriod) return [];
-    let roster = 0;
-    let locum = 0;
-    for (const l of scopedMissedLogs) {
-      if (
-        l.shift_date.slice(0, 10) < livePeriod.start ||
-        l.shift_date.slice(0, 10) > livePeriod.end
-      )
-        continue;
-      if (l.is_locum) locum++;
-      else roster++;
+  // Hours per rota period: the last six periods, oldest first. Closed periods
+  // come from the saved period summaries; the current period uses the live
+  // total shown in the "Shift Hours (period)" card. One measure over time, so
+  // every bar shares one color.
+  const hoursPerPeriodData: CategoryDatum[] = useMemo(() => {
+    const totals = new Map<string, number>();
+    for (const p of scopedPeriodSummaries) {
+      const start = p.period_start.slice(0, 10);
+      totals.set(start, (totals.get(start) ?? 0) + Number(p.total_hours ?? 0));
     }
-    const order = ["Roster", "Locum"];
-    return [
-      { key: "Roster", label: "Roster", value: roster },
-      { key: "Locum", label: "Locum", value: locum },
-    ]
-      .filter((d) => d.value > 0)
-      .map((d) => ({ ...d, color: colorForKey(d.key, order) }));
-  }, [scopedMissedLogs, livePeriod]);
+    if (livePeriod && !totals.has(livePeriod.start)) totals.set(livePeriod.start, totalLoggedHours);
+    const label = (start: string) => {
+      const date = new Date(`${start}T00:00:00`);
+      // Calendar-month periods read as the month; legacy 28-day periods by start date.
+      return start.endsWith("-01")
+        ? date.toLocaleDateString("en-GB", { month: "short", year: "numeric" })
+        : `From ${date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}`;
+    };
+    return [...totals.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .slice(-6)
+      .map(([start, hours]) => ({
+        key: start,
+        label: start === livePeriod?.start ? `${label(start)} (current)` : label(start),
+        value: Math.round(hours * 10) / 10,
+        color: CHART_SERIES_VARS[0],
+      }));
+  }, [scopedPeriodSummaries, livePeriod, totalLoggedHours]);
+
+  // Missed shifts in the current period by facility, or by ward when one
+  // facility is selected (matching the Staff chart beside it).
+  const missedByGroupData: CategoryDatum[] = useMemo(() => {
+    if (!livePeriod) return [];
+    const nurseById = new Map(nurses.map((n) => [n.id, n]));
+    const counts = new Map<string, number>();
+    for (const l of scopedMissedLogs) {
+      const date = l.shift_date.slice(0, 10);
+      if (date < livePeriod.start || date > livePeriod.end) continue;
+      const nurse = nurseById.get(l.nurse_id);
+      const group = reportFacility
+        ? nurse?.ward?.split("|")[0]?.trim() || "Unassigned"
+        : (nurse?.facility ?? "Unassigned");
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
+    const order = reportFacility ? [...counts.keys()].sort() : [...FACILITIES, "Unassigned"];
+    return [...counts.entries()]
+      .map(([group, count]) => ({
+        key: group,
+        label: group,
+        value: count,
+        color: colorForKey(group, order),
+      }))
+      .sort((a, b) => b.value - a.value);
+  }, [scopedMissedLogs, livePeriod, nurses, reportFacility, FACILITIES]);
 
   // Approved leave by type, all time within current facility scope
   const leaveByTypeData: CategoryDatum[] = useMemo(() => {
@@ -1875,12 +1880,13 @@ ${sections}
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <CategoryChartCard
-              title="Hours by Category"
-              subtitle="Current period — regular, locum, additional and leave-credited hours"
-              data={hoursByCategoryData}
+              title="Hours per Period"
+              subtitle="Shift hours worked in each of the last six rota periods"
+              data={hoursPerPeriodData}
               emptyMessage="No hours logged yet."
               valueLabel="hours"
               formatValue={(v) => v.toFixed(1)}
+              defaultView="bar"
             />
             <CategoryChartCard
               title="Leave by Type"
@@ -1900,11 +1906,16 @@ ${sections}
               defaultView="bar"
             />
             <CategoryChartCard
-              title="Missed Shifts by Type"
-              subtitle="Current period — roster vs locum"
-              data={missedByTypeData}
+              title={reportFacility ? "Missed Shifts by Ward" : "Missed Shifts by Facility"}
+              subtitle={
+                reportFacility
+                  ? `${reportFacility} — current period`
+                  : "Current period — missed shifts per facility"
+              }
+              data={missedByGroupData}
               emptyMessage="No missed shifts in the current period."
               valueLabel="shift(s)"
+              defaultView="bar"
             />
           </div>
         </>
