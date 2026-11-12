@@ -35,6 +35,16 @@ import {
   Hospital,
 } from "lucide-react";
 import { useHospitalBranding, useMyHospitals } from "@/lib/hospital-branding";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { cn } from "@/lib/utils";
 import { useAuth, type AppRole, type SystemRole } from "@/lib/auth-context";
 import { api, getToken } from "@/lib/api";
@@ -94,6 +104,16 @@ const nav = [
   { to: "/hospitals", label: "Hospitals", icon: Hospital, roles: ["admin"] as AppRole[] },
 ] as const;
 
+// The hospital's logo, or a neutral shimmer while a hospital this browser has
+// not shown before is loading (never a placeholder logo that then changes).
+function BrandingLogo({ branding }: { branding: { logo: string | null; name: string } }) {
+  return branding.logo ? (
+    <img src={branding.logo} alt={branding.name} className="h-full w-full object-contain" />
+  ) : (
+    <span aria-hidden className="h-full w-full animate-pulse bg-muted" />
+  );
+}
+
 // Current hospital, with a switcher when the user can work in more than one.
 function HospitalSwitcher({
   enabled,
@@ -105,6 +125,10 @@ function HospitalSwitcher({
   onSwitch: (id: string) => void;
 }) {
   const { data } = useMyHospitals(enabled);
+  const [pending, setPending] = useState<{ id: string; name: string; is_active?: boolean } | null>(
+    null,
+  );
+  const [switching, setSwitching] = useState(false);
   const hospitals = data?.hospitals ?? [];
   const current = hospitals.find((h) => h.id === hospitalId);
   if (!current) return null;
@@ -115,26 +139,101 @@ function HospitalSwitcher({
       </span>
     );
   return (
-    <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-      <Hospital className="h-4 w-4 shrink-0" aria-hidden />
-      <span className="sr-only">Hospital</span>
-      <select
-        aria-label="Switch hospital"
-        className="h-9 max-w-36 sm:max-w-56 truncate rounded-md border bg-background px-2 text-sm text-foreground"
-        value={current.id}
-        onChange={(e) => {
-          const next = hospitals.find((h) => h.id === e.target.value);
-          if (next && window.confirm(`Switch to ${next.name}?`)) onSwitch(next.id);
+    <>
+      <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Hospital className="h-4 w-4 shrink-0" aria-hidden />
+        <span className="sr-only">Hospital</span>
+        <select
+          aria-label="Switch hospital"
+          className="h-9 max-w-36 sm:max-w-56 truncate rounded-md border bg-background px-2 text-sm text-foreground"
+          value={current.id}
+          onChange={(e) => {
+            const next = hospitals.find((h) => h.id === e.target.value);
+            if (next && next.id !== current.id) setPending(next);
+          }}
+        >
+          {hospitals.map((h) => (
+            <option key={h.id} value={h.id}>
+              {h.name}
+              {h.is_active === false ? " (deactivated)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
+
+      <AlertDialog
+        open={!!pending}
+        onOpenChange={(open) => {
+          if (!open && !switching) setPending(null);
         }}
       >
-        {hospitals.map((h) => (
-          <option key={h.id} value={h.id}>
-            {h.name}
-            {h.is_active === false ? " (deactivated)" : ""}
-          </option>
-        ))}
-      </select>
-    </label>
+        <AlertDialogContent className="max-w-md gap-0 overflow-hidden p-0">
+          <div className="px-6 pb-5 pt-6">
+            <div className="mx-auto grid h-12 w-12 place-items-center rounded-full bg-primary/10 text-primary sm:mx-0">
+              <ArrowRightLeft className="h-5 w-5" aria-hidden />
+            </div>
+            <AlertDialogHeader className="mt-4">
+              <AlertDialogTitle>Switch hospital?</AlertDialogTitle>
+              <AlertDialogDescription>
+                You'll see this hospital's staff, rotas, requests and settings. The app reloads on
+                the dashboard, so save any changes you're working on first.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <div className="mt-5 grid grid-cols-[1fr_auto_1fr] items-center gap-2 rounded-lg border bg-muted/40 p-3">
+              <div className="min-w-0">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Current
+                </p>
+                <p className="mt-0.5 truncate text-sm font-medium" title={current.name}>
+                  {current.name}
+                </p>
+              </div>
+              <ArrowRightLeft className="h-4 w-4 text-muted-foreground" aria-hidden />
+              <div className="min-w-0 text-right">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-primary">
+                  Switching to
+                </p>
+                <p className="mt-0.5 truncate text-sm font-semibold" title={pending?.name}>
+                  {pending?.name}
+                </p>
+              </div>
+            </div>
+
+            {pending?.is_active === false && (
+              <p className="mt-3 flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-300">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                This hospital is deactivated. Its staff can't sign in, but you can still review it.
+              </p>
+            )}
+          </div>
+
+          <AlertDialogFooter className="gap-2 border-t bg-muted/30 px-6 py-4 sm:space-x-0">
+            <AlertDialogCancel disabled={switching} className="mt-0">
+              Stay here
+            </AlertDialogCancel>
+            <AlertDialogAction
+              disabled={switching}
+              onClick={(e) => {
+                e.preventDefault();
+                if (!pending) return;
+                setSwitching(true);
+                onSwitch(pending.id);
+              }}
+            >
+              {switching ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                  Switching…
+                </>
+              ) : (
+                "Switch hospital"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </>
   );
 }
 
@@ -1841,7 +1940,7 @@ function RoleSelectionScreen({
       >
         <div className="flex items-center gap-3">
           <div className="h-12 w-12 rounded-lg bg-white grid place-items-center overflow-hidden border">
-            <img src={branding.logo} alt={branding.name} className="h-full w-full object-contain" />
+            <BrandingLogo branding={branding} />
           </div>
           <div className="min-w-0">
             <p className="text-lg font-bold leading-tight">Choose your role</p>
@@ -1908,7 +2007,7 @@ function SidebarContent({
       <div className="px-5 py-5 flex items-center justify-between border-b border-sidebar-border">
         <div className="flex items-center gap-2.5">
           <div className="h-10 w-10 rounded-lg bg-white grid place-items-center overflow-hidden border border-sidebar-border">
-            <img src={branding.logo} alt={branding.name} className="h-full w-full object-contain" />
+            <BrandingLogo branding={branding} />
           </div>
           <div>
             <p className="text-sm font-bold leading-tight">Nurses Rota</p>

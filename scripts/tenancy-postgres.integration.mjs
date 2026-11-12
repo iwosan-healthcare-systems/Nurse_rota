@@ -222,6 +222,14 @@ test("hospital row-level security isolates tenant data", async (t) => {
       const server = express();
       server.use(express.json());
       server.use("/api/hospitals", requireAuth, load("routes/hospitals.js", deps));
+      server.use(
+        "/api/auth",
+        load("routes/auth.js", {
+          ...deps,
+          "../middleware/auth": { requireAuth },
+          "../middleware/capability": load("middleware/capability.js", deps),
+        }),
+      );
       server.use((error, req, res, next) => res.status(500).json({ error: error.message }));
       const listener = await new Promise((resolve) => {
         const s = server.listen(0, "127.0.0.1", () => resolve(s));
@@ -553,6 +561,40 @@ test("hospital row-level security isolates tenant data", async (t) => {
           ),
         );
         assert.deepEqual(gone.rows[0], { hospitals: 0, accounts: 0 });
+
+        // Signing in: accounts in several hospitals choose one first.
+        const bcrypt = require("bcryptjs");
+        const hash = await bcrypt.hash("Secret123!", 4);
+        await tenant.runInPlatform(() =>
+          app.query("UPDATE profiles SET password_hash=$2, is_active=true WHERE id = ANY($1)", [
+            [lagoonAdmin, thirdAdminId],
+            hash,
+          ]),
+        );
+        const authBase = base.replace("/api/hospitals", "/api/auth");
+        const login = (body) =>
+          fetch(`${authBase}/login`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          });
+        const superAdmin = { email: "admin@lagoon.test", password: "Secret123!" };
+        assert.equal((await login({ ...superAdmin, password: "wrong" })).status, 401);
+        const asked = await (await login(superAdmin)).json();
+        assert.equal(asked.choose_hospital, true);
+        assert.equal(asked.token, undefined, "No session before a hospital is chosen");
+        assert.ok(asked.hospitals.some((h) => h.id === LAGOON));
+        assert.ok(asked.hospitals.some((h) => h.id === other));
+        const entered = await (await login({ ...superAdmin, hospital_id: other })).json();
+        assert.ok(entered.token);
+        assert.equal(entered.user.hospital_id, other);
+        assert.ok(entered.user.roles.includes("admin"));
+
+        const member = { email: "admin@third.test", password: "Secret123!" };
+        const direct = await (await login(member)).json();
+        assert.ok(direct.token, "One hospital: signed straight in");
+        assert.equal(direct.user.hospital_id, third.id);
+        assert.equal((await login({ ...member, hospital_id: LAGOON })).status, 403);
       } finally {
         await new Promise((resolve) => listener.close(resolve));
       }

@@ -136,21 +136,46 @@ router.post(
     const valid = await bcrypt.compare(password, user.password_hash);
     if (!valid) return res.status(401).json({ error: "Invalid credentials" });
 
-    // Sign in to the user's first hospital (super admins: the first hospital).
+    // The hospitals this account can enter: every hospital for super admins
+    // (deactivated ones included, to review them), otherwise the active
+    // hospitals it is a member of. With more than one and no choice yet, the
+    // sign-in page asks which to enter; nothing is issued until then.
     // Staff-record matching, capability overrides and the audit row are per hospital.
     const {
-      rows: [home],
-    } = await pool.query(
-      `SELECT p.is_super_admin,
-         (SELECT h.id FROM hospitals h
-           WHERE p.is_super_admin OR EXISTS (
-             SELECT 1 FROM hospital_memberships m WHERE m.hospital_id = h.id AND m.user_id = p.id)
-           ORDER BY h.created_at, h.name LIMIT 1) AS hospital_id
-       FROM profiles p WHERE p.id = $1`,
-      [user.id],
+      rows: [profile],
+    } = await pool.query("SELECT is_super_admin FROM profiles WHERE id = $1", [user.id]);
+    const isSuperAdmin = !!profile?.is_super_admin;
+    const { rows: choices } = await pool.query(
+      `SELECT h.id, h.name, h.logo, h.is_active
+       FROM hospitals h
+       WHERE $2::boolean OR EXISTS (
+         SELECT 1 FROM hospital_memberships m WHERE m.hospital_id = h.id AND m.user_id = $1)
+       ORDER BY h.created_at, h.name`,
+      [user.id, isSuperAdmin],
     );
-    if (!home?.hospital_id)
-      return res.status(403).json({ error: "Your account is not assigned to a hospital" });
+    const enterable = isSuperAdmin ? choices : choices.filter((h) => h.is_active);
+    if (!enterable.length)
+      return res.status(403).json({
+        error: choices.length
+          ? "Your hospital has been deactivated. Contact your administrator."
+          : "Your account is not assigned to a hospital",
+      });
+    const requested = req.body.hospital_id;
+    if (requested !== undefined && requested !== null) {
+      if (typeof requested !== "string" || !enterable.some((h) => h.id === requested))
+        return res.status(403).json({ error: "You don't have access to that hospital" });
+    } else if (enterable.length > 1) {
+      return res.json({
+        choose_hospital: true,
+        hospitals: enterable.map((h) => ({
+          id: h.id,
+          name: h.name,
+          logo: h.logo,
+          is_active: h.is_active,
+        })),
+      });
+    }
+    const home = { is_super_admin: isSuperAdmin, hospital_id: requested ?? enterable[0].id };
 
     await runInHospital(
       home.hospital_id,

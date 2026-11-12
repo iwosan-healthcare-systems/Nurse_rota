@@ -1,8 +1,15 @@
 import { createFileRoute, useNavigate, redirect, Link } from "@tanstack/react-router";
 import { useEffect, useState, type FormEvent } from "react";
 import { api, setToken, getToken } from "@/lib/api";
-import { Loader2, Eye, EyeOff } from "lucide-react";
+import { Loader2, Eye, EyeOff, ChevronRight, ArrowLeft } from "lucide-react";
 import { AuthLayout } from "@/components/AuthLayout";
+import { defaultHospitalLogo } from "@/lib/brand-assets";
+import { rememberHospitalBranding } from "@/lib/hospital-branding";
+
+type HospitalChoice = { id: string; name: string; logo: string | null; is_active: boolean };
+type LoginResponse =
+  | { token: string; user: ApiUser }
+  | { choose_hospital: true; hospitals: HospitalChoice[] };
 import { toast } from "sonner";
 import {
   rememberSelectedRole,
@@ -48,8 +55,12 @@ function LoginPage() {
   const [roleOptions, setRoleOptions] = useState<AppRole[]>([]);
   const [selectedRole, setSelectedRole] = useState<AppRole | "">("");
   const [pendingUser, setPendingUser] = useState<ApiUser | null>(null);
+  // Accounts with access to more than one hospital pick one before signing in.
+  const [hospitalChoices, setHospitalChoices] = useState<HospitalChoice[] | null>(null);
+  const [enteringHospital, setEnteringHospital] = useState<string | null>(null);
 
   const isChoosingRole = roleOptions.length > 1;
+  const isChoosingHospital = !isChoosingRole && !!hospitalChoices;
 
   useEffect(() => {
     if (!needsRoleSelection || roles.length <= 1) return;
@@ -64,12 +75,27 @@ function LoginPage() {
       return;
     }
 
+    await signIn();
+  }
+
+  async function signIn(hospitalId?: string) {
     setBusy(true);
+    if (hospitalId) {
+      setEnteringHospital(hospitalId);
+      // The dashboard then opens with this hospital's logo, not a placeholder.
+      const chosen = hospitalChoices?.find((h) => h.id === hospitalId);
+      if (chosen) rememberHospitalBranding(chosen.id, { logo: chosen.logo, name: chosen.name });
+    }
     try {
-      const data = await api.post<{ token: string; user: ApiUser }>("/auth/login", {
+      const data = await api.post<LoginResponse>("/auth/login", {
         email,
         password,
+        ...(hospitalId ? { hospital_id: hospitalId } : {}),
       });
+      if ("choose_hospital" in data) {
+        setHospitalChoices(data.hospitals);
+        return;
+      }
       setToken(data.token);
 
       const nextUser = data.user;
@@ -102,6 +128,7 @@ function LoginPage() {
       toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
       setBusy(false);
+      setEnteringHospital(null);
     }
   }
 
@@ -117,6 +144,68 @@ function LoginPage() {
     toast.success(`Signed in as ${roleLabel(selectedRole)}`);
     navigate({ to: "/" });
   }
+
+  if (isChoosingHospital && hospitalChoices)
+    return (
+      <AuthLayout>
+        <div className="rounded-2xl border bg-card/90 p-6 shadow-soft backdrop-blur sm:p-8">
+          <h2 className="text-2xl font-bold">Choose a hospital</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Your account works in {hospitalChoices.length} hospitals. Pick the one to open; you can
+            switch later from the top bar.
+          </p>
+          <ul className="mt-6 max-h-88 space-y-2 overflow-y-auto pr-1">
+            {hospitalChoices.map((h) => {
+              const entering = enteringHospital === h.id;
+              return (
+                <li key={h.id}>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void signIn(h.id)}
+                    className="group flex w-full items-center gap-3 rounded-xl border bg-card p-3 text-left transition hover:border-primary/60 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-wait disabled:opacity-70"
+                  >
+                    <span className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-lg border bg-white">
+                      <img
+                        src={h.logo || defaultHospitalLogo(h.id)}
+                        alt=""
+                        className="h-full w-full object-contain"
+                      />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold" title={h.name}>
+                        {h.name}
+                      </span>
+                      {h.is_active === false && (
+                        <span className="mt-0.5 inline-block rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
+                          Deactivated · staff cannot sign in
+                        </span>
+                      )}
+                    </span>
+                    {entering ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-primary" />
+                    ) : (
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
+                    )}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setHospitalChoices(null);
+              setPassword("");
+            }}
+            className="mt-5 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-3.5 w-3.5" /> Use a different account
+          </button>
+        </div>
+      </AuthLayout>
+    );
 
   return (
     <AuthLayout>
@@ -178,7 +267,7 @@ function LoginPage() {
                     to="/forgot-password"
                     className="text-xs text-muted-foreground hover:text-foreground"
                   >
-                    Forgot password?
+                    Reset password
                   </Link>
                 </div>
                 <div className="relative mt-1">

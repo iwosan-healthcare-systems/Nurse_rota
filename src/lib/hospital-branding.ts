@@ -1,6 +1,49 @@
+import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, getToken } from "@/lib/api";
+import { api, getToken, getHospitalId } from "@/lib/api";
 import { defaultHospitalLogo } from "@/lib/brand-assets";
+
+// Each hospital's logo and name, remembered in this browser so that after a
+// reload (signing in, switching hospital) the sidebar shows the right logo
+// straight away instead of a placeholder that then changes.
+const BRANDING_CACHE_KEY = "nurse_rota_hospital_branding";
+const BRANDING_CACHE_SIZE = 6;
+type CachedBranding = { logo: string | null; name: string };
+
+function readBrandingCache(): Record<string, CachedBranding> {
+  try {
+    return JSON.parse(localStorage.getItem(BRANDING_CACHE_KEY) ?? "{}") ?? {};
+  } catch {
+    return {};
+  }
+}
+
+export function rememberHospitalBranding(hospitalId: string, branding: CachedBranding) {
+  try {
+    const cache = readBrandingCache();
+    delete cache[hospitalId];
+    cache[hospitalId] = branding;
+    const ids = Object.keys(cache);
+    for (const id of ids.slice(0, Math.max(0, ids.length - BRANDING_CACHE_SIZE))) delete cache[id];
+    localStorage.setItem(BRANDING_CACHE_KEY, JSON.stringify(cache));
+  } catch {
+    // Storage full or blocked: the logo still loads, just after a moment.
+  }
+}
+
+// Loads a hospital's logo and name into the cache before the app reloads into it.
+export async function preloadHospitalBranding() {
+  try {
+    const mine = await api.get<MyHospitals>("/hospitals/mine");
+    const current = mine.hospitals.find((h) => h.id === mine.current_hospital_id);
+    rememberHospitalBranding(mine.current_hospital_id, {
+      logo: mine.current_logo,
+      name: current?.name ?? "Nurses Rota",
+    });
+  } catch {
+    // Not fatal: the hospital loads normally after the reload.
+  }
+}
 
 export type MyHospitals = {
   hospitals: { id: string; name: string; is_active?: boolean }[];
@@ -20,15 +63,29 @@ export function useMyHospitals(enabled = true) {
 }
 
 // The current hospital's logo and name. Without its own logo, Lagoon shows the
-// Lagoon logo and every other hospital the Iwosan mark.
+// Lagoon logo and every other hospital the Iwosan mark. `logo` is null only
+// while a hospital this browser has never shown is still loading; callers show
+// a neutral placeholder then, never another hospital's logo.
 export function useHospitalBranding() {
   const { data } = useMyHospitals();
   const current = data?.hospitals.find((h) => h.id === data.current_hospital_id);
-  return {
-    logo: data?.current_logo || defaultHospitalLogo(data?.current_hospital_id),
-    name: current?.name ?? "Nurses Rota",
-    hasOwnLogo: !!data?.current_logo,
-  };
+  useEffect(() => {
+    if (data)
+      rememberHospitalBranding(data.current_hospital_id, {
+        logo: data.current_logo,
+        name: current?.name ?? "Nurses Rota",
+      });
+  }, [data, current?.name]);
+  if (data)
+    return {
+      logo: data.current_logo || defaultHospitalLogo(data.current_hospital_id),
+      name: current?.name ?? "Nurses Rota",
+    };
+  const id = getHospitalId();
+  const cached = id ? readBrandingCache()[id] : undefined;
+  return cached
+    ? { logo: cached.logo || defaultHospitalLogo(id), name: cached.name }
+    : { logo: null, name: "" };
 }
 
 const MAX_DATA_URL = 550_000;

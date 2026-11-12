@@ -1,6 +1,7 @@
 /* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { api, getToken, clearToken, setHospitalId, clearHospitalId } from "@/lib/api";
+import { preloadHospitalBranding } from "@/lib/hospital-branding";
 import { toast } from "sonner";
 
 // The 10 permanent, undeletable roles seeded into the `roles` table
@@ -326,8 +327,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Reload into the chosen hospital so permissions, staff link, facilities and
   // every cached query are fetched again for it.
-  function switchHospital(hospitalId: string) {
+  async function switchHospital(hospitalId: string) {
     setHospitalId(hospitalId);
+    // Fetch the new hospital's logo first so the reload shows it immediately.
+    await preloadHospitalBranding();
     window.location.assign("/");
   }
 
