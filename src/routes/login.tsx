@@ -7,9 +7,9 @@ import { defaultHospitalLogo } from "@/lib/brand-assets";
 import { rememberHospitalBranding } from "@/lib/hospital-branding";
 
 type HospitalChoice = { id: string; name: string; logo: string | null; is_active: boolean };
-type LoginResponse =
-  | { token: string; user: ApiUser }
-  | { choose_hospital: true; hospitals: HospitalChoice[] };
+type SignedIn = { token: string; user: ApiUser };
+type ChooseHospital = { choose_hospital: true; hospitals: HospitalChoice[] };
+type LoginResponse = SignedIn | ChooseHospital;
 import { toast } from "sonner";
 import {
   rememberSelectedRole,
