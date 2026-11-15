@@ -153,7 +153,7 @@ function createSchedulingConfigurationService(pool) {
         [ids, addDays(body.startDate, -366), addDays(body.startDate, -1)],
       );
       const { rows: leave } = await db.query(
-        "SELECT nurse_id, from_date::text, to_date::text, status, type FROM leave_requests WHERE nurse_id = ANY($1::uuid[]) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2 ORDER BY nurse_id,from_date,to_date,type",
+        "SELECT nurse_id, from_date::text, to_date::text, status, type FROM leave_requests WHERE nurse_id = ANY($1::uuid[]) AND status = 'Approved' AND type <> 'Swap' AND from_date <= $3 AND to_date >= $2 ORDER BY nurse_id,from_date,to_date,type",
         [ids, body.startDate, addDays(body.startDate, days - 1)],
       );
       try {

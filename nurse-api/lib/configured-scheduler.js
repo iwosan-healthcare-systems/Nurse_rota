@@ -284,7 +284,8 @@ function generateConfiguredPreview({
   if (issues.length) throw new PreviewError(issues);
   const assignments = [];
   const leaveByStaff = new Map();
-  for (const l of leave.filter((l) => l.status === "Approved")) {
+  // A shift switch ("Swap") is not an absence: approving it edits shifts directly.
+  for (const l of leave.filter((l) => l.status === "Approved" && l.type !== "Swap")) {
     const list = leaveByStaff.get(l.nurse_id) || [];
     list.push(l);
     leaveByStaff.set(l.nurse_id, list);

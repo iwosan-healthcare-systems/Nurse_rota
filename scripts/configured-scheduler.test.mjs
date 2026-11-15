@@ -302,6 +302,16 @@ test("approved leave preserves planned shifts but does not count towards coverag
     ),
   );
 });
+test("an approved shift switch is not treated as leave when regenerating", () => {
+  const f = custom();
+  f.leave = [
+    { nurse_id: "n1", from_date: "2026-09-21", to_date: "2026-09-22", status: "Approved", type: "Swap" },
+  ];
+  const result = generate(f);
+  assert.equal(result.assignments[0].shift, "M");
+  assert.equal(result.assignments[1].shift, "M");
+  assert.ok(!result.assignments.some((a) => a.shift === "LEAVE"));
+});
 test("custom overnight shift uses hospital timezone and credited minutes", () => {
   const f = custom();
   f.configuration.shifts.push({

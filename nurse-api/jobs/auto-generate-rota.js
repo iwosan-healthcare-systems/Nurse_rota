@@ -270,7 +270,8 @@ async function generateUnit({
 
   const { rows: leave } = await pool.query(
     `SELECT nurse_id, from_date::text, to_date::text, status, type FROM leave_requests
-      WHERE nurse_id = ANY($1) AND status = 'Approved' AND from_date <= $3 AND to_date >= $2`,
+      WHERE nurse_id = ANY($1) AND status = 'Approved' AND type <> 'Swap'
+        AND from_date <= $3 AND to_date >= $2`,
     [unitIds, genStart, genEnd],
   );
 
