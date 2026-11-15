@@ -81,6 +81,72 @@ test("ICU, HDU, NICU and SCBU wards in any facility get the unit census question
   );
 });
 
+test("a critical-care ward is asked only about its own unit type(s)", () => {
+  const unitFields = (ward) =>
+    client
+      .assessmentQuestionsFor(ward)
+      .map((q) => q.field)
+      .filter((f) => f.endsWith("_patients") && f !== "ward_patients");
+  assert.deepEqual(unitFields("ICU"), ["icu_patients"]);
+  assert.deepEqual(unitFields("NICU"), ["nicu_patients"], "NICU is not read as ICU");
+  assert.deepEqual(unitFields("SCBU"), ["scbu_patients"]);
+  assert.deepEqual(unitFields("HDU"), ["hdu_patients"]);
+  assert.deepEqual(unitFields("ICU & CathLab"), ["icu_patients"]);
+  assert.deepEqual(unitFields("ICU/HDU"), ["icu_patients", "hdu_patients"]);
+  assert.deepEqual(
+    client.assessmentQuestionsFor("ICU").map((q) => q.field),
+    ["icu_patients", "nurses_in_ward", "nurse_interns"],
+  );
+  assert.deepEqual(
+    client.assessmentQuestionsFor("GOPD").map((q) => q.field),
+    ["ward_patients", "nurses_in_ward", "nurse_interns", "ews_over_3"],
+  );
+  for (const ward of ["ICU", "NICU", "SCBU", "HDU", "ICU/HDU", "GOPD", "ICU & CathLab"])
+    assert.deepEqual(
+      server.assessmentFieldsFor(ward),
+      client.assessmentQuestionsFor(ward).map((q) => q.field),
+      `client and server agree for ${ward}`,
+    );
+  // ICU only needs the ICU census; other unit answers are not stored.
+  const icu = server.readAssessment("ICU", {
+    icu_patients: 3,
+    nurses_in_ward: 4,
+    nurse_interns: 0,
+  });
+  assert.deepEqual(icu.missing, []);
+  assert.equal(icu.values.icu_patients, 3);
+  assert.equal(icu.values.hdu_patients, null);
+  assert.deepEqual(server.readAssessment("ICU", { nurses_in_ward: 4, nurse_interns: 0 }).missing, [
+    "icu_patients",
+  ]);
+  // Saved requests show what their ward was asked (older ones show all answered).
+  assert.deepEqual(
+    client
+      .assessmentAnswers({
+        unit_kind: "critical",
+        ward: "ICU",
+        icu_patients: 3,
+        nurses_in_ward: 4,
+        nurse_interns: 0,
+      })
+      .map((a) => a.label),
+    ["ICU patients", "Nurses", "Nurse interns"],
+  );
+  assert.equal(
+    client.assessmentAnswers({
+      unit_kind: "critical",
+      ward: "ICU",
+      icu_patients: 1,
+      hdu_patients: 2,
+      nicu_patients: 0,
+      scbu_patients: 0,
+      nurses_in_ward: 4,
+      nurse_interns: 0,
+    }).length,
+    6,
+  );
+});
+
 test("the API requires every question for the ward's kind as a whole number", () => {
   const ok = server.readAssessment("NICU", {
     icu_patients: 0,

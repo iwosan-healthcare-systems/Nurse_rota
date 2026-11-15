@@ -1,10 +1,15 @@
 const router = require("express").Router();
 const pool = require("../db");
-const { requireCapability } = require("../middleware/capability");
+const { requireCapability, checkCapability } = require("../middleware/capability");
 const { resolveUnitNurseIds, roleGroupOf } = require("../lib/force-submit-rota");
 const { getUnitPeriod } = require("../lib/rota-period-dates");
 const { sendMail, portalUrl } = require("../lib/mailer");
 const { removeFromRota, returnToRota } = require("../lib/remove-from-rota");
+const {
+  scheduleTargetHours,
+  inheritTargetHours,
+  upcomingTargetChange,
+} = require("../lib/target-hours");
 const wrap = (fn) => (req, res, next) => fn(req, res, next).catch(next);
 
 const ROLE_GROUP_LABELS = {
@@ -127,6 +132,14 @@ router.get(
   }),
 );
 
+// The target-hours change waiting for the next rota period, if any.
+router.get(
+  "/target-hours-schedule",
+  wrap(async (req, res) => {
+    res.json({ upcoming: await upcomingTargetChange(pool) });
+  }),
+);
+
 router.get(
   "/:id",
   wrap(async (req, res) => {
@@ -220,12 +233,35 @@ router.patch(
 // Bulk update target_hours for all nurses
 router.patch(
   "/bulk-target-hours",
-  requireCapability("manage_staff", ["admin", "hr_admin"]),
   wrap(async (req, res) => {
-    const { target_hours } = req.body;
-    if (target_hours == null) return res.status(400).json({ error: "target_hours required" });
-    await pool.query("UPDATE nurses SET target_hours = $1, updated_at = NOW()", [target_hours]);
-    res.json({ success: true });
+    // The Staff page's "Set Target Hours" button follows edit_target_hours;
+    // adding or importing staff re-applies the target under manage_staff.
+    const allowed =
+      (await checkCapability(req, "edit_target_hours", ["admin", "cno"])) ||
+      (await checkCapability(req, "manage_staff", ["admin", "hr_admin"]));
+    if (!allowed) return res.status(403).json({ error: "Forbidden" });
+    // NUMERIC columns arrive as strings ("180"), so accept numeric text too.
+    const target_hours = Number(req.body.target_hours);
+    if (!Number.isFinite(target_hours) || target_hours < 1 || target_hours > 999)
+      return res.status(400).json({ error: "Target hours must be a number from 1 to 999" });
+    // Row-level security keeps this to the current hospital's staff.
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      // "Set Target Hours" changes the target from the next rota period: the
+      // period in progress and closed periods keep theirs. Adding or importing
+      // staff only brings the newcomers in line with everyone else.
+      const result = req.body.from_next_period
+        ? await scheduleTargetHours(client, target_hours)
+        : await inheritTargetHours(client, target_hours);
+      await client.query("COMMIT");
+      res.json({ success: true, ...result });
+    } catch (err) {
+      await client.query("ROLLBACK");
+      throw err;
+    } finally {
+      client.release();
+    }
   }),
 );
 
@@ -257,8 +293,16 @@ router.patch(
       req.body.ward = null;
     }
 
-    const fields = Object.keys(req.body).filter((k) => allowed.includes(k));
-    if (!fields.length) return res.status(400).json({ error: "No valid fields to update" });
+    const allFields = Object.keys(req.body).filter((k) => allowed.includes(k));
+    if (!allFields.length) return res.status(400).json({ error: "No valid fields to update" });
+    // A target change applies from the next rota period, like Set Target Hours.
+    const fields = allFields.filter((f) => f !== "target_hours");
+    let newTarget = null;
+    if (allFields.includes("target_hours")) {
+      newTarget = Number(req.body.target_hours);
+      if (!Number.isFinite(newTarget) || newTarget < 1 || newTarget > 999)
+        return res.status(400).json({ error: "Target hours must be a number from 1 to 999" });
+    }
 
     const sets = fields.map((f, i) => `${f} = $${i + 1}`);
     sets.push(`updated_at = NOW()`);
@@ -270,6 +314,7 @@ router.patch(
       values,
     );
     if (!rows[0]) return res.status(404).json({ error: "Nurse not found" });
+    if (newTarget !== null) await scheduleTargetHours(pool, newTarget, [req.params.id]);
 
     // Keep the linked login account in sync when name or email changes.
     const nurse = rows[0];

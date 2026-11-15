@@ -2424,6 +2424,105 @@ async function scenarios(t) {
       },
     );
 
+    await t.test(
+      "a target-hours change starts with the next period and closed periods keep theirs",
+      async () => {
+        const targets = require("./lib/target-hours");
+        // Runs in a transaction that is rolled back, so other scenarios keep their targets.
+        const db = await pool.connect();
+        await db.query("BEGIN");
+        try {
+          const {
+            rows: [p],
+          } = await db.query(
+            `SELECT rota_period_start(d)::text AS start, rota_period_end(d)::text AS end,
+                  (rota_period_end(d) + 1)::text AS next
+             FROM (SELECT (now() AT TIME ZONE 'Africa/Lagos')::date AS d) t`,
+          );
+          const add = async (name, hours) =>
+            (
+              await db.query(
+                "INSERT INTO nurses(name,role,facility,target_hours) VALUES ($1,'Nurse','Targets',$2) RETURNING id",
+                [name, hours],
+              )
+            ).rows[0].id;
+          const a = await add("Target A", 180);
+          const b = await add("Target B", 180);
+          // An already-closed earlier period keeps the target it was archived with.
+          await db.query(
+            "INSERT INTO nurse_period_hours(nurse_id,period_start,period_end,total_hours,total_shifts,target_hours) VALUES ($1,'2020-01-01','2020-01-31',150,10,180)",
+            [a],
+          );
+          const scheduled = await targets.scheduleTargetHours(db, 200);
+          assert.equal(scheduled.effectiveFrom, p.next);
+          const on = async (id, d) =>
+            Number(
+              (await db.query("SELECT nurse_target_hours_on($1,$2::date) AS h", [id, d])).rows[0].h,
+            );
+          assert.equal(await on(a, p.start), 180, "The period in progress keeps its target");
+          assert.equal(await on(a, p.next), 200, "The next period gets the new target");
+          assert.equal(await on(a, "2020-01-01"), 180);
+          assert.equal(await targets.syncCurrentTargets(db), 0, "Nothing changes before it starts");
+          const current = await db.query("SELECT target_hours FROM nurses WHERE id = ANY($1)", [
+            [a, b],
+          ]);
+          assert.deepEqual(
+            current.rows.map((r) => Number(r.target_hours)),
+            [180, 180],
+          );
+          assert.deepEqual(await targets.upcomingTargetChange(db), {
+            effective_from: p.next,
+            hours: 200,
+            staff: (await db.query("SELECT COUNT(*)::int n FROM nurses")).rows[0].n,
+          });
+          // Setting it again replaces the scheduled change instead of stacking.
+          await targets.scheduleTargetHours(db, 190);
+          assert.equal(await on(b, p.next), 190);
+          // Staff added later take today's target and the scheduled change.
+          const c = await add("Target C", 0);
+          await targets.inheritTargetHours(db, 180);
+          assert.equal(await on(c, p.start), 180);
+          assert.equal(await on(c, p.next), 190);
+          assert.equal(
+            Number(
+              (await db.query("SELECT target_hours FROM nurses WHERE id=$1", [a])).rows[0]
+                .target_hours,
+            ),
+            180,
+            "Adding staff does not touch existing targets",
+          );
+          // The archived period still shows its own target.
+          assert.equal(
+            Number(
+              (
+                await db.query(
+                  "SELECT target_hours FROM nurse_period_hours WHERE nurse_id=$1 AND period_start='2020-01-01'",
+                  [a],
+                )
+              ).rows[0].target_hours,
+            ),
+            180,
+          );
+          // Once the change has started, today's target follows it.
+          await db.query(
+            "UPDATE nurse_target_hours SET effective_from = $1::date WHERE effective_from = $2::date",
+            [p.start, p.next],
+          );
+          assert.ok((await targets.syncCurrentTargets(db)) >= 3);
+          assert.equal(
+            Number(
+              (await db.query("SELECT target_hours FROM nurses WHERE id=$1", [b])).rows[0]
+                .target_hours,
+            ),
+            190,
+          );
+        } finally {
+          await db.query("ROLLBACK");
+          db.release();
+        }
+      },
+    );
+
     await t.test("leave restoration is not blocked by saved ward staffing", async () => {
       const { validateConfiguredLeaveRestoration } = require("./lib/configured-leave-restoration");
       const {
@@ -3349,8 +3448,15 @@ async function scenarios(t) {
       const saved = await nicu.json();
       assert.equal(nicu.status, 201, JSON.stringify(saved));
       assert.equal(saved.unit_kind, "critical");
-      assert.equal(saved.scbu_patients, 3);
+      // An NICU is asked about NICU patients only; other unit answers are not kept.
+      assert.equal(saved.nicu_patients, 0);
+      assert.equal(saved.scbu_patients, null);
+      assert.equal(saved.icu_patients, null);
       assert.equal(saved.ews_over_3, null);
+      const { icu_patients: _icu, ...withoutIcu } = unit;
+      const noIcu = await request("ICU", withoutIcu);
+      assert.equal(noIcu.status, 400, "ICU must answer ICU census");
+      assert.match((await noIcu.json()).error, /ward assessment/);
       assert.equal(saved.ventilated_patients, null);
       // A general ward must answer the ward questions, including EWS > 3.
       assert.equal((await request("GOPD", unit)).status, 400);

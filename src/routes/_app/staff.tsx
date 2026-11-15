@@ -33,6 +33,8 @@ import {
 } from "lucide-react";
 import { RemoveFromRotaDialog, StaffWhoHaveLeft } from "@/components/RemoveFromRota";
 import { useAuth } from "@/lib/auth-context";
+import { useHospitalBranding } from "@/lib/hospital-branding";
+import { useCurrentRotaPeriod } from "@/lib/use-current-rota-period";
 import { EmptyState } from "@/components/EmptyState";
 import { toast } from "sonner";
 import { logAudit } from "@/lib/audit";
@@ -337,14 +339,14 @@ function StaffPage() {
 
       const [current, future] = await Promise.all([
         api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?from=${ymd(lookback)}&limit=1${nurseFilter}`)
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${ymd(lookback)}&limit=1${nurseFilter}`,
+          )
           .catch(() => [] as { shift_date: string }[]),
         api
-          .get<
-            { shift_date: string }[]
-          >(`/shift-assignments?from=${ymd(tomorrow)}&limit=1${nurseFilter}`)
+          .get<{ shift_date: string }[]>(
+            `/shift-assignments?from=${ymd(tomorrow)}&limit=1${nurseFilter}`,
+          )
           .catch(() => [] as { shift_date: string }[]),
       ]);
       return (current[0]?.shift_date ?? future[0]?.shift_date ?? todayStr).slice(0, 10);
@@ -500,6 +502,8 @@ function StaffPage() {
           </>
         }
       />
+
+      {(canEditTargetHours || canManageStaff) && <UpcomingTargetNotice />}
 
       {/* Facility chip strip */}
       <div className="mb-4">
@@ -1575,6 +1579,48 @@ function UploadModal({
   );
 }
 
+// "16 Nov 2026" from a YYYY-MM-DD date (never shows the raw ISO string).
+function fmtDay(ymd: string) {
+  return new Date(`${ymd.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+// The day the next rota period starts, when target changes take effect.
+function useNextPeriodStart(): string | null {
+  const { data: period } = useCurrentRotaPeriod();
+  if (!period?.end) return null;
+  const next = new Date(`${period.end.slice(0, 10)}T00:00:00Z`);
+  next.setUTCDate(next.getUTCDate() + 1);
+  return next.toISOString().slice(0, 10);
+}
+
+type TargetSchedule = {
+  upcoming: { hours: number; effective_from: string; staff: number } | null;
+};
+
+// Shows a target-hours change that is waiting for the next rota period.
+function UpcomingTargetNotice() {
+  const { data } = useQuery({
+    queryKey: ["target-hours-schedule"],
+    queryFn: () => api.get<TargetSchedule>("/nurses/target-hours-schedule"),
+  });
+  const upcoming = data?.upcoming;
+  if (!upcoming) return null;
+  return (
+    <p className="mb-4 flex items-start gap-2 rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-900 dark:border-sky-800 dark:bg-sky-950/30 dark:text-sky-200">
+      <Clock className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+      <span>
+        Target hours change to <strong>{upcoming.hours}h</strong> from{" "}
+        <strong>{fmtDay(upcoming.effective_from)}</strong>, when the next rota period starts. The
+        current period and closed periods keep their targets.
+      </span>
+    </p>
+  );
+}
+
 function SetTargetHoursModal({
   currentHours,
   onClose,
@@ -1583,36 +1629,53 @@ function SetTargetHoursModal({
   onClose: () => void;
 }) {
   const qc = useQueryClient();
-  const [hours, setHours] = useState(currentHours);
+  const { name: hospitalName } = useHospitalBranding();
+  // target_hours is a NUMERIC column, so it can arrive as text ("180").
+  const [hours, setHours] = useState(() => Number(currentHours));
+  const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const valid = Number.isInteger(hours) && hours >= 1 && hours <= 999;
+  const where = hospitalName ? `in ${hospitalName}` : "in this hospital";
+  const nextStart = useNextPeriodStart();
+  const fromLabel = nextStart ? fmtDay(nextStart) : "the start of the next rota period";
 
+  // Confirmation happens inside the dialog: the browser's own confirm() can be
+  // silently blocked ("prevent this page from creating dialogs"), which made
+  // Apply look like it did nothing.
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    if (
-      !confirm(
-        `Set target hours to ${hours}h for ALL nurses in the system?\n\nThis will overwrite each nurse's current target.`,
-      )
-    )
+    if (!valid) return;
+    if (!confirming) {
+      setConfirming(true);
       return;
+    }
     setBusy(true);
+    let effectiveFrom: string | null = null;
     try {
-      await api.patch("/nurses/bulk-target-hours", { target_hours: hours });
+      const result = await api.patch<{ effectiveFrom?: string }>("/nurses/bulk-target-hours", {
+        target_hours: hours,
+        from_next_period: true,
+      });
+      effectiveFrom = result.effectiveFrom ?? null;
     } catch (e) {
       setBusy(false);
       return toast.error(e instanceof Error ? e.message : "Failed to update");
     }
     setBusy(false);
-    toast.success(`Target hours updated to ${hours}h for all staff`);
-    logAudit("Updated global target hours", `${hours}h`);
+    const from = effectiveFrom ? fmtDay(effectiveFrom) : fromLabel;
+    toast.success(`Target hours will be ${hours}h for all staff ${where} from ${from}`);
+    logAudit("Scheduled global target hours", `${hours}h from ${from}`);
     qc.invalidateQueries({ queryKey: ["nurses"] });
+    qc.invalidateQueries({ queryKey: ["target-hours-schedule"] });
     onClose();
   }
 
   return (
     <Modal title="Set Target Hours" onClose={onClose}>
       <p className="text-sm text-muted-foreground mb-4">
-        Sets the monthly target hours for <strong>all nurses</strong> in the system. This will
-        overwrite each nurse's current target.
+        Sets the monthly target hours for <strong>all staff {where}</strong> from{" "}
+        <strong>{fromLabel}</strong>, when the next rota period starts. The current period, closed
+        periods and their exports keep the targets they had.
       </p>
       <form onSubmit={submit} className="space-y-4">
         <Field id="global-target-hours" label="Target Hours (monthly)">
@@ -1621,26 +1684,43 @@ function SetTargetHoursModal({
             type="number"
             min={1}
             max={999}
+            step={1}
             title="Monthly target hours for all staff"
-            value={hours}
-            onChange={(e) => setHours(Number(e.target.value))}
+            value={Number.isNaN(hours) ? "" : hours}
+            disabled={busy}
+            onChange={(e) => {
+              setHours(e.target.value === "" ? NaN : Number(e.target.value));
+              setConfirming(false);
+            }}
             className={inputCls}
           />
         </Field>
+        {!valid && (
+          <p className="text-xs text-destructive">Enter a whole number of hours from 1 to 999.</p>
+        )}
+        {confirming && valid && (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-950/30 dark:text-amber-200">
+            Change the target from <strong>{Number(currentHours)}h</strong> to{" "}
+            <strong>{hours}h</strong> for every staff member {where}, starting{" "}
+            <strong>{fromLabel}</strong>? Click <strong>Yes, update all staff</strong> to confirm.
+          </div>
+        )}
         <div className="flex justify-end gap-2 pt-2">
           <button
             type="button"
-            onClick={onClose}
-            className="h-9 px-4 rounded-md border bg-card text-sm"
+            disabled={busy}
+            onClick={confirming ? () => setConfirming(false) : onClose}
+            className="h-9 px-4 rounded-md border bg-card text-sm disabled:opacity-50"
           >
-            Cancel
+            {confirming ? "Back" : "Cancel"}
           </button>
           <button
-            disabled={busy || hours < 1}
+            disabled={busy || !valid}
             type="submit"
             className="h-9 px-4 rounded-md bg-primary text-primary-foreground text-sm inline-flex items-center gap-2 disabled:opacity-50"
           >
-            {busy && <Loader2 className="h-3 w-3 animate-spin" />} Apply to all staff
+            {busy && <Loader2 className="h-3 w-3 animate-spin" />}
+            {confirming ? "Yes, update all staff" : "Apply to all staff"}
           </button>
         </div>
       </form>

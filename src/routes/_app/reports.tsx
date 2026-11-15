@@ -178,12 +178,7 @@ type LocumFilledRequest = {
   accepted_at: string | null;
 };
 type LocumRequestStatus =
-  | "pending"
-  | "approved"
-  | "declined"
-  | "invites_sent"
-  | "filled"
-  | "expired";
+  "pending" | "approved" | "declined" | "invites_sent" | "filled" | "expired";
 type LocumRequestFull = {
   id: string;
   shift_date: string;
@@ -208,6 +203,8 @@ type PeriodHours = {
   assigned_hours: number | null;
   assigned_hours_error?: string | null;
   total_shifts: number;
+  /** Target in effect for that period, saved when it closed (migration 060). */
+  target_hours?: number | string | null;
 };
 type LeaveRequest = {
   id: string;
@@ -1179,6 +1176,8 @@ function ReportsContent() {
           "Progress %": progress.available ? fmtPercent(progress.percentage) : "",
           Status: progress.status,
           "Total Shifts": p.total_shifts,
+          // The target that applied to that period, saved when it closed.
+          "Target Hours": p.target_hours != null ? num(p.target_hours) : "",
         };
       });
       const wb = xlsWorkbook();
@@ -3064,6 +3063,7 @@ ${sections}
                       <th className="text-left px-4 py-3 font-semibold">Period</th>
                       <th className="text-right px-4 py-3 font-semibold">Shifts</th>
                       <th className="text-right px-4 py-3 font-semibold">Total Hours</th>
+                      <th className="text-right px-4 py-3 font-semibold">Target</th>
                       <th className="text-left px-4 py-3 font-semibold">Progress</th>
                     </tr>
                   </thead>
@@ -3090,6 +3090,9 @@ ${sections}
                                 ? `/ ${fmtHoursLog(progress.assigned)} assigned`
                                 : "Scheduled hours unavailable"}
                             </div>
+                          </td>
+                          <td className="px-4 py-3 text-right tabular-nums">
+                            {p.target_hours != null ? fmtHoursLog(num(p.target_hours)) : "—"}
                           </td>
                           <td className="px-4 py-3 min-w-44">
                             <div className="mb-2 text-xs">

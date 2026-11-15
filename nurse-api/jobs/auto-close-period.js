@@ -2,8 +2,17 @@ const cron = require("node-cron");
 const pool = require("../db");
 const { forEachHospital } = require("../lib/tenant-context");
 const { closeCompletedPeriod } = require("../lib/auto-close-period");
+const { syncCurrentTargets } = require("../lib/target-hours");
 
 async function autoClosePeriod() {
+  try {
+    // A target change scheduled for a period that has now started takes effect.
+    const synced = await syncCurrentTargets(pool);
+    if (synced)
+      console.log(`[auto-close] ${new Date().toISOString()} — ${synced} target(s) now in effect`);
+  } catch (err) {
+    console.error("[auto-close] Target sync error:", err.message);
+  }
   try {
     // Catch up oldest-first after downtime; each close owns its transaction/locks.
     for (let i = 0; i < 24; i++) {

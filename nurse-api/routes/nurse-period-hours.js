@@ -46,10 +46,11 @@ router.post(
       await client.query("BEGIN");
       for (const item of items) {
         await client.query(
-          `INSERT INTO nurse_period_hours (nurse_id, period_start, period_end, total_hours, total_shifts)
-         VALUES ($1,$2,$3,$4,$5)
+          `INSERT INTO nurse_period_hours (nurse_id, period_start, period_end, total_hours, total_shifts, target_hours)
+         VALUES ($1,$2,$3,$4,$5, nurse_target_hours_on($1, $2::date))
          ON CONFLICT (nurse_id, period_start) DO UPDATE
-         SET period_end = EXCLUDED.period_end, total_hours = EXCLUDED.total_hours, total_shifts = EXCLUDED.total_shifts`,
+         SET period_end = EXCLUDED.period_end, total_hours = EXCLUDED.total_hours, total_shifts = EXCLUDED.total_shifts,
+             target_hours = EXCLUDED.target_hours`,
           [item.nurse_id, item.period_start, item.period_end, item.total_hours, item.total_shifts],
         );
       }

@@ -80,7 +80,8 @@ async function closeCompletedPeriod() {
     );
     const { rows: hoursRows } = await client.query(
       `SELECT n.id AS nurse_id, COALESCE(h.total_hours, 0) AS total_hours,
-              COALESCE(h.total_shifts, 0) AS total_shifts
+              COALESCE(h.total_shifts, 0) AS total_shifts,
+              nurse_target_hours_on(n.id, $1::date) AS target_hours
        FROM nurses n
        LEFT JOIN (
          SELECT nurse_id, ROUND(SUM(hours_logged) * 100) / 100 AS total_hours,
@@ -96,12 +97,19 @@ async function closeCompletedPeriod() {
     for (const row of hoursRows) {
       await client.query(
         `INSERT INTO nurse_period_hours
-          (nurse_id, period_start, period_end, total_hours, total_shifts)
-         VALUES ($1, $2, $3, $4, $5)
+          (nurse_id, period_start, period_end, total_hours, total_shifts, target_hours)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (nurse_id, period_start) DO UPDATE
          SET period_end = EXCLUDED.period_end, total_hours = EXCLUDED.total_hours,
-             total_shifts = EXCLUDED.total_shifts`,
-        [row.nurse_id, period_start, period_end, row.total_hours, row.total_shifts],
+             total_shifts = EXCLUDED.total_shifts, target_hours = EXCLUDED.target_hours`,
+        [
+          row.nurse_id,
+          period_start,
+          period_end,
+          row.total_hours,
+          row.total_shifts,
+          row.target_hours,
+        ],
       );
     }
     // A delayed close must preserve hours already earned in the new period.

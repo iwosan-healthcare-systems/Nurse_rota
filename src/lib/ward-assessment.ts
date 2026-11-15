@@ -1,7 +1,8 @@
 // Locum request "ward assessment" questions. Critical-care units (any ward whose
 // name contains ICU, HDU, NICU or SCBU, in any facility) answer unit census
-// questions; every other ward answers ward census questions. Mirrors
-// nurse-api/lib/ward-assessment.js.
+// questions for the unit types in their own name only (an ICU is asked about
+// ICU patients, an "ICU/HDU" ward about both); every other ward answers ward
+// census questions. Mirrors nurse-api/lib/ward-assessment.js.
 
 export type AssessmentField =
   | "icu_patients"
@@ -15,8 +16,35 @@ export type AssessmentField =
 
 export type UnitKind = "critical" | "general";
 
+const UNIT_FIELDS = {
+  ICU: "icu_patients",
+  HDU: "hdu_patients",
+  NICU: "nicu_patients",
+  SCBU: "scbu_patients",
+} as const;
+type UnitType = keyof typeof UNIT_FIELDS;
+
+/** Critical-care unit types named in a ward, e.g. "ICU & CathLab" -> ["ICU"].
+ * Whole words only, so "NICU" is not also read as "ICU". */
+export function unitTypesOf(ward: string | null | undefined): UnitType[] {
+  return (Object.keys(UNIT_FIELDS) as UnitType[]).filter((type) =>
+    new RegExp(`\\b${type}\\b`, "i").test(ward ?? ""),
+  );
+}
+
 export function unitKindOf(ward: string | null | undefined): UnitKind {
-  return /\b(ICU|HDU|NICU|SCBU)\b/i.test(ward ?? "") ? "critical" : "general";
+  return unitTypesOf(ward).length ? "critical" : "general";
+}
+
+/** The questions a ward answers: its own unit types (plus nurses and interns)
+ * for critical-care units, the ward census for every other ward. */
+export function assessmentQuestionsFor(ward: string | null | undefined) {
+  const types = unitTypesOf(ward);
+  if (!types.length) return ASSESSMENT_QUESTIONS.general;
+  const unitFields = new Set<AssessmentField>(types.map((type) => UNIT_FIELDS[type]));
+  return ASSESSMENT_QUESTIONS.critical.filter(
+    (q) => unitFields.has(q.field) || q.field === "nurses_in_ward" || q.field === "nurse_interns",
+  );
 }
 
 export const ASSESSMENT_QUESTIONS: Record<
@@ -69,19 +97,25 @@ export const ASSESSMENT_QUESTIONS: Record<
 
 type AssessmentRecord = Partial<Record<AssessmentField, number | null>> & {
   unit_kind?: UnitKind | null;
+  ward?: string | null;
   ventilated_patients?: number | null;
   hdu_nurses?: number | null;
 };
 
 /** The answers shown in the app: only the current questions. Requests made with the
  * earlier form (no unit_kind) show none here; their answers stay in the database and
- * in the Locum Requests export (see assessmentExportColumns). */
+ * in the Locum Requests export (see assessmentExportColumns). Critical-care requests
+ * show the unit questions their ward was asked, plus any answered (requests made
+ * before the questions followed the ward answered all four). */
 export function assessmentAnswers(request: AssessmentRecord): { label: string; value: number }[] {
   if (!request.unit_kind) return [];
-  return ASSESSMENT_QUESTIONS[request.unit_kind].map((q) => ({
-    label: q.label,
-    value: request[q.field] ?? 0,
-  }));
+  const asked =
+    request.unit_kind === "critical" && request.ward
+      ? new Set(assessmentQuestionsFor(request.ward).map((q) => q.field))
+      : null;
+  return ASSESSMENT_QUESTIONS[request.unit_kind]
+    .filter((q) => !asked || asked.has(q.field) || request[q.field] != null)
+    .map((q) => ({ label: q.label, value: request[q.field] ?? 0 }));
 }
 
 /** One spreadsheet column per question, current and earlier; blank where not asked. */

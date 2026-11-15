@@ -114,7 +114,10 @@ async function runAutoGenerate({ simulateToday } = {}) {
 
   for (const { facility } of facilities) {
     const { rows: facilityNurses } = await pool.query(
-      "SELECT id, name, role, ward, facility, target_hours FROM nurses WHERE facility = $1 AND is_active = true",
+      // Targets for the upcoming period, which a target change may already cover.
+      `SELECT id, name, role, ward, facility,
+              nurse_target_hours_on(id, rota_period_end((NOW() AT TIME ZONE 'Africa/Lagos')::date) + 1) AS target_hours
+         FROM nurses WHERE facility = $1 AND is_active = true`,
       [facility],
     );
     if (!facilityNurses.length) continue;

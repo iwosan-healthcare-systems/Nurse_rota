@@ -40,7 +40,9 @@ function archiveFixture({ locked = true, period = true, failArchive = false, rea
         return { rows: period ? [{ period_start: "2026-08-24", period_end: "2026-09-20" }] : [] };
       }
       if (sql.includes("SELECT n.id AS nurse_id")) {
-        return { rows: [{ nurse_id: "nurse-1", total_hours: 150, total_shifts: 12 }] };
+        return {
+          rows: [{ nurse_id: "nurse-1", total_hours: 150, total_shifts: 12, target_hours: 180 }],
+        };
       }
       if (failArchive && sql.includes("INSERT INTO nurse_period_hours"))
         throw new Error("archive failed");
@@ -80,7 +82,19 @@ test("closure finalizes logs before aggregating and preserves new-period hours",
       sql.findIndex((s) => s.includes("SELECT n.id")),
   );
   const archive = f.calls.find((c) => c.sql.includes("INSERT INTO nurse_period_hours"));
-  assert.deepEqual(Array.from(archive.params), ["nurse-1", "2026-08-24", "2026-09-20", 150, 12]);
+  // The archive keeps the target that applied to the period.
+  assert.deepEqual(Array.from(archive.params), [
+    "nurse-1",
+    "2026-08-24",
+    "2026-09-20",
+    150,
+    12,
+    180,
+  ]);
+  assert.match(
+    sql.find((s) => s.includes("SELECT n.id AS nurse_id")),
+    /nurse_target_hours_on\(n\.id, \$1::date\)/,
+  );
   assert.match(
     sql.find((s) => s.includes("UPDATE nurses")),
     /sl.shift_date > \(SELECT MAX\(period_end\)/,

@@ -132,8 +132,10 @@ function createSchedulingConfigurationService(pool) {
       const wards = await wardsFor(db, facility);
       checked(version.configuration, wards);
       const { rows: nurses } = await db.query(
-        "SELECT id, name, role, ward, facility, target_hours, is_active FROM nurses WHERE facility = $1 AND is_active = true ORDER BY id LIMIT 1001",
-        [facility.legacy_facility],
+        // Targets in effect for the period being generated.
+        `SELECT id, name, role, ward, facility, nurse_target_hours_on(id, $2::date) AS target_hours, is_active
+           FROM nurses WHERE facility = $1 AND is_active = true ORDER BY id LIMIT 1001`,
+        [facility.legacy_facility, body.startDate],
       );
       if (nurses.length > 1000) fail(422, "Preview supports up to 1,000 active staff per facility");
       const ids = nurses.map((n) => n.id);

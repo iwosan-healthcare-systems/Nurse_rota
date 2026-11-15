@@ -9,29 +9,28 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as LoginRouteImport } from './routes/login'
-import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
+import { Route as LoginRouteImport } from './routes/login'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
-import { Route as AppWardsRouteImport } from './routes/_app/wards'
-import { Route as AppUsersRouteImport } from './routes/_app/users'
-import { Route as AppSystemSettingsRouteImport } from './routes/_app/system-settings'
-import { Route as AppStaffRouteImport } from './routes/_app/staff'
-import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift-history'
-import { Route as AppShiftRouteImport } from './routes/_app/shift'
-import { Route as AppSchedulingRouteImport } from './routes/_app/scheduling'
-import { Route as AppRotaRouteImport } from './routes/_app/rota'
-import { Route as AppReportsRouteImport } from './routes/_app/reports'
-import { Route as AppLocumRouteImport } from './routes/_app/locum'
-import { Route as AppLeaveEntitlementsRouteImport } from './routes/_app/leave-entitlements'
-import { Route as AppLeaveRouteImport } from './routes/_app/leave'
-import { Route as AppHospitalsRouteImport } from './routes/_app/hospitals'
-import { Route as AppAuditRouteImport } from './routes/_app/audit'
 import { Route as AppApprovalsRouteImport } from './routes/_app/approvals'
+import { Route as AppAuditRouteImport } from './routes/_app/audit'
+import { Route as AppHospitalsRouteImport } from './routes/_app/hospitals'
+import { Route as AppLeaveRouteImport } from './routes/_app/leave'
+import { Route as AppLeaveEntitlementsRouteImport } from './routes/_app/leave-entitlements'
+import { Route as AppLocumRouteImport } from './routes/_app/locum'
+import { Route as AppReportsRouteImport } from './routes/_app/reports'
+import { Route as AppRotaRouteImport } from './routes/_app/rota'
+import { Route as AppSchedulingRouteImport } from './routes/_app/scheduling'
+import { Route as AppShiftRouteImport } from './routes/_app/shift'
+import { Route as AppShiftHistoryRouteImport } from './routes/_app/shift-history'
+import { Route as AppStaffRouteImport } from './routes/_app/staff'
+import { Route as AppSystemSettingsRouteImport } from './routes/_app/system-settings'
+import { Route as AppUsersRouteImport } from './routes/_app/users'
+import { Route as AppWardsRouteImport } from './routes/_app/wards'
 
-const LoginRoute = LoginRouteImport.update({
-  id: '/login',
-  path: '/login',
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -39,8 +38,9 @@ const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
   path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
-const AppRoute = AppRouteImport.update({
-  id: '/_app',
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AppIndexRoute = AppIndexRouteImport.update({
@@ -48,69 +48,9 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
-const AppWardsRoute = AppWardsRouteImport.update({
-  id: '/wards',
-  path: '/wards',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppUsersRoute = AppUsersRouteImport.update({
-  id: '/users',
-  path: '/users',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSystemSettingsRoute = AppSystemSettingsRouteImport.update({
-  id: '/system-settings',
-  path: '/system-settings',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppStaffRoute = AppStaffRouteImport.update({
-  id: '/staff',
-  path: '/staff',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppShiftHistoryRoute = AppShiftHistoryRouteImport.update({
-  id: '/shift-history',
-  path: '/shift-history',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppShiftRoute = AppShiftRouteImport.update({
-  id: '/shift',
-  path: '/shift',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppSchedulingRoute = AppSchedulingRouteImport.update({
-  id: '/scheduling',
-  path: '/scheduling',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppRotaRoute = AppRotaRouteImport.update({
-  id: '/rota',
-  path: '/rota',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppReportsRoute = AppReportsRouteImport.update({
-  id: '/reports',
-  path: '/reports',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppLocumRoute = AppLocumRouteImport.update({
-  id: '/locum',
-  path: '/locum',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppLeaveEntitlementsRoute = AppLeaveEntitlementsRouteImport.update({
-  id: '/leave-entitlements',
-  path: '/leave-entitlements',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppLeaveRoute = AppLeaveRouteImport.update({
-  id: '/leave',
-  path: '/leave',
-  getParentRoute: () => AppRoute,
-} as any)
-const AppHospitalsRoute = AppHospitalsRouteImport.update({
-  id: '/hospitals',
-  path: '/hospitals',
+const AppApprovalsRoute = AppApprovalsRouteImport.update({
+  id: '/approvals',
+  path: '/approvals',
   getParentRoute: () => AppRoute,
 } as any)
 const AppAuditRoute = AppAuditRouteImport.update({
@@ -118,9 +58,69 @@ const AppAuditRoute = AppAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AppRoute,
 } as any)
-const AppApprovalsRoute = AppApprovalsRouteImport.update({
-  id: '/approvals',
-  path: '/approvals',
+const AppHospitalsRoute = AppHospitalsRouteImport.update({
+  id: '/hospitals',
+  path: '/hospitals',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLeaveRoute = AppLeaveRouteImport.update({
+  id: '/leave',
+  path: '/leave',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLeaveEntitlementsRoute = AppLeaveEntitlementsRouteImport.update({
+  id: '/leave-entitlements',
+  path: '/leave-entitlements',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppLocumRoute = AppLocumRouteImport.update({
+  id: '/locum',
+  path: '/locum',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppReportsRoute = AppReportsRouteImport.update({
+  id: '/reports',
+  path: '/reports',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppRotaRoute = AppRotaRouteImport.update({
+  id: '/rota',
+  path: '/rota',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSchedulingRoute = AppSchedulingRouteImport.update({
+  id: '/scheduling',
+  path: '/scheduling',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppShiftRoute = AppShiftRouteImport.update({
+  id: '/shift',
+  path: '/shift',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppShiftHistoryRoute = AppShiftHistoryRouteImport.update({
+  id: '/shift-history',
+  path: '/shift-history',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppStaffRoute = AppStaffRouteImport.update({
+  id: '/staff',
+  path: '/staff',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSystemSettingsRoute = AppSystemSettingsRouteImport.update({
+  id: '/system-settings',
+  path: '/system-settings',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppUsersRoute = AppUsersRouteImport.update({
+  id: '/users',
+  path: '/users',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppWardsRoute = AppWardsRouteImport.update({
+  id: '/wards',
+  path: '/wards',
   getParentRoute: () => AppRoute,
 } as any)
 
@@ -258,11 +258,11 @@ export interface RootRouteChildren {
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/login': {
-      id: '/login'
-      path: '/login'
-      fullPath: '/login'
-      preLoaderRoute: typeof LoginRouteImport
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/forgot-password': {
@@ -272,11 +272,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/_app': {
-      id: '/_app'
-      path: ''
-      fullPath: '/'
-      preLoaderRoute: typeof AppRouteImport
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_app/': {
@@ -286,95 +286,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/wards': {
-      id: '/_app/wards'
-      path: '/wards'
-      fullPath: '/wards'
-      preLoaderRoute: typeof AppWardsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/users': {
-      id: '/_app/users'
-      path: '/users'
-      fullPath: '/users'
-      preLoaderRoute: typeof AppUsersRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/system-settings': {
-      id: '/_app/system-settings'
-      path: '/system-settings'
-      fullPath: '/system-settings'
-      preLoaderRoute: typeof AppSystemSettingsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/staff': {
-      id: '/_app/staff'
-      path: '/staff'
-      fullPath: '/staff'
-      preLoaderRoute: typeof AppStaffRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/shift-history': {
-      id: '/_app/shift-history'
-      path: '/shift-history'
-      fullPath: '/shift-history'
-      preLoaderRoute: typeof AppShiftHistoryRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/shift': {
-      id: '/_app/shift'
-      path: '/shift'
-      fullPath: '/shift'
-      preLoaderRoute: typeof AppShiftRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/scheduling': {
-      id: '/_app/scheduling'
-      path: '/scheduling'
-      fullPath: '/scheduling'
-      preLoaderRoute: typeof AppSchedulingRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/rota': {
-      id: '/_app/rota'
-      path: '/rota'
-      fullPath: '/rota'
-      preLoaderRoute: typeof AppRotaRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/reports': {
-      id: '/_app/reports'
-      path: '/reports'
-      fullPath: '/reports'
-      preLoaderRoute: typeof AppReportsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/locum': {
-      id: '/_app/locum'
-      path: '/locum'
-      fullPath: '/locum'
-      preLoaderRoute: typeof AppLocumRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/leave-entitlements': {
-      id: '/_app/leave-entitlements'
-      path: '/leave-entitlements'
-      fullPath: '/leave-entitlements'
-      preLoaderRoute: typeof AppLeaveEntitlementsRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/leave': {
-      id: '/_app/leave'
-      path: '/leave'
-      fullPath: '/leave'
-      preLoaderRoute: typeof AppLeaveRouteImport
-      parentRoute: typeof AppRoute
-    }
-    '/_app/hospitals': {
-      id: '/_app/hospitals'
-      path: '/hospitals'
-      fullPath: '/hospitals'
-      preLoaderRoute: typeof AppHospitalsRouteImport
+    '/_app/approvals': {
+      id: '/_app/approvals'
+      path: '/approvals'
+      fullPath: '/approvals'
+      preLoaderRoute: typeof AppApprovalsRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/audit': {
@@ -384,11 +300,95 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppAuditRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/approvals': {
-      id: '/_app/approvals'
-      path: '/approvals'
-      fullPath: '/approvals'
-      preLoaderRoute: typeof AppApprovalsRouteImport
+    '/_app/hospitals': {
+      id: '/_app/hospitals'
+      path: '/hospitals'
+      fullPath: '/hospitals'
+      preLoaderRoute: typeof AppHospitalsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/leave': {
+      id: '/_app/leave'
+      path: '/leave'
+      fullPath: '/leave'
+      preLoaderRoute: typeof AppLeaveRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/leave-entitlements': {
+      id: '/_app/leave-entitlements'
+      path: '/leave-entitlements'
+      fullPath: '/leave-entitlements'
+      preLoaderRoute: typeof AppLeaveEntitlementsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/locum': {
+      id: '/_app/locum'
+      path: '/locum'
+      fullPath: '/locum'
+      preLoaderRoute: typeof AppLocumRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/reports': {
+      id: '/_app/reports'
+      path: '/reports'
+      fullPath: '/reports'
+      preLoaderRoute: typeof AppReportsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/rota': {
+      id: '/_app/rota'
+      path: '/rota'
+      fullPath: '/rota'
+      preLoaderRoute: typeof AppRotaRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/scheduling': {
+      id: '/_app/scheduling'
+      path: '/scheduling'
+      fullPath: '/scheduling'
+      preLoaderRoute: typeof AppSchedulingRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/shift': {
+      id: '/_app/shift'
+      path: '/shift'
+      fullPath: '/shift'
+      preLoaderRoute: typeof AppShiftRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/shift-history': {
+      id: '/_app/shift-history'
+      path: '/shift-history'
+      fullPath: '/shift-history'
+      preLoaderRoute: typeof AppShiftHistoryRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/staff': {
+      id: '/_app/staff'
+      path: '/staff'
+      fullPath: '/staff'
+      preLoaderRoute: typeof AppStaffRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/system-settings': {
+      id: '/_app/system-settings'
+      path: '/system-settings'
+      fullPath: '/system-settings'
+      preLoaderRoute: typeof AppSystemSettingsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/users': {
+      id: '/_app/users'
+      path: '/users'
+      fullPath: '/users'
+      preLoaderRoute: typeof AppUsersRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/wards': {
+      id: '/_app/wards'
+      path: '/wards'
+      fullPath: '/wards'
+      preLoaderRoute: typeof AppWardsRouteImport
       parentRoute: typeof AppRoute
     }
   }

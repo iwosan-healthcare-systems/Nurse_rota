@@ -30,9 +30,8 @@ import { cn } from "@/lib/utils";
 import { Modal } from "./staff";
 import { FacilityChips } from "@/components/FacilityChips";
 import {
-  ASSESSMENT_QUESTIONS,
   assessmentAnswers,
-  unitKindOf,
+  assessmentQuestionsFor,
   type AssessmentField,
   type UnitKind,
 } from "@/lib/ward-assessment";
@@ -501,9 +500,9 @@ function LocumPage() {
     // claimed.status stays 'invites_sent' until accepted count reaches nurses_needed.
     if (claimed.status === "filled") {
       const otherPending = await api
-        .get<
-          { nurse_name: string }[]
-        >(`/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending`)
+        .get<{ nurse_name: string }[]>(
+          `/locum/invites?locum_request_id=${invite.locum_request_id}&status=pending`,
+        )
         .catch(() => [] as { nurse_name: string }[]);
       if (otherPending.length) {
         const names = otherPending.map((i) => i.nurse_name).join(",");
@@ -1414,7 +1413,8 @@ function CreateRequestModal({
   const [ward, setWard] = useState("");
   const [roleNeeded, setRoleNeeded] = useState("Nurse");
   const [answers, setAnswers] = useState<Partial<Record<AssessmentField, string>>>({});
-  const questions = ward ? ASSESSMENT_QUESTIONS[unitKindOf(ward)] : [];
+  // Only the questions for the selected ward's own unit type(s).
+  const questions = ward ? assessmentQuestionsFor(ward) : [];
   const [nursesNeeded, setNursesNeeded] = useState("1");
 
   // Wards available for the selected facility
@@ -1861,9 +1861,9 @@ function SendInvitesModal({
 
       // 2. Find which of those nurses have a published OFF assignment on this date
       const offAssignments = await api
-        .get<
-          { nurse_id: string }[]
-        >(`/shift-assignments?shift_date=${request.shift_date.slice(0, 10)}&shift=OFF&status=published&nurse_ids=${facilityIds.join(",")}`)
+        .get<{ nurse_id: string }[]>(
+          `/shift-assignments?shift_date=${request.shift_date.slice(0, 10)}&shift=OFF&status=published&nurse_ids=${facilityIds.join(",")}`,
+        )
         .catch(() => []);
 
       const offIds = new Set(offAssignments.map((a) => a.nurse_id));
