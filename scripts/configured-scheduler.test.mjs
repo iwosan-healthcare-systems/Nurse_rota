@@ -92,9 +92,53 @@ test("seeded ordinary and special role assignments match the legacy engine", () 
     });
     const sorted = (rows) =>
       rows.sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
+    // Interns and porters follow their saved patterns (checked below), not
+    // the legacy engine's hard-coded rotations.
+    const own = new Set(nurses.filter((n) => /porter|intern/i.test(n.role)).map((n) => n.id));
     assert.deepEqual(
-      sorted(actual.assignments.map((a) => [a.nurseId, a.date, a.shift])),
-      sorted(expected.assignments.map((a) => [a.nurse_id, a.shift_date, a.shift])),
+      sorted(
+        actual.assignments
+          .filter((a) => !own.has(a.nurseId))
+          .map((a) => [a.nurseId, a.date, a.shift]),
+      ),
+      sorted(
+        expected.assignments
+          .filter((a) => !own.has(a.nurse_id))
+          .map((a) => [a.nurse_id, a.shift_date, a.shift]),
+      ),
+    );
+  }
+});
+test("interns and porters follow their edited patterns, never the built-in 4/4 rotations", () => {
+  const nurses = ["Porter", "Porter - Day", "Nurse Intern"].flatMap((role, i) =>
+    Array.from({ length: 3 }, (_, j) => ({ ...nurse(`${i}-${j}`, role), ward: null })),
+  );
+  const f = fixture({ nurses, startDate: "2026-12-01", days: 31 });
+  const byId = new Map(f.configuration.patterns.map((p) => [p.id, p]));
+  byId.get("standard").steps = [
+    { shift: "M", days: 4 },
+    { shift: "OFF", days: 2 },
+    { shift: "N", days: 3 },
+    { shift: "OFF", days: 3 },
+  ];
+  byId.get("day_only").steps = [
+    { shift: "M", days: 4 },
+    { shift: "OFF", days: 2 },
+  ];
+  const result = generate(f);
+  assert.ok(!result.diagnostics.some((d) => d.code === "LEGACY_ADAPTER"));
+  const cycles = {
+    Porter: ["M", "M", "M", "M", "OFF", "OFF", "N", "N", "N", "OFF", "OFF", "OFF"],
+    "Porter - Day": ["M", "M", "M", "M", "OFF", "OFF"],
+    "Nurse Intern": ["M", "M", "M", "M", "OFF", "OFF", "N", "N", "N", "OFF", "OFF", "OFF"],
+  };
+  for (const n of nurses) {
+    const cycle = cycles[n.role];
+    const shifts = result.assignments.filter((a) => a.nurseId === n.id).map((a) => a.shift);
+    assert.equal(shifts.length, 31);
+    assert.ok(
+      cycle.some((_, p) => shifts.every((s, d) => s === cycle[(p + d) % cycle.length])),
+      `${n.role} ${n.id}: ${shifts.join(" ")}`,
     );
   }
 });

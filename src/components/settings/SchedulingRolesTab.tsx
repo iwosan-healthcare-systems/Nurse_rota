@@ -30,8 +30,9 @@ const GROUPS: Record<SchedulingRole["approvalGroup"], string> = {
 };
 const LEGACY: Record<Exclude<SchedulingRole["specialRule"], "none">, string> = {
   legacy_coverage_v1: "Lagoon's original coverage rotation",
-  legacy_intern_v1: "Lagoon's original intern grouping",
-  legacy_porter_v1: "Lagoon's original porter staggering",
+  // Kept for saved configurations; these roles now follow their pattern.
+  legacy_intern_v1: "Pattern (intern group)",
+  legacy_porter_v1: "Pattern (porter group)",
 };
 
 export function SchedulingRolesTab({
@@ -69,7 +70,9 @@ export function SchedulingRolesTab({
       .filter((s) => r.allowedShifts.includes(s.code))
       .map((s) => s.code);
     const inCoverage = (config.coverageRules ?? []).filter((rule) => rule.roleIds.includes(r.id));
-    const legacy = r.specialRule !== "none";
+    // Interns and porters follow their pattern; only the earlier coverage
+    // rotation is still a fixed rule.
+    const legacy = r.specialRule === "legacy_coverage_v1";
     return (
       <ExpandableCard
         key={r.id}
@@ -346,7 +349,10 @@ export function SchedulingRolesTab({
               >
                 <option value="none">Pattern and coverage rules</option>
                 {(Object.keys(LEGACY) as (keyof typeof LEGACY)[])
-                  .filter((value) => lagoon || r.specialRule === value)
+                  .filter(
+                    (value) =>
+                      r.specialRule === value || (lagoon && value === "legacy_coverage_v1"),
+                  )
                   .map((value) => (
                     <option key={value} value={value}>
                       {LEGACY[value]}

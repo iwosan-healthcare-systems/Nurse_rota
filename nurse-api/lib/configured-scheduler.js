@@ -211,7 +211,12 @@ function generateConfiguredPreview({
       patternId,
       phaseSource: pattern.kind === "weekly" ? "calendar" : "anchor",
     });
-    if (role.specialRule !== "none" || isSingleSlot) {
+    // Interns and porters follow their saved pattern like every other role (the
+    // staggered starts below do what Lagoon's original grouping did); only the
+    // earlier coverage rule and the single night slot still use the
+    // compatibility adapter, whose rotations are hard-coded.
+    const retainedRule = role.specialRule === "legacy_coverage_v1";
+    if (retainedRule || isSingleSlot) {
       const originalPattern = baseline.patterns.find((p) => p.id === patternId);
       const seedPolicy = baseline.wardPolicies.find((p) => p.wardId === ward?.id);
       const sameRole =
@@ -256,7 +261,7 @@ function generateConfiguredPreview({
         special.push(n);
         continue;
       }
-      if (role.specialRule !== "none") {
+      if (retainedRule) {
         const message = `${role.name}${ward ? ` in ${ward.name}` : ""}: the retained coverage/rotation rule does not support these changes yet. Restore its original pattern, allowed shifts and timing before previewing.`;
         if (!issues.some((i) => i.message === message)) issue("roles", message);
         continue;
@@ -373,7 +378,7 @@ function generateConfiguredPreview({
       code: "LEGACY_ADAPTER",
       severity: "info",
       message:
-        "Existing coverage, intern, porter or single-night-slot rotations were preserved by the compatibility adapter.",
+        "Existing coverage or single-night-slot rotations were preserved by the compatibility adapter.",
     });
     const coverage = special.filter(
       (n) => staff.get(n.id).roleDefinition.specialRule === "legacy_coverage_v1",

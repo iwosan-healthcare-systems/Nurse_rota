@@ -286,10 +286,9 @@ export function SchedulingConfigurationEditor({
                   <CheckCircle2 />
                   Check settings
                 </Button>
-                <Button
-                  disabled={busy || conflict || (!!version && !dirty)}
-                  onClick={() => void save()}
-                >
+                {/* Saving without changes re-applies the rules from the first
+                    period that is still a draft (or not yet generated). */}
+                <Button disabled={busy || conflict} onClick={() => void save()}>
                   {busy ? <Loader2 className="animate-spin" /> : <Save />}Save
                 </Button>
               </div>

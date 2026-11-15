@@ -259,11 +259,14 @@ function createPolicyService({
   async function applyConfiguration(db, userId, facility, version) {
     if (!isLiveCompatible(version.configuration))
       return { appliesFrom: null, reason: "Only the Africa/Lagos timezone can be used for rotas" };
+    // Periods with submitted, approved or published shifts keep their rules.
+    // Draft-only periods take the new rules: regenerating a draft must not
+    // fall back to the patterns it was first drafted with.
     const {
       rows: [next],
     } = await db.query(
       `SELECT GREATEST(
-         rota_period_end(MAX(a.shift_date)) + 1,
+         rota_period_end(MAX(a.shift_date) FILTER (WHERE a.status <> 'draft')) + 1,
          rota_period_start((now() AT TIME ZONE 'Africa/Lagos')::date))::text AS start
        FROM shift_assignments a JOIN nurses n ON n.id=a.nurse_id WHERE n.facility=$1`,
       [facility.legacy_facility],

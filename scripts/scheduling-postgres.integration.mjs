@@ -3965,11 +3965,16 @@ async function scenarios(t) {
         const {
           rows: [next],
         } = await pool.query(
-          `SELECT GREATEST(rota_period_end(MAX(sa.shift_date)) + 1,
+          `SELECT GREATEST(
+             rota_period_end(MAX(sa.shift_date) FILTER (WHERE sa.status <> 'draft')) + 1,
              rota_period_start((now() AT TIME ZONE 'Africa/Lagos')::date))::text AS start
            FROM shift_assignments sa JOIN nurses n ON n.id=sa.nurse_id WHERE n.facility='Other'`,
         );
-        assert.equal(saved.body.appliesFrom, next.start, "The first period without a draft");
+        assert.equal(
+          saved.body.appliesFrom,
+          next.start,
+          "The first period without submitted or published shifts",
+        );
         assert.equal(
           (await call(`${otherBase}/versions/${current.id}`)).body.appliesFrom,
           next.start,
@@ -4002,6 +4007,37 @@ async function scenarios(t) {
         assert.ok(
           generated.body.issues.some((m) => /required 50\+/.test(m)),
           "Shortfalls are reported, not blocking",
+        );
+        // Rules saved while that period is still a draft apply to it, so
+        // regenerating the draft uses the edited patterns, not the old ones.
+        const again = (await call(`${otherBase}/versions/${current.id}`)).body;
+        const pattern = again.configuration.patterns.find((p) => p.kind === "repeating");
+        pattern.steps = [
+          { shift: "M", days: 4 },
+          { shift: "OFF", days: 2 },
+        ];
+        const resaved = await call(`${otherBase}/versions/${current.id}`, "PUT", {
+          revision: again.revision,
+          configuration: again.configuration,
+        });
+        assert.equal(resaved.status, 200, JSON.stringify(resaved.body));
+        assert.equal(resaved.body.appliesFrom, next.start, "A draft period takes the new rules");
+        const {
+          rows: [latest],
+        } = await pool.query(
+          `SELECT r.configuration_snapshot FROM scheduling_policy_events p
+           JOIN scheduling_runs r ON r.id = p.source_run_id
+           WHERE p.facility_id=$1 AND p.effective_from <= $2 ORDER BY p.sequence DESC LIMIT 1`,
+          [b, next.start],
+        );
+        assert.deepEqual(
+          latest.configuration_snapshot.patterns
+            .find((p) => p.id === pattern.id)
+            .steps.map((s) => [s.shift, s.days]),
+          [
+            ["M", 4],
+            ["OFF", 2],
+          ],
         );
         assert.equal(
           (
