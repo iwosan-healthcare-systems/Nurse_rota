@@ -33,7 +33,16 @@ import {
 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type Key,
+  type ReactElement,
+} from "react";
 import { useAuth } from "@/lib/auth-context";
 import {
   generateSchedule,
@@ -122,9 +131,108 @@ function todayYmd() {
   return `${t.getFullYear()}-${m}-${d}`;
 }
 
-// Grid rows shown at first and per batch while a large rota renders.
-const INITIAL_GRID_ROWS = 60;
-const GRID_ROW_BATCH = 120;
+// ── Windowed grid body ──────────────────────────────────────────────────────
+// A month for a large facility is hundreds of rows × 28–31 day cells, plus a
+// sticky name cell per row. Keeping all of them in the page made scrolling
+// (up/down and sideways) stutter on phones. Only the rows in and near view are
+// rendered; spacer rows stand in for the rest so the scrollbar stays right.
+const ROW_ESTIMATE_PX = 48;
+const ROW_OVERSCAN_PX = 900;
+
+function WindowedRows({ rows, colSpan }: { rows: ReactElement[]; colSpan: number }) {
+  const bodyRef = useRef<HTMLTableSectionElement>(null);
+  const heights = useRef(new Map<Key, number>());
+  const [range, setRange] = useState({ start: 0, end: Math.min(rows.length, 30) });
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+
+  const offsets = useCallback(() => {
+    const list = rowsRef.current;
+    const tops = new Array<number>(list.length + 1);
+    tops[0] = 0;
+    for (let i = 0; i < list.length; i++) {
+      tops[i + 1] = tops[i] + (heights.current.get(list[i].key ?? i) ?? ROW_ESTIMATE_PX);
+    }
+    return tops;
+  }, []);
+
+  const update = useCallback(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    const scroller = document.getElementById("main-scroll");
+    const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
+    const viewHeight = scroller ? scroller.clientHeight : window.innerHeight;
+    // Window position measured from the top of the table body.
+    const from = viewTop - body.getBoundingClientRect().top - ROW_OVERSCAN_PX;
+    const to = from + viewHeight + 2 * ROW_OVERSCAN_PX;
+    const tops = offsets();
+    const n = rowsRef.current.length;
+    let start = 0;
+    while (start < n && tops[start + 1] < from) start++;
+    let end = start;
+    while (end < n && tops[end] < to) end++;
+    setRange((r) => (r.start === start && r.end === end ? r : { start, end }));
+  }, [offsets]);
+
+  // Follow the scroll box (and window resizes), at most once per frame.
+  useEffect(() => {
+    const scroller: HTMLElement | Window = document.getElementById("main-scroll") ?? window;
+    let frame = 0;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        update();
+      });
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("resize", onScroll);
+    return () => {
+      scroller.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+      cancelAnimationFrame(frame);
+    };
+  }, [update]);
+
+  // New rows (period, filter or schedule change): recompute the window.
+  useLayoutEffect(update, [rows, update]);
+
+  // Record the real height of every rendered row; correct the window if the
+  // estimates were off.
+  useLayoutEffect(() => {
+    const body = bodyRef.current;
+    if (!body) return;
+    let changed = false;
+    // Children: top spacer, the rendered rows, bottom spacer.
+    for (let i = 1; i < body.rows.length - 1; i++) {
+      const row = rows[range.start + i - 1];
+      if (!row) break;
+      const k = row.key ?? range.start + i - 1;
+      const h = body.rows[i].getBoundingClientRect().height;
+      if (h > 0 && Math.abs((heights.current.get(k) ?? -1) - h) > 0.5) {
+        heights.current.set(k, h);
+        changed = true;
+      }
+    }
+    if (changed) update();
+  });
+
+  const start = Math.min(range.start, rows.length);
+  const end = Math.min(range.end, rows.length);
+  const tops = offsets();
+  const spacer = (key: string, height: number) => (
+    <tr key={key} aria-hidden style={{ height }}>
+      <td colSpan={colSpan} style={{ padding: 0, border: 0 }} />
+    </tr>
+  );
+  return (
+    <tbody ref={bodyRef}>
+      {spacer("__top", tops[start])}
+      {rows.slice(start, end)}
+      {spacer("__bottom", tops[rows.length] - tops[end])}
+    </tbody>
+  );
+}
 
 function ymd(d: Date) {
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -2805,28 +2913,6 @@ function RotaPage() {
     visitingStaff,
   ]);
 
-  // Large grids appear in batches so the page stays responsive while a new
-  // period or facility renders; the first rows show straight away.
-  const rowsKey = [
-    ymd(startDate),
-    effectiveFacility,
-    selectedWard,
-    selectedFacilityWide,
-    selectedRole,
-    searchQuery,
-  ].join("|");
-  const [rowProgress, setRowProgress] = useState({ key: "", limit: INITIAL_GRID_ROWS });
-  const rowLimit = rowProgress.key === rowsKey ? rowProgress.limit : INITIAL_GRID_ROWS;
-  useEffect(() => {
-    if (rowLimit >= gridRows.length) return;
-    const timer = window.setTimeout(
-      () => setRowProgress({ key: rowsKey, limit: rowLimit + GRID_ROW_BATCH }),
-      0,
-    );
-    return () => window.clearTimeout(timer);
-  }, [rowsKey, rowLimit, gridRows.length]);
-  const visibleGridRows = rowLimit >= gridRows.length ? gridRows : gridRows.slice(0, rowLimit);
-
   const filteredAssignmentCount = useMemo(() => {
     const ids = new Set(filteredNurses.map((n) => n.id));
     return assignments.filter((a) => ids.has(a.nurse_id)).length;
@@ -3703,7 +3789,7 @@ function RotaPage() {
                   })}
                 </tr>
               </thead>
-              <tbody>{visibleGridRows}</tbody>
+              <WindowedRows rows={gridRows} colSpan={3 + days.length} />
             </table>
           </div>
           <div className="p-4 text-xs text-muted-foreground border-t flex items-center justify-between">
