@@ -138,6 +138,12 @@ function todayYmd() {
 // rendered; spacer rows stand in for the rest so the scrollbar stays right.
 const ROW_ESTIMATE_PX = 48;
 const ROW_OVERSCAN_PX = 900;
+// The rendered rows are kept while they still cover the view plus this margin,
+// so small height corrections never move the window.
+const ROW_KEEP_MARGIN_PX = 300;
+// Measuring can change column widths and so row heights (auto table layout,
+// notably in Firefox); cap the follow-up corrections so they always settle.
+const MAX_MEASURE_CORRECTIONS = 3;
 
 function WindowedRows({ rows, colSpan }: { rows: ReactElement[]; colSpan: number }) {
   const bodyRef = useRef<HTMLTableSectionElement>(null);
@@ -163,22 +169,37 @@ function WindowedRows({ rows, colSpan }: { rows: ReactElement[]; colSpan: number
     const viewTop = scroller ? scroller.getBoundingClientRect().top : 0;
     const viewHeight = scroller ? scroller.clientHeight : window.innerHeight;
     // Window position measured from the top of the table body.
-    const from = viewTop - body.getBoundingClientRect().top - ROW_OVERSCAN_PX;
-    const to = from + viewHeight + 2 * ROW_OVERSCAN_PX;
+    const viewFrom = viewTop - body.getBoundingClientRect().top;
+    const viewTo = viewFrom + viewHeight;
     const tops = offsets();
     const n = rowsRef.current.length;
-    let start = 0;
-    while (start < n && tops[start + 1] < from) start++;
-    let end = start;
-    while (end < n && tops[end] < to) end++;
-    setRange((r) => (r.start === start && r.end === end ? r : { start, end }));
+    setRange((r) => {
+      const s = Math.min(r.start, n);
+      const e = Math.min(r.end, n);
+      // Still covered (with margin): keep the window as it is.
+      if (
+        tops[s] <= Math.max(0, viewFrom - ROW_KEEP_MARGIN_PX) &&
+        tops[e] >= Math.min(tops[n], viewTo + ROW_KEEP_MARGIN_PX)
+      )
+        return r;
+      const from = viewFrom - ROW_OVERSCAN_PX;
+      const to = viewTo + ROW_OVERSCAN_PX;
+      let start = 0;
+      while (start < n && tops[start + 1] < from) start++;
+      let end = start;
+      while (end < n && tops[end] < to) end++;
+      return r.start === start && r.end === end ? r : { start, end };
+    });
   }, [offsets]);
+  const corrections = useRef(0);
+  const correctionFrame = useRef(0);
 
   // Follow the scroll box (and window resizes), at most once per frame.
   useEffect(() => {
     const scroller: HTMLElement | Window = document.getElementById("main-scroll") ?? window;
     let frame = 0;
     const onScroll = () => {
+      corrections.current = 0;
       if (frame) return;
       frame = requestAnimationFrame(() => {
         frame = 0;
@@ -195,7 +216,11 @@ function WindowedRows({ rows, colSpan }: { rows: ReactElement[]; colSpan: number
   }, [update]);
 
   // New rows (period, filter or schedule change): recompute the window.
-  useLayoutEffect(update, [rows, update]);
+  useLayoutEffect(() => {
+    corrections.current = 0;
+    update();
+  }, [rows, update]);
+  useEffect(() => () => cancelAnimationFrame(correctionFrame.current), []);
 
   // Record the real height of every rendered row; correct the window if the
   // estimates were off.
@@ -214,7 +239,15 @@ function WindowedRows({ rows, colSpan }: { rows: ReactElement[]; colSpan: number
         changed = true;
       }
     }
-    if (changed) update();
+    // Correct on the next frame, never synchronously: a table whose row
+    // heights keep shifting must not loop inside one React commit.
+    if (changed && corrections.current < MAX_MEASURE_CORRECTIONS && !correctionFrame.current) {
+      corrections.current++;
+      correctionFrame.current = requestAnimationFrame(() => {
+        correctionFrame.current = 0;
+        update();
+      });
+    }
   });
 
   const start = Math.min(range.start, rows.length);
